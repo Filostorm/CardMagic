@@ -2,7 +2,7 @@
   "expo": {
     "name": "CardMagic",
     "slug": "CardMagic",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -10,10 +10,15 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#030316"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "CardMagic uses selected images as custom card art.",
+        "NSPhotoLibraryAddUsageDescription": "CardMagic saves rendered card images to your photo library."
+      },
+      "bundleIdentifier": "com.filostorm.CardMagic"
     },
     "android": {
       "adaptiveIcon": {
@@ -21,10 +26,126 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
     },
     "web": {
+      "output": "single",
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CardMagic uses selected images as custom card art."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "CardMagic uses selected images as custom card art.",
+          "savePhotosPermission": "CardMagic saves rendered card images to your photo library."
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "ios": [
+            "./assets/card-assets/full-magic-pack/fonts/beleren-bold.ttf",
+            "./assets/card-assets/full-magic-pack/fonts/beleren-small-caps-bold.ttf",
+            "./assets/card-assets/full-magic-pack/fonts/magic-medieval.ttf",
+            "./assets/card-assets/full-magic-pack/fonts/matrix-bold.ttf",
+            "./assets/card-assets/full-magic-pack/fonts/mplantin.ttf",
+            "./assets/card-assets/full-magic-pack/fonts/mplantin-italic.ttf",
+            "./assets/card-assets/full-magic-pack/fonts/relay-medium.ttf"
+          ],
+          "android": {
+            "fonts": [
+              {
+                "fontFamily": "BelerenBold",
+                "fontDefinitions": [
+                  {
+                    "path": "./assets/card-assets/full-magic-pack/fonts/beleren-bold.ttf",
+                    "weight": 700
+                  }
+                ]
+              },
+              {
+                "fontFamily": "BelerenSmallCapsBold",
+                "fontDefinitions": [
+                  {
+                    "path": "./assets/card-assets/full-magic-pack/fonts/beleren-small-caps-bold.ttf",
+                    "weight": 700
+                  }
+                ]
+              },
+              {
+                "fontFamily": "MagicMedieval",
+                "fontDefinitions": [
+                  {
+                    "path": "./assets/card-assets/full-magic-pack/fonts/magic-medieval.ttf",
+                    "weight": 400
+                  }
+                ]
+              },
+              {
+                "fontFamily": "MatrixBold",
+                "fontDefinitions": [
+                  {
+                    "path": "./assets/card-assets/full-magic-pack/fonts/matrix-bold.ttf",
+                    "weight": 700
+                  }
+                ]
+              },
+              {
+                "fontFamily": "MPlantin",
+                "fontDefinitions": [
+                  {
+                    "path": "./assets/card-assets/full-magic-pack/fonts/mplantin.ttf",
+                    "weight": 400
+                  }
+                ]
+              },
+              {
+                "fontFamily": "MPlantinItalic",
+                "fontDefinitions": [
+                  {
+                    "path": "./assets/card-assets/full-magic-pack/fonts/mplantin-italic.ttf",
+                    "style": "italic",
+                    "weight": 400
+                  }
+                ]
+              },
+              {
+                "fontFamily": "RelayMedium",
+                "fontDefinitions": [
+                  {
+                    "path": "./assets/card-assets/full-magic-pack/fonts/relay-medium.ttf",
+                    "weight": 500
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "1df78c28-609a-48e9-9a97-f052c1bf7209"
+      }
+    },
+    "owner": "filostorm"
   }
 }

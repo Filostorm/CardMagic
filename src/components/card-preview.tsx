@@ -60,7 +60,7 @@ import {
   getMseM15FutureTextboxTextureSource,
   getMseM15FutureTypeLineBlendMaskSource,
   getMseM15GodzillaAliasSource,
-  getMseM15ArtifactMainframeBlendMaskSource,
+  getMseM15BorderlessPinlineOnlyRestoreMaskSource,
   getMseM15MainframeSource,
   getMseM15OverlaySources,
   getMseM15PtBoxSource,
@@ -74,12 +74,12 @@ import {
   getMseM15SecurityStampPinlineBumpColorSource,
   getMseM15SecurityStampPinlineBumpSource,
   getMseM15SecurityStampSource,
-  getMseM15StandardColorMainframeSource,
-  getMseM15StandardColorMainframeTextureSource,
+  getMseM15StandardArtifactColorMainframeSource,
   getMseM15StandardColorSecurityStampBackingSource,
+  getMseM15TransparentBorderlessDarkTextboxFillSource,
+  getMseM15TransparentBorderlessFrameMaskSource,
   getMseM15TypeLineTextureSource,
   getMseM15TypeFrameSource,
-  MSE_M15_ARTIFACT_MAINFRAME_BLEND_MASK_SIZE,
   MseM15OverlayLayer,
 } from "@/data/mse-frame-renderer";
 import {
@@ -106,8 +106,9 @@ import {
   shouldShowDfcFaceManaCost,
   toDfcFacePatch,
 } from "@/lib/dfc";
-import { getDisplayRulesText } from "@/lib/keyword-text";
+import { getDisplayRulesText, getKeywordRulesText } from "@/lib/keyword-text";
 import { getLoyaltyAbilities, getStartingLoyalty } from "@/lib/planeswalker";
+import { resolveRulesTextCardNameToken } from "@/lib/rules-text";
 import {
   getModernArtistLine,
   getModernCollectorLine,
@@ -197,6 +198,7 @@ type RulesFlavorLayout = {
   showRules: boolean;
   showFlavor: boolean;
   showDivider: boolean;
+  centerRulesContent: boolean;
   rulesRect: CoordinateRect;
   flavorRect: CoordinateRect;
   dividerRect: CoordinateRect;
@@ -234,6 +236,7 @@ const FRAME_TREATMENT_ART_RECTS: Record<FrameTreatment, CoordinateRect> = {
   fullArt: { x: 23, y: 59, width: 328, height: 423 },
   extendedArt: { x: 32, y: 62, width: 311, height: 376 },
   borderless: { x: 0, y: 0, width: 375, height: 523 },
+  transparentBorderless: { x: 0, y: 0, width: 375, height: 523 },
   promo: { x: 24, y: 52, width: 327, height: 422 },
   showcase: { x: 0, y: 0, width: 375, height: 523 },
   textless: { x: 29, y: 59, width: 316, height: 424 },
@@ -310,6 +313,19 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     powerToughness: { x: 286, y: 469, width: 60, height: 28 },
     footer: { x: 24, y: 488, width: 326, height: 20 },
   },
+  transparentBorderless: {
+    ...DEFAULT_FRAME_TREATMENT_LAYOUT,
+    art: FRAME_TREATMENT_ART_RECTS.transparentBorderless,
+    name: { x: 32, y: 30, width: 226, height: 23 },
+    manaCost: { x: 263, y: 29, width: 83, height: 23 },
+    typeLine: { x: 28, y: 296, width: 274, height: 20 },
+    setSymbol: { x: 304, y: 297, width: 40, height: 22 },
+    textArea: { x: 35, y: 327, width: 304, height: 154 },
+    rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
+    ptBox: { x: 273, y: 466, width: 81, height: 42 },
+    powerToughness: { x: 286, y: 469, width: 60, height: 28 },
+    footer: { x: 24, y: 488, width: 326, height: 20 },
+  },
   promo: {
     ...DEFAULT_FRAME_TREATMENT_LAYOUT,
     art: FRAME_TREATMENT_ART_RECTS.promo,
@@ -371,13 +387,13 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
 
 const STELLAR_SIGHTS_TREATMENT_LAYOUT: FrameTreatmentLayout = {
   ...FRAME_TREATMENT_LAYOUTS.showcase,
-  name: { x: 28, y: 304, width: 303, height: 30 },
-  manaCost: { x: 250, y: 304, width: 96, height: 30 },
-  typeLine: { x: 31, y: 344, width: 304, height: 22 },
+  name: { x: 28, y: 317, width: 303, height: 30 },
+  manaCost: { x: 250, y: 317, width: 96, height: 30 },
+  typeLine: { x: 31, y: 351, width: 304, height: 22 },
   setSymbol: { x: 0, y: 0, width: 0, height: 0 },
-  textArea: { x: 31, y: 381, width: 304, height: 82 },
+  textArea: { x: 31, y: 373, width: 304, height: 105 },
   rulesFlavorDivider: { x: 50, y: 424, width: 275, height: 2 },
-  footer: { x: 24, y: 474, width: 326, height: 24 },
+  footer: { x: 24, y: 488, width: 326, height: 24 },
 };
 
 const BATTLE_COORDINATES = {
@@ -1031,10 +1047,6 @@ function getSecurityStampBackingColorBlend(
     return null;
   }
 
-  if (frameColors.length === 2 && colorBlend) {
-    return { ...colorBlend, mode: "hybrid" };
-  }
-
   return colorBlend;
 }
 
@@ -1071,6 +1083,58 @@ function getBorderlessTreatmentFrameBlendSources(
   }
 
   return { left: leftSource, right: rightSource };
+}
+
+function getTextlessTreatmentFrameBlendSources(
+  frameColors: ManaColor[],
+  colorBlend: MseM15ColorBlend | null,
+): SplitFrameSources | null {
+  if (!colorBlend || frameColors.length !== 2) {
+    return null;
+  }
+
+  const [leftColor, rightColor] = frameColors;
+  const leftSource = getMseM15FrameTreatmentSource(
+    "textless",
+    getFrameIdentityForManaColor(leftColor),
+  );
+  const rightSource = getMseM15FrameTreatmentSource(
+    "textless",
+    getFrameIdentityForManaColor(rightColor),
+  );
+
+  if (!leftSource || !rightSource) {
+    return null;
+  }
+
+  return { left: leftSource, right: rightSource };
+}
+
+function getTwoColorShowcaseFrameBlendSources(
+  showcaseFrame: Parameters<typeof getShowcaseFrameSource>[0],
+  frameColors: ManaColor[],
+  colorBlend: MseM15ColorBlend | null,
+  hasPowerToughness: boolean,
+  spec: ShowcaseFrameSpec | null,
+): SplitFrameSources | null {
+  if (spec?.twoColorFrameBlend !== "linear" || !colorBlend || frameColors.length !== 2) {
+    return null;
+  }
+
+  const [leftColor, rightColor] = frameColors;
+
+  return {
+    left: getShowcaseFrameSource(
+      showcaseFrame,
+      getFrameIdentityForManaColor(leftColor),
+      hasPowerToughness,
+    ),
+    right: getShowcaseFrameSource(
+      showcaseFrame,
+      getFrameIdentityForManaColor(rightColor),
+      hasPowerToughness,
+    ),
+  };
 }
 
 function getSecurityStampBackingConfig(
@@ -1611,10 +1675,15 @@ export function CardPreview({
   const isDfcCardFace = selectedTypeFrame === "dfc";
   const isDfcBack = isDfcCardFace && isDfcBackFace(card);
   const frameTreatment = isDfcBack ? card.backFrameTreatment ?? "standard" : card.frameTreatment ?? "standard";
+  const renderDfcFrontWithStandardTreatmentGeometry =
+    isDfcCardFace && !isDfcBack && shouldRenderDfcFrontWithStandardTreatmentGeometry(frameTreatment);
   const showcaseFrame = isDfcBack
     ? card.backShowcaseFrame ?? DEFAULT_SHOWCASE_FRAME
     : card.showcaseFrame ?? DEFAULT_SHOWCASE_FRAME;
-  const typeFrame = isBattleBackFace || isDfcBack ? "standard" : selectedTypeFrame;
+  const typeFrame =
+    isBattleBackFace || isDfcBack || renderDfcFrontWithStandardTreatmentGeometry
+      ? "standard"
+      : selectedTypeFrame;
   const baseTreatmentLayout = typeFrame === "standard" ? FRAME_TREATMENT_LAYOUTS[frameTreatment] : null;
   const showcaseSpec =
     typeFrame === "standard" && frameTreatment === "showcase"
@@ -1627,10 +1696,16 @@ export function CardPreview({
       ? STELLAR_SIGHTS_TREATMENT_LAYOUT
       : baseTreatmentLayout;
   const isRetroTreatment = typeFrame === "standard" && frameTreatment === "retro";
-  const isBorderlessTreatment = typeFrame === "standard" && frameTreatment === "borderless";
+  const isTransparentBorderlessTreatment =
+    typeFrame === "standard" && frameTreatment === "transparentBorderless";
+  const isBorderlessTreatment =
+    typeFrame === "standard" && (frameTreatment === "borderless" || frameTreatment === "transparentBorderless");
   const typeFrameSpec = getTypeFrameSpec(typeFrame);
   const showManaCost = shouldShowDfcFaceManaCost(card);
   const manaSymbols = showManaCost ? parseManaCost(faceCard.manaCost) : [];
+  const [isManaCostFocused, setIsManaCostFocused] = useState(false);
+  const shouldReserveTitleManaCostSpace =
+    showManaCost && (!isDfcBackFace(card) || manaSymbols.length > 0 || isManaCostFocused);
   const manaColors = getManaColors(faceCard.manaCost);
   const frameColors = getFrameColors(faceCard);
   const manualFrameColors = getManualFrameColors(faceCard);
@@ -1642,31 +1717,23 @@ export function CardPreview({
   const mseAccentColorBlend = resolvedMseColorBlend;
   const useGoldRegularFrame =
     typeFrame === "standard" &&
-    (frameTreatment === "standard" || frameTreatment === "borderless") &&
+    (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "transparentBorderless") &&
     frameColors.length > 2;
   const regularFrameIdentity = useGoldRegularFrame ? "gold" : frameIdentity;
   const regularMseColorBlend = useGoldRegularFrame ? null : mseColorBlend;
   const regularFrameStyle = useGoldRegularFrame ? FRAME_STYLES.gold : frameStyle;
   const artifactMainframeColorSource =
     typeFrame === "standard" &&
-    frameTreatment === "standard" &&
+    (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "transparentBorderless") &&
     usesArtifactBaseFrame &&
     frameColors.length > 0
-      ? getMseM15StandardColorMainframeSource(frameColors, mseAccentColorBlend)
+      ? getMseM15StandardArtifactColorMainframeSource(frameColors, mseAccentColorBlend)
       : null;
-  const artifactMainframeColorTextureSource =
-    typeFrame === "standard" &&
-    frameTreatment === "standard" &&
-    usesArtifactBaseFrame &&
-    frameColors.length > 0
-      ? getMseM15StandardColorMainframeTextureSource(frameColors, mseAccentColorBlend)
-      : null;
-  const showMseArtifactMainframeBlend = artifactMainframeColorSource !== null;
   const stampBackingColorBlend = getSecurityStampBackingColorBlend(frameColors, mseAccentColorBlend);
   const stampBackingFrameIdentity = getSecurityStampBackingFrameIdentity(regularFrameIdentity, frameColors);
   const artifactStampBackingSource =
     typeFrame === "standard" &&
-    (frameTreatment === "standard" || frameTreatment === "borderless") &&
+    (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "transparentBorderless") &&
     usesArtifactBaseFrame &&
     frameColors.length <= 2 &&
     frameColors.length > 0
@@ -1683,10 +1750,15 @@ export function CardPreview({
     : mainframeColorCacheKey;
   const inferredFrameEffects = inferFrameEffects(faceCard);
   const supportsNyxFrameEffect = typeFrame === "standard" && frameTreatment === "standard";
+  const supportsLegendaryFrameEffect =
+    typeFrame === "standard" &&
+    (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "textless");
   const frameEffects = supportsFrameEffectOverlays(typeFrame)
-    ? supportsNyxFrameEffect
-      ? inferredFrameEffects
-      : inferredFrameEffects.filter((effect) => effect !== "nyx")
+    ? inferredFrameEffects.filter(
+        (effect) =>
+          (effect !== "nyx" || supportsNyxFrameEffect) &&
+          (effect !== "legendary" || supportsLegendaryFrameEffect),
+      )
     : [];
   const frameEffectSources =
     typeFrame === "saga"
@@ -1714,12 +1786,42 @@ export function CardPreview({
     typeFrame === "standard" && frameTreatment === "borderless"
       ? getBorderlessTreatmentFrameBlendSources(frameColors, regularMseColorBlend, securityStamped)
       : null;
+  const textlessTreatmentFrameBlendSources =
+    typeFrame === "standard" && frameTreatment === "textless"
+      ? getTextlessTreatmentFrameBlendSources(frameColors, resolvedMseColorBlend)
+      : null;
+  const treatmentFrameBlendSources =
+    borderlessTreatmentFrameBlendSources ?? textlessTreatmentFrameBlendSources;
+  const borderlessDarkTextboxFillSource =
+    typeFrame === "standard" && frameTreatment === "borderless"
+      ? getMseM15TransparentBorderlessDarkTextboxFillSource()
+      : null;
+  const borderlessPinlineOnlyRestoreMaskSource =
+    typeFrame === "standard" && frameTreatment === "borderless"
+      ? getMseM15BorderlessPinlineOnlyRestoreMaskSource()
+      : null;
+  const transparentBorderlessTextboxBlendSources =
+    isTransparentBorderlessTreatment
+      ? getBorderlessTreatmentFrameBlendSources(frameColors, regularMseColorBlend, securityStamped)
+      : null;
+  const transparentBorderlessTextboxSource =
+    isTransparentBorderlessTreatment && !transparentBorderlessTextboxBlendSources
+      ? getMseM15FrameTreatmentSource("borderless", regularFrameIdentity, securityStamped, regularMseColorBlend)
+      : null;
+  const transparentBorderlessDarkTextboxFillSource =
+    isTransparentBorderlessTreatment
+      ? getMseM15TransparentBorderlessDarkTextboxFillSource()
+      : null;
   const treatmentFrameSource =
     typeFrame === "standard"
-      ? borderlessTreatmentFrameBlendSources
+      ? treatmentFrameBlendSources
         ? null
         : showcaseSpec
-        ? getShowcaseFrameSource(showcaseFrame, frameIdentity, showPowerToughness)
+        ? showcaseSpec.twoColorFrameBlend === "linear" && resolvedMseColorBlend && frameColors.length === 2
+          ? null
+          : getShowcaseFrameSource(showcaseFrame, frameIdentity, showPowerToughness)
+        : isTransparentBorderlessTreatment
+        ? null
         : getMseM15FrameTreatmentSource(
             frameTreatment,
             regularFrameIdentity,
@@ -1727,9 +1829,27 @@ export function CardPreview({
             regularMseColorBlend,
           )
       : null;
+  const transparentBorderlessFrameMaskSource = isTransparentBorderlessTreatment
+    ? getMseM15TransparentBorderlessFrameMaskSource()
+    : null;
+  const transparentBorderlessFrameTextureSource = isTransparentBorderlessTreatment
+    ? artifactMainframeColorSource ?? getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
+    : null;
   const showcaseFrameUnderlaySource =
     showcaseSpec ? getShowcaseFrameUnderlaySource(showcaseFrame, frameIdentity) : null;
-  const hasExactTreatmentFrame = Boolean(treatmentFrameSource || borderlessTreatmentFrameBlendSources);
+  const showcaseFrameBlendSources = getTwoColorShowcaseFrameBlendSources(
+    showcaseFrame,
+    frameColors,
+    resolvedMseColorBlend,
+    showPowerToughness,
+    showcaseSpec,
+  );
+  const hasExactTreatmentFrame = Boolean(
+    treatmentFrameSource ||
+      treatmentFrameBlendSources ||
+      showcaseFrameBlendSources ||
+      transparentBorderlessFrameMaskSource,
+  );
   const showcasePtOverlaySource =
     showcaseSpec && showPowerToughness ? getShowcasePtOverlaySource(showcaseFrame, frameIdentity) : null;
   const showcasePtOverlayRect =
@@ -1749,7 +1869,7 @@ export function CardPreview({
   const dfcColorIndicatorSource = showDfcColorIndicator
     ? getMseM15ColorIndicatorSource(frameIdentity, mseAccentColorBlend)
     : null;
-  const displayedRulesText = getDisplayRulesText(faceCard);
+  const displayedRulesText = resolveRulesTextCardNameToken(getDisplayRulesText(faceCard), faceCard.name);
   const displayedFlavorText = activeSection === "rules"
     ? faceCard.flavorText.replace(/\r\n?/g, "\n")
     : normalizeDisplayMultilineText(faceCard.flavorText);
@@ -1779,7 +1899,7 @@ export function CardPreview({
   const defaultManaRect = treatmentLayout?.manaCost ?? CARD_COORDINATES.manaCost;
   const titleBaseRect = treatmentLayout?.name ?? getNameRect(typeFrame, card);
   const titleManaRect =
-    showManaCost && !isFutureshiftedShowcase && defaultManaRect.width > 0
+    shouldReserveTitleManaCostSpace && !isFutureshiftedShowcase && defaultManaRect.width > 0
       ? manaLayout.rect
       : { ...defaultManaRect, x: titleBaseRect.x + titleBaseRect.width + 8, width: 0 };
   const baseCardName = faceCard.baseCardName?.trim() ?? "";
@@ -1821,6 +1941,47 @@ export function CardPreview({
     treatmentLayout,
     treatmentBodyUsesLargerTypography,
   );
+  const compactRulesLineCount = rulesLayout.centerRulesContent
+    ? estimateWrappedLineCount(
+        displayedRulesText,
+        Math.max(18, Math.floor(rulesLayout.rulesRect.width / 6.15)),
+      )
+    : 0;
+  const compactRulesContentHeight = compactRulesLineCount > 0
+    ? compactRulesLineCount * rulesLayout.rulesLineHeight
+    : 0;
+  const compactRulesContentHeightScaled = compactRulesContentHeight * scale;
+  const compactRulesVerticalInset = rulesLayout.centerRulesContent
+    ? Math.max(0, (rulesLayout.rulesRect.height - compactRulesContentHeight) / 2) * scale
+    : 0;
+  const displayedRulesLineCount = rulesLayout.showRules
+    ? estimateWrappedLineCount(
+        displayedRulesText,
+        Math.max(18, Math.floor(rulesLayout.rulesRect.width / 6.15)),
+      )
+    : 0;
+  const displayedRulesContentHeight = displayedRulesLineCount > 0
+    ? displayedRulesLineCount * rulesLayout.rulesLineHeight
+    : 0;
+  const displayedRulesContentHeightScaled = displayedRulesContentHeight * scale;
+  const displayedRulesVerticalInset = Math.max(
+    0,
+    (rulesLayout.rulesRect.height - displayedRulesContentHeight) / 2,
+  ) * scale;
+  const displayedFlavorLineCount = rulesLayout.showFlavor
+    ? estimateWrappedLineCount(
+        displayedFlavorText,
+        Math.max(18, Math.floor(rulesLayout.flavorRect.width / 6.15)),
+      )
+    : 0;
+  const displayedFlavorContentHeight = displayedFlavorLineCount > 0
+    ? displayedFlavorLineCount * rulesLayout.flavorLineHeight
+    : 0;
+  const displayedFlavorContentHeightScaled = displayedFlavorContentHeight * scale;
+  const displayedFlavorVerticalInset = Math.max(
+    0,
+    (rulesLayout.flavorRect.height - displayedFlavorContentHeight) / 2,
+  ) * scale;
   useEffect(() => {
     let cancelled = false;
     setImageAspectRatio(null);
@@ -1854,6 +2015,10 @@ export function CardPreview({
     imageAspectRatio,
   );
   const adventureDefaults = getAdventureDefaults(faceCard);
+  const displayedAdventureRulesText = resolveRulesTextCardNameToken(
+    adventureDefaults.rulesText,
+    adventureDefaults.name,
+  );
   const adventureManaSymbols = parseManaCost(adventureDefaults.manaCost);
   const showcaseHeaderInk = isFutureshiftedShowcase
     ? "#f8f2df"
@@ -1867,22 +2032,37 @@ export function CardPreview({
     : null;
   const treatmentHeaderInk = showcaseHeaderInk ?? getTreatmentHeaderInk(frameTreatment, frameIdentity);
   const treatmentBodyInk = showcaseBodyInk ?? getTreatmentBodyInk(frameTreatment);
-  const titleInk =
+  const resolvedRulesTextColor = getCardTextColorOverride(faceCard.rulesTextColors?.[frameTreatment]);
+  const titleDefaultInk =
     treatmentLayout && treatmentHeaderInk
       ? treatmentHeaderInk
     : isDfcBack || (typeFrame === "token" && frameIdentity !== "white")
       ? "#f8f2df"
       : regularFrameStyle.ink;
-  const titleMutedInk =
-    treatmentLayout && treatmentHeaderInk
+  const titleInk = resolvedRulesTextColor ?? titleDefaultInk;
+  const titleMutedInk = resolvedRulesTextColor
+    ? getMutedInk(resolvedRulesTextColor)
+    : treatmentLayout && treatmentHeaderInk
       ? getMutedInk(treatmentHeaderInk)
     : isDfcBack || (typeFrame === "token" && frameIdentity !== "white")
       ? "rgba(248, 242, 223, 0.62)"
       : regularFrameStyle.mutedInk;
-  const typeLineInk = treatmentLayout && treatmentHeaderInk ? treatmentHeaderInk : isDfcBack ? "#f8f2df" : typeFrame === "token" ? "#171512" : regularFrameStyle.ink;
-  const typeLineMutedInk = treatmentLayout && treatmentHeaderInk ? getMutedInk(treatmentHeaderInk) : isDfcBack ? "rgba(248, 242, 223, 0.62)" : regularFrameStyle.mutedInk;
+  const typeLineDefaultInk =
+    treatmentLayout && treatmentHeaderInk ? treatmentHeaderInk : isDfcBack ? "#f8f2df" : typeFrame === "token" ? "#171512" : regularFrameStyle.ink;
+  const typeLineInk = resolvedRulesTextColor ?? typeLineDefaultInk;
+  const typeLineMutedInk = resolvedRulesTextColor
+    ? getMutedInk(resolvedRulesTextColor)
+    : treatmentLayout && treatmentHeaderInk
+      ? getMutedInk(treatmentHeaderInk)
+    : isDfcBack
+      ? "rgba(248, 242, 223, 0.62)"
+      : regularFrameStyle.mutedInk;
   const statInk =
     isFutureshiftedShowcase
+      ? "#f8f2df"
+      : showcaseSpec?.textIsLight
+      ? "#f8f2df"
+      : frameTreatment === "borderless" || frameTreatment === "transparentBorderless"
       ? "#f8f2df"
       : frameTreatment === "etchedFoil"
       ? "#f8f2df"
@@ -1893,10 +2073,12 @@ export function CardPreview({
       : typeFrame === "token"
       ? "#171512"
       : regularFrameStyle.ink;
-  const statMutedInk = isDfcBack ? "rgba(248, 242, 223, 0.62)" : regularFrameStyle.mutedInk;
+  const statMutedInk =
+    isDfcBack || showcaseSpec?.textIsLight || frameTreatment === "borderless" || frameTreatment === "transparentBorderless"
+      ? "rgba(248, 242, 223, 0.62)"
+      : regularFrameStyle.mutedInk;
   const bodyInk = treatmentLayout && treatmentBodyInk ? treatmentBodyInk : typeFrame === "token" ? "#171512" : regularFrameStyle.ink;
   const bodyMutedInk = treatmentLayout && treatmentBodyInk ? getMutedInk(treatmentBodyInk) : regularFrameStyle.mutedInk;
-  const resolvedRulesTextColor = getCardTextColorOverride(faceCard.rulesTextColor);
   const rulesTextInk = resolvedRulesTextColor ?? bodyInk;
   const rulesTextMutedInk = resolvedRulesTextColor
     ? getMutedInk(resolvedRulesTextColor)
@@ -1936,7 +2118,6 @@ export function CardPreview({
   const startArtTransform = useRef(artTransform);
   const initialPinchDistance = useRef<number | null>(null);
   const manaCostInputRef = useRef<TextInput>(null);
-  const [isManaCostFocused, setIsManaCostFocused] = useState(false);
   const manaCostRenderRect =
     isFutureshiftedShowcase && !isManaCostFocused
       ? FUTURESHIFTED_MANA_COST_RECT
@@ -2096,6 +2277,7 @@ export function CardPreview({
         cornerRadius={cornerRadius}
         scale={width / SPLIT_CARD_COORDINATES.width}
         exportMode={exportMode}
+        artGenerating={showArtGenerating}
         onSectionPress={onSectionPress}
         zone={zone}
       />
@@ -2369,7 +2551,24 @@ export function CardPreview({
       ) : null}
 
       {typeFrame === "standard" ? (
-        showcaseSpec && treatmentFrameSource ? (
+        showcaseSpec && showcaseFrameBlendSources ? (
+          <>
+            <ShowcaseFrameBlendImage
+              cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
+              sources={showcaseFrameBlendSources}
+              spec={showcaseSpec}
+              mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
+            />
+            <ShowcaseStampTreatmentBlendLayer
+              cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
+              sources={showcaseFrameBlendSources}
+              frameIdentity={frameIdentity}
+              spec={showcaseSpec}
+              stamped={securityStamped}
+              mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
+            />
+          </>
+        ) : showcaseSpec && treatmentFrameSource ? (
           <>
             <ShowcaseFrameImage
               cacheKey={`showcase-${showcaseFrame}`}
@@ -2385,35 +2584,64 @@ export function CardPreview({
             />
           </>
         ) : (
-          borderlessTreatmentFrameBlendSources ? (
+          transparentBorderlessFrameMaskSource && transparentBorderlessFrameTextureSource ? (
+            <MseTransparentBorderlessFrameLayer
+              cacheKey={`mainframe-standard-${frameTreatment}-${regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}`}
+              textureSource={transparentBorderlessFrameTextureSource}
+              maskSource={transparentBorderlessFrameMaskSource}
+              darkTextboxFillSource={transparentBorderlessDarkTextboxFillSource}
+              textboxSource={transparentBorderlessTextboxSource}
+              textboxSplitSources={transparentBorderlessTextboxBlendSources}
+              exportMode={exportMode}
+            />
+          ) : treatmentFrameBlendSources ? (
             <MseSplitFrameImage
               cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? frameColors.join("")}-${securityStamped ? "stamped" : "unstamped"}`}
-              sources={borderlessTreatmentFrameBlendSources}
-              mirrorX={Boolean(regularMseColorBlend?.mirrorX)}
+              sources={treatmentFrameBlendSources}
+              mirrorX={Boolean(regularMseColorBlend?.mirrorX ?? resolvedMseColorBlend?.mirrorX)}
             />
           ) : (
             <MseFrameImage
-              cacheKey={`mainframe-standard-${frameTreatment}-${regularFrameIdentity}-${regularMainframeColorCacheKey}-${securityStamped ? "stamped" : "unstamped"}`}
-              source={
-                treatmentFrameSource ??
-                (artifactMainframeColorSource ? getMseM15MainframeSource("artifact", "standard") : null) ??
-                getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
-              }
-              mirrorX={
-                treatmentFrameMirrorX ??
-                (!artifactMainframeColorSource && !hasExactTreatmentFrame && Boolean(regularMseColorBlend?.mirrorX))
-              }
-            />
+                cacheKey={`mainframe-standard-${frameTreatment}-${regularFrameIdentity}-${regularMainframeColorCacheKey}-${securityStamped ? "stamped" : "unstamped"}`}
+                source={
+                  treatmentFrameSource ??
+                  artifactMainframeColorSource ??
+                  getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
+                }
+                mirrorX={
+                  treatmentFrameMirrorX ??
+                  (!hasExactTreatmentFrame &&
+                    (artifactMainframeColorSource
+                      ? Boolean(mseAccentColorBlend?.mirrorX)
+                      : Boolean(regularMseColorBlend?.mirrorX)))
+                }
+              />
           )
         )
       ) : null}
 
-      {showMseArtifactMainframeBlend ? (
-        <MseArtifactMainframeBlendOverlay
-          cacheKey={`artifact-mainframe-blend-mask-${mseAccentColorBlend?.mode ?? "single"}-${mseAccentColorBlend?.key ?? frameColors.join("")}`}
-          colorSource={artifactMainframeColorTextureSource ?? artifactMainframeColorSource}
-          mirrorX={Boolean(mseAccentColorBlend?.mirrorX)}
-        />
+      {borderlessDarkTextboxFillSource ? (
+        <>
+          <StableFrameImage
+            cacheKey={`mainframe-standard-${frameTreatment}-dark-textbox-fill`}
+            source={borderlessDarkTextboxFillSource}
+            resizeMode="stretch"
+          />
+          {borderlessPinlineOnlyRestoreMaskSource ? (
+            <MsePinlineOnlyRestoreLayer
+              cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}-pinline-only`}
+              source={
+                treatmentFrameSource ??
+                artifactMainframeColorSource ??
+                getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
+              }
+              splitSources={borderlessTreatmentFrameBlendSources}
+              maskSource={borderlessPinlineOnlyRestoreMaskSource}
+              mirrorX={Boolean(treatmentFrameMirrorX)}
+              exportMode={exportMode}
+            />
+          ) : null}
+        </>
       ) : null}
 
       {futureTypeSymbolSource ? (
@@ -2542,6 +2770,18 @@ export function CardPreview({
         />
       ) : null}
 
+		      {typeFrame === "standard" && shouldDrawSubjectArtOverFrame(frameTreatment, faceCard) ? (
+		        <SubjectMaskArtOverlay
+		          faceCard={faceCard}
+		          artRect={artRect}
+		          artTransform={artTransform}
+		          imageAspectRatio={imageAspectRatio}
+		          overlayBottomY={(treatmentLayout?.textArea.y ?? CARD_COORDINATES.textArea.y) - 4}
+		          exportMode={exportMode}
+		          cacheKey={`subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
+		        />
+		      ) : null}
+
       {futureTextboxTextureSource ? (
         futureTextureBlendColors ? (
           <FutureFrameBlendTextureLayer
@@ -2622,6 +2862,7 @@ export function CardPreview({
             accessibilityLabel="Card name"
             value={faceCard.name}
             onChangeText={(name) => updateFace({ name })}
+            autoCapitalize="words"
             onFocus={() => onSectionPress("identity")}
             placeholder="Untitled"
             placeholderTextColor={titleMutedInk}
@@ -2842,6 +3083,7 @@ export function CardPreview({
               accessibilityLabel="Type line"
               value={faceCard.typeLine}
               onChangeText={updateTypeLine}
+              autoCapitalize="words"
               onChange={updateTypeLineCursor}
               onFocus={() => onSectionPress("typeLine")}
               onPressIn={() => onSectionPress("typeLine")}
@@ -3078,7 +3320,7 @@ export function CardPreview({
               />
             ) : (
               <InlineSymbolText
-                value={adventureDefaults.rulesText}
+                value={displayedAdventureRulesText}
                 color={frameStyle.ink}
                 fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
                 fontSize={12 * scale}
@@ -3121,7 +3363,7 @@ export function CardPreview({
           onPress={() => onSectionPress("rules")}
           style={{
             ...rectStyle(rulesLayout.rulesRect),
-            justifyContent: activeSection === "rules" ? "flex-start" : "center",
+            justifyContent: activeSection === "rules" && !rulesLayout.centerRulesContent ? "flex-start" : "center",
             ...showcaseEditableHitPriority,
             ...zone("rules", 3),
           }}
@@ -3146,23 +3388,49 @@ export function CardPreview({
                   rulesLayout.rulesLineHeight * scale,
                 ),
                 width: "100%",
-                height: "100%",
+                height: rulesLayout.centerRulesContent ? Math.max(rulesLayout.rulesLineHeight * scale, compactRulesContentHeightScaled) : "100%",
+                ...(rulesLayout.centerRulesContent
+                  ? {
+                      position: "absolute",
+                      top: compactRulesVerticalInset,
+                      left: 0,
+                    }
+                  : null),
                 padding: 0,
                 overflow: "hidden",
                 backgroundColor: "transparent",
-                textAlignVertical: "top",
+                textAlign: rulesLayout.centerRulesContent ? "center" : "left",
+                textAlignVertical: rulesLayout.centerRulesContent ? "center" : "top",
               }}
             />
           ) : (
-            <InlineSymbolText
-              value={displayedRulesText}
-              color={rulesTextInk}
-              fontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroBody : FULL_MAGIC_PACK.fontFamilies.body}
-              fontSize={rulesLayout.rulesFontSize * scale}
-              lineHeight={rulesLayout.rulesLineHeight * scale}
-              symbolSize={rulesLayout.rulesFontSize * scale * 1.18}
-              symbolVariant={isRetroTreatment ? "retro" : "modern"}
-            />
+            <View
+              pointerEvents="none"
+              style={{
+                width: "100%",
+                height: Math.max(
+                  rulesLayout.rulesLineHeight * scale,
+                  rulesLayout.centerRulesContent
+                    ? compactRulesContentHeightScaled
+                    : displayedRulesContentHeightScaled,
+                ),
+                position: "absolute",
+                top: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+                left: 0,
+                justifyContent: "center",
+              }}
+            >
+              <InlineSymbolText
+                value={displayedRulesText}
+                color={rulesTextInk}
+                fontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroBody : FULL_MAGIC_PACK.fontFamilies.body}
+                fontSize={rulesLayout.rulesFontSize * scale}
+                lineHeight={rulesLayout.rulesLineHeight * scale}
+                symbolSize={rulesLayout.rulesFontSize * scale * 1.18}
+                symbolVariant={isRetroTreatment ? "retro" : "modern"}
+                textAlign={rulesLayout.centerRulesContent ? "center" : "left"}
+              />
+            </View>
           )}
         </Pressable>
       ) : null}
@@ -3230,15 +3498,27 @@ export function CardPreview({
               }}
             />
           ) : (
-            <InlineSymbolText
-              value={displayedFlavorText}
-              color={rulesTextInk}
-              fontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroItalic : FULL_MAGIC_PACK.fontFamilies.italic}
-              fontSize={rulesLayout.flavorFontSize * scale}
-              lineHeight={rulesLayout.flavorLineHeight * scale}
-              symbolSize={rulesLayout.flavorFontSize * scale * 1.18}
-              symbolVariant={isRetroTreatment ? "retro" : "modern"}
-            />
+            <View
+              pointerEvents="none"
+              style={{
+                width: "100%",
+                height: Math.max(rulesLayout.flavorLineHeight * scale, displayedFlavorContentHeightScaled),
+                position: "absolute",
+                top: displayedFlavorVerticalInset,
+                left: 0,
+                justifyContent: "center",
+              }}
+            >
+              <InlineSymbolText
+                value={displayedFlavorText}
+                color={rulesTextInk}
+                fontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroItalic : FULL_MAGIC_PACK.fontFamilies.italic}
+                fontSize={rulesLayout.flavorFontSize * scale}
+                lineHeight={rulesLayout.flavorLineHeight * scale}
+                symbolSize={rulesLayout.flavorFontSize * scale * 1.18}
+                symbolVariant={isRetroTreatment ? "retro" : "modern"}
+              />
+            </View>
           )}
         </Pressable>
       ) : null}
@@ -3288,8 +3568,10 @@ export function CardPreview({
           <SetSymbolMark
             presetId={card.setSymbolPreset}
             imageUri={card.setSymbolUri}
+            usesRarityTreatment={card.setSymbolUsesRarityTreatment}
             rarity={card.rarity}
-            size={20 * scale}
+            size={getSetSymbolMarkSize(20 * scale, card)}
+            exportMode={exportMode}
           />
         </Pressable>
       ) : null}
@@ -3454,6 +3736,7 @@ function SplitCardPreview({
   cornerRadius,
   scale,
   exportMode,
+  artGenerating,
   onSectionPress,
   zone,
 }: {
@@ -3462,6 +3745,7 @@ function SplitCardPreview({
   cornerRadius: number;
   scale: number;
   exportMode: boolean;
+  artGenerating: boolean;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -3501,6 +3785,8 @@ function SplitCardPreview({
           leftHalf={leftHalf}
           rightHalf={rightHalf}
           scale={scale}
+          exportMode={exportMode}
+          artGenerating={artGenerating}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -3510,6 +3796,8 @@ function SplitCardPreview({
           leftHalf={leftHalf}
           rightHalf={rightHalf}
           scale={scale}
+          exportMode={exportMode}
+          artGenerating={artGenerating}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -3523,6 +3811,8 @@ function ClassicSplitPreview({
   leftHalf,
   rightHalf,
   scale,
+  exportMode,
+  artGenerating,
   onSectionPress,
   zone,
 }: {
@@ -3530,6 +3820,8 @@ function ClassicSplitPreview({
   leftHalf: SplitCardHalf;
   rightHalf: SplitCardHalf;
   scale: number;
+  exportMode: boolean;
+  artGenerating: boolean;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -3546,6 +3838,8 @@ function ClassicSplitPreview({
         fuse={showFuse}
         rect={SPLIT_CARD_LAYOUT.left}
         scale={scale}
+        exportMode={exportMode}
+        artGenerating={artGenerating}
         onSectionPress={onSectionPress}
         zone={zone}
       />
@@ -3556,6 +3850,8 @@ function ClassicSplitPreview({
         fuse={showFuse}
         rect={SPLIT_CARD_LAYOUT.right}
         scale={scale}
+        exportMode={exportMode}
+        artGenerating={artGenerating}
         onSectionPress={onSectionPress}
         zone={zone}
       />
@@ -3565,6 +3861,7 @@ function ClassicSplitPreview({
           leftHalf={leftHalf}
           rightHalf={rightHalf}
           scale={scale}
+          exportMode={exportMode}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -3595,6 +3892,8 @@ function ClassicSplitHalfSlot({
   fuse,
   rect,
   scale,
+  exportMode,
+  artGenerating,
   onSectionPress,
   zone,
 }: {
@@ -3604,13 +3903,15 @@ function ClassicSplitHalfSlot({
   fuse: boolean;
   rect: CoordinateRect;
   scale: number;
+  exportMode: boolean;
+  artGenerating: boolean;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
   const halfCard = toSplitHalfCard(card, half);
   const frameIdentity = inferFrameIdentity(halfCard);
   const frameStyle = inferFrameStyle(halfCard);
-  const displayedRulesText = getDisplayRulesText(halfCard);
+  const displayedRulesText = resolveRulesTextCardNameToken(getDisplayRulesText(halfCard), half.name);
   const displayedFlavorText = normalizeDisplayMultilineText(half.flavorText ?? "");
   const manaSymbols = parseManaCost(half.manaCost);
   const hasFlavorText = displayedFlavorText.trim().length > 0;
@@ -3643,6 +3944,7 @@ function ClassicSplitHalfSlot({
           half={half}
           frameIdentity={frameIdentity}
           scale={scale}
+          artGenerating={artGenerating}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -3738,8 +4040,10 @@ function ClassicSplitHalfSlot({
           <SetSymbolMark
             presetId={card.setSymbolPreset}
             imageUri={card.setSymbolUri}
+            usesRarityTreatment={card.setSymbolUsesRarityTreatment}
             rarity={card.rarity}
-            size={16 * scale}
+            size={getSetSymbolMarkSize(16 * scale, card)}
+            exportMode={exportMode}
           />
         </Pressable>
 
@@ -3803,6 +4107,7 @@ function ClassicSplitArtSlot({
   half,
   frameIdentity,
   scale,
+  artGenerating,
   onSectionPress,
   zone,
 }: {
@@ -3810,6 +4115,7 @@ function ClassicSplitArtSlot({
   half: SplitCardHalf;
   frameIdentity: FrameIdentity;
   scale: number;
+  artGenerating: boolean;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -3827,7 +4133,9 @@ function ClassicSplitArtSlot({
         ...zone("art", 2),
       }}
     >
-      {card.artUri ? (
+      {artGenerating ? (
+        <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} />
+      ) : card.artUri ? (
         <Image
           accessibilityIgnoresInvertColors
           source={{ uri: card.artUri }}
@@ -3854,6 +4162,7 @@ function FuseReminderStrip({
   leftHalf,
   rightHalf,
   scale,
+  exportMode,
   onSectionPress,
   zone,
 }: {
@@ -3861,6 +4170,7 @@ function FuseReminderStrip({
   leftHalf: SplitCardHalf;
   rightHalf: SplitCardHalf;
   scale: number;
+  exportMode: boolean;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4088,6 +4398,8 @@ function AftermathSplitPreview({
   leftHalf,
   rightHalf,
   scale,
+  exportMode,
+  artGenerating,
   onSectionPress,
   zone,
 }: {
@@ -4095,6 +4407,8 @@ function AftermathSplitPreview({
   leftHalf: SplitCardHalf;
   rightHalf: SplitCardHalf;
   scale: number;
+  exportMode: boolean;
+  artGenerating: boolean;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4107,9 +4421,11 @@ function AftermathSplitPreview({
   const stampBackingConfig = getSplitSecurityStampBackingConfig(card, leftHalf, rightHalf);
   const topManaSymbols = parseManaCost(leftHalf.manaCost);
   const bottomManaSymbols = parseManaCost(rightHalf.manaCost);
-  const topRulesMetrics = getAftermathTopRulesMetrics(getDisplayRulesText(topCard));
+  const displayedTopRulesText = resolveRulesTextCardNameToken(getDisplayRulesText(topCard), leftHalf.name);
+  const displayedBottomRulesText = resolveRulesTextCardNameToken(getDisplayRulesText(bottomCard), rightHalf.name);
+  const topRulesMetrics = getAftermathTopRulesMetrics(displayedTopRulesText);
   const bottomRulesMetrics = getSplitHalfRulesMetrics(
-    getDisplayRulesText(bottomCard),
+    displayedBottomRulesText,
     normalizeDisplayMultilineText(rightHalf.flavorText ?? ""),
     AFTERMATH_COORDINATES.bottomRulesText.height,
     0,
@@ -4129,6 +4445,7 @@ function AftermathSplitPreview({
         frameIdentity={topFrameIdentity}
         card={card}
         scale={scale}
+        artGenerating={artGenerating}
         zone={zone}
         label={card.artUri ? "Change aftermath upright half art" : "Select aftermath upright half art"}
         onPress={() => onSectionPress("art", { openSheet: true })}
@@ -4212,8 +4529,10 @@ function AftermathSplitPreview({
         <SetSymbolMark
           presetId={card.setSymbolPreset}
           imageUri={card.setSymbolUri}
+          usesRarityTreatment={card.setSymbolUsesRarityTreatment}
           rarity={card.rarity}
-          size={20 * scale}
+          size={getSetSymbolMarkSize(20 * scale, card)}
+          exportMode={exportMode}
         />
       </Pressable>
 
@@ -4231,7 +4550,7 @@ function AftermathSplitPreview({
         }}
       >
         <InlineSymbolText
-          value={getDisplayRulesText(topCard)}
+          value={displayedTopRulesText}
           color={topFrameStyle.ink}
           fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
           fontSize={topRulesMetrics.fontSize * scale}
@@ -4260,6 +4579,7 @@ function AftermathSplitPreview({
         frameIdentity={bottomFrameIdentity}
         card={card}
         scale={scale}
+        artGenerating={artGenerating}
         zone={zone}
         label={card.artUri ? "Change aftermath lower half art" : "Select aftermath lower half art"}
         onPress={() => onSectionPress("art", { openSheet: true })}
@@ -4337,7 +4657,7 @@ function AftermathSplitPreview({
             }}
           >
             <InlineSymbolText
-              value={getDisplayRulesText(bottomCard)}
+              value={displayedBottomRulesText}
               color={bottomFrameStyle.ink}
               fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
               fontSize={bottomRulesMetrics.rulesFontSize * scale}
@@ -4365,6 +4685,7 @@ function AftermathArtSlot({
   frameIdentity,
   card,
   scale,
+  artGenerating,
   zone,
   label,
   onPress,
@@ -4373,6 +4694,7 @@ function AftermathArtSlot({
   frameIdentity: FrameIdentity;
   card: CardDraft;
   scale: number;
+  artGenerating: boolean;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
   label: string;
   onPress: () => void;
@@ -4389,7 +4711,9 @@ function AftermathArtSlot({
         ...zone("art", 2),
       }}
     >
-      {card.artUri ? (
+      {artGenerating ? (
+        <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} />
+      ) : card.artUri ? (
         <Image
           accessibilityIgnoresInvertColors
           source={{ uri: card.artUri }}
@@ -5259,8 +5583,10 @@ function PlaneswalkerPreview({
         <SetSymbolMark
           presetId={card.setSymbolPreset}
           imageUri={card.setSymbolUri}
+          usesRarityTreatment={card.setSymbolUsesRarityTreatment}
           rarity={card.rarity}
-          size={38 * scale}
+          size={getSetSymbolMarkSize(38 * scale, card)}
+          exportMode={exportMode}
         />
       </Pressable>
 
@@ -5629,7 +5955,7 @@ function BattleFrontPreview({
   const defenseValue = card.defense?.trim() || "3";
   const displayedFlavorText = normalizeDisplayMultilineText(faceCard.flavorText);
   const hasFlavor = displayedFlavorText.trim().length > 0;
-  const displayedRulesText = getDisplayRulesText(faceCard);
+  const displayedRulesText = resolveRulesTextCardNameToken(getDisplayRulesText(faceCard), faceCard.name);
   const rulesFontSize = getBattleRulesFontSize(displayedRulesText, displayedFlavorText);
   const rulesLineHeight = rulesFontSize * 1.2;
   const battleInk = "#171512";
@@ -5931,8 +6257,10 @@ function BattleFrontPreview({
             <SetSymbolMark
               presetId={card.setSymbolPreset}
               imageUri={card.setSymbolUri}
+              usesRarityTreatment={card.setSymbolUsesRarityTreatment}
               rarity={card.rarity}
-              size={20 * scale}
+              size={getSetSymbolMarkSize(20 * scale, card)}
+              exportMode={exportMode}
             />
           </View>
         </BattleRotatedInner>
@@ -6699,6 +7027,7 @@ function InlineSymbolText({
   lineHeight,
   symbolSize,
   symbolVariant = "modern",
+  textAlign = "left",
 }: {
   value: string;
   color: string;
@@ -6707,17 +7036,20 @@ function InlineSymbolText({
   lineHeight: number;
   symbolSize: number;
   symbolVariant?: "modern" | "retro";
+  textAlign?: "left" | "center";
 }) {
   if (!INLINE_MANA_SYMBOL_PATTERN.test(value) && !value.includes("\n")) {
     return (
       <Text
         selectable={false}
         style={{
+          width: "100%",
           color,
           fontFamily,
           fontSize,
           lineHeight,
-          textAlign: "left",
+          includeFontPadding: false,
+          textAlign,
         }}
       >
         {value}
@@ -6731,7 +7063,8 @@ function InlineSymbolText({
         flexDirection: "row",
         flexWrap: "wrap",
         alignItems: "center",
-        justifyContent: "flex-start",
+        justifyContent: textAlign === "center" ? "center" : "flex-start",
+        width: "100%",
       }}
     >
       {tokenizeInlineSymbols(value).map((token, index) => {
@@ -6770,6 +7103,8 @@ function InlineSymbolText({
               fontFamily,
               fontSize,
               lineHeight,
+              includeFontPadding: false,
+              textAlign,
             }}
           >
             {token.value}
@@ -7062,6 +7397,14 @@ function rememberStableFrameSlot(cacheKey: string, source: ImageSourcePropType) 
 
 function getStableFrameFallbackCacheKeys(cacheKey: string, fill: boolean): string[] {
   if (!fill) {
+    return [];
+  }
+
+  if (
+    cacheKey.includes("dark-textbox-fill") ||
+    cacheKey.includes("transparent-textbox") ||
+    cacheKey.includes("pinline-only")
+  ) {
     return [];
   }
 
@@ -7473,6 +7816,129 @@ function ShowcaseStampTreatmentLayer({
   );
 }
 
+function ShowcaseStampTreatmentBlendLayer({
+  sources,
+  frameIdentity,
+  spec,
+  cacheKey,
+  stamped,
+  mirrorX = false,
+}: {
+  sources: SplitFrameSources;
+  frameIdentity: FrameIdentity;
+  spec: ShowcaseFrameSpec | null;
+  cacheKey: string;
+  stamped: boolean;
+  mirrorX?: boolean;
+}) {
+  const rimSource = stamped
+    ? spec?.stampRimSources?.[frameIdentity]
+    : spec?.nonStampRimSources?.[frameIdentity];
+
+  if (!spec || (!rimSource && (!stamped || !spec.stampBorderMask))) {
+    return null;
+  }
+
+  const stampBorderMaskId = `${cacheKey}-stamp-border-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const blendGradientId = getSvgBlendGradientId(`${cacheKey}-stamp`);
+  const blendMaskId = getSvgBlendMaskId(`${cacheKey}-stamp`);
+
+  return (
+    <>
+      {stamped && spec.stampBorderMask ? (
+        <Svg
+          pointerEvents="none"
+          width="100%"
+          height="100%"
+          viewBox={`0 0 ${spec.designWidth} ${spec.designHeight}`}
+          preserveAspectRatio="none"
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+          }}
+        >
+          <Defs>
+            <Mask
+              id={stampBorderMaskId}
+              x="0"
+              y="0"
+              width={spec.designWidth}
+              height={spec.designHeight}
+              maskUnits="userSpaceOnUse"
+            >
+              <SvgImage
+                href={spec.stampBorderMask as never}
+                x={0}
+                y={0}
+                width={spec.designWidth}
+                height={spec.designHeight}
+                preserveAspectRatio="none"
+              />
+            </Mask>
+            <SvgLinearGradient
+              id={blendGradientId}
+              x1={mirrorX ? "1" : "0"}
+              y1="0"
+              x2={mirrorX ? "0" : "1"}
+              y2="0"
+            >
+              <Stop offset="0" stopColor="#ffffff" stopOpacity="0" />
+              <Stop offset="0.4" stopColor="#ffffff" stopOpacity="0" />
+              <Stop offset="0.6" stopColor="#ffffff" stopOpacity="1" />
+              <Stop offset="1" stopColor="#ffffff" stopOpacity="1" />
+            </SvgLinearGradient>
+            <Mask
+              id={blendMaskId}
+              x="0"
+              y="0"
+              width={spec.designWidth}
+              height={spec.designHeight}
+              maskUnits="userSpaceOnUse"
+            >
+              <Rect
+                x="0"
+                y="0"
+                width={spec.designWidth}
+                height={spec.designHeight}
+                fill={`url(#${blendGradientId})`}
+              />
+            </Mask>
+          </Defs>
+          <G mask={`url(#${stampBorderMaskId})`}>
+            <SvgImage
+              href={sources.left as never}
+              x={0}
+              y={0}
+              width={spec.designWidth}
+              height={spec.designHeight}
+              preserveAspectRatio="none"
+            />
+            <SvgImage
+              href={sources.right as never}
+              x={0}
+              y={0}
+              width={spec.designWidth}
+              height={spec.designHeight}
+              preserveAspectRatio="none"
+              mask={`url(#${blendMaskId})`}
+            />
+          </G>
+        </Svg>
+      ) : null}
+      {rimSource ? (
+        <StableFrameImage
+          cacheKey={`${cacheKey}-stamp-rim-${frameIdentity}-${stamped ? "stamped" : "unstamped"}`}
+          source={rimSource}
+          resizeMode="stretch"
+        />
+      ) : null}
+    </>
+  );
+}
+
 function ShowcaseOverlayMaskLayers({
   spec,
   cacheKey,
@@ -7617,8 +8083,218 @@ function ShowcaseFrameImage({
   );
 }
 
+function ShowcaseFrameBlendImage({
+  sources,
+  spec,
+  cacheKey,
+  mirrorX = false,
+}: {
+  sources: SplitFrameSources;
+  spec: ShowcaseFrameSpec | null;
+  cacheKey: string;
+  mirrorX?: boolean;
+}) {
+  const frameMasks = spec?.frameMasks ?? (spec?.frameMask ? [spec.frameMask] : []);
+
+  if (!spec || frameMasks.length === 0) {
+    return (
+      <ShowcaseLinearBlendImage
+        cacheKey={cacheKey}
+        sources={sources}
+        designWidth={CARD_COORDINATES.width}
+        designHeight={CARD_COORDINATES.height}
+        mirrorX={mirrorX}
+      />
+    );
+  }
+
+  return (
+    <Svg
+      pointerEvents="none"
+      width="100%"
+      height="100%"
+      viewBox={`0 0 ${spec.designWidth} ${spec.designHeight}`}
+      preserveAspectRatio="none"
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+      }}
+    >
+      <Defs>
+        {frameMasks.map((frameMask, index) => {
+          const maskId = getSvgMaskId(cacheKey, index);
+
+          return (
+            <Mask
+              key={maskId}
+              id={maskId}
+              x="0"
+              y="0"
+              width={spec.designWidth}
+              height={spec.designHeight}
+              maskUnits="userSpaceOnUse"
+            >
+              <SvgImage
+                href={frameMask as never}
+                x="0"
+                y="0"
+                width={spec.designWidth}
+                height={spec.designHeight}
+                preserveAspectRatio="none"
+              />
+            </Mask>
+          );
+        })}
+        <SvgLinearGradient
+          id={getSvgBlendGradientId(cacheKey)}
+          x1={mirrorX ? "1" : "0"}
+          y1="0"
+          x2={mirrorX ? "0" : "1"}
+          y2="0"
+        >
+          <Stop offset="0" stopColor="#ffffff" stopOpacity="0" />
+          <Stop offset="0.4" stopColor="#ffffff" stopOpacity="0" />
+          <Stop offset="0.6" stopColor="#ffffff" stopOpacity="1" />
+          <Stop offset="1" stopColor="#ffffff" stopOpacity="1" />
+        </SvgLinearGradient>
+        <Mask
+          id={getSvgBlendMaskId(cacheKey)}
+          x="0"
+          y="0"
+          width={spec.designWidth}
+          height={spec.designHeight}
+          maskUnits="userSpaceOnUse"
+        >
+          <Rect
+            x="0"
+            y="0"
+            width={spec.designWidth}
+            height={spec.designHeight}
+            fill={`url(#${getSvgBlendGradientId(cacheKey)})`}
+          />
+        </Mask>
+      </Defs>
+      {frameMasks.map((_, index) => (
+        <G key={`${cacheKey}-frame-blend-layer-${index}`} mask={`url(#${getSvgMaskId(cacheKey, index)})`}>
+          <SvgImage
+            href={sources.left as never}
+            x="0"
+            y="0"
+            width={spec.designWidth}
+            height={spec.designHeight}
+            preserveAspectRatio="none"
+          />
+          <SvgImage
+            href={sources.right as never}
+            x="0"
+            y="0"
+            width={spec.designWidth}
+            height={spec.designHeight}
+            preserveAspectRatio="none"
+            mask={`url(#${getSvgBlendMaskId(cacheKey)})`}
+          />
+        </G>
+      ))}
+    </Svg>
+  );
+}
+
+function ShowcaseLinearBlendImage({
+  sources,
+  designWidth,
+  designHeight,
+  cacheKey,
+  mirrorX = false,
+  maskId,
+}: {
+  sources: SplitFrameSources;
+  designWidth: number;
+  designHeight: number;
+  cacheKey: string;
+  mirrorX?: boolean;
+  maskId?: string;
+}) {
+  const blendGradientId = getSvgBlendGradientId(cacheKey);
+  const blendMaskId = getSvgBlendMaskId(cacheKey);
+
+  return (
+    <Svg
+      pointerEvents="none"
+      width="100%"
+      height="100%"
+      viewBox={`0 0 ${designWidth} ${designHeight}`}
+      preserveAspectRatio="none"
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+      }}
+    >
+      <Defs>
+        <SvgLinearGradient
+          id={blendGradientId}
+          x1={mirrorX ? "1" : "0"}
+          y1="0"
+          x2={mirrorX ? "0" : "1"}
+          y2="0"
+        >
+          <Stop offset="0" stopColor="#ffffff" stopOpacity="0" />
+          <Stop offset="0.4" stopColor="#ffffff" stopOpacity="0" />
+          <Stop offset="0.6" stopColor="#ffffff" stopOpacity="1" />
+          <Stop offset="1" stopColor="#ffffff" stopOpacity="1" />
+        </SvgLinearGradient>
+        <Mask
+          id={blendMaskId}
+          x="0"
+          y="0"
+          width={designWidth}
+          height={designHeight}
+          maskUnits="userSpaceOnUse"
+        >
+          <Rect x="0" y="0" width={designWidth} height={designHeight} fill={`url(#${blendGradientId})`} />
+        </Mask>
+      </Defs>
+      <SvgImage
+        href={sources.left as never}
+        x="0"
+        y="0"
+        width={designWidth}
+        height={designHeight}
+        preserveAspectRatio="none"
+        mask={maskId ? `url(#${maskId})` : undefined}
+      />
+      <SvgImage
+        href={sources.right as never}
+        x="0"
+        y="0"
+        width={designWidth}
+        height={designHeight}
+        preserveAspectRatio="none"
+        mask={maskId ? `url(#${maskId}) url(#${blendMaskId})` : `url(#${blendMaskId})`}
+      />
+    </Svg>
+  );
+}
+
 function getSvgMaskId(cacheKey: string, index: number): string {
   return `${cacheKey}-mask-${index}`.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+function getSvgBlendGradientId(cacheKey: string): string {
+  return `${cacheKey}-blend-gradient`.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+function getSvgBlendMaskId(cacheKey: string): string {
+  return `${cacheKey}-blend-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
 function MseFrameImage({
@@ -7631,6 +8307,349 @@ function MseFrameImage({
   mirrorX?: boolean;
 }) {
   return <StableFrameImage cacheKey={cacheKey} source={source} mirrorX={mirrorX} resizeMode="stretch" />;
+}
+
+function MseTransparentBorderlessFrameLayer({
+  textureSource,
+  maskSource,
+  darkTextboxFillSource,
+  textboxSource,
+  textboxSplitSources,
+  exportMode,
+  cacheKey,
+}: {
+  textureSource: ImageSourcePropType;
+  maskSource: ImageSourcePropType;
+  darkTextboxFillSource?: ImageSourcePropType | null;
+  textboxSource?: ImageSourcePropType | null;
+  textboxSplitSources?: SplitFrameSources | null;
+  exportMode: boolean;
+  cacheKey: string;
+}) {
+  const maskId = `${cacheKey}-transparent-borderless-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const textboxBlendMaskId = `${cacheKey}-transparent-borderless-textbox-blend-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const textboxBlendGradientId = `${cacheKey}-transparent-borderless-textbox-blend-gradient`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    "-",
+  );
+  const textboxTextureOpacity = 0.22;
+
+  return (
+    <>
+      {darkTextboxFillSource ? (
+        <StableFrameImage
+          cacheKey={`${cacheKey}-transparent-dark-textbox-fill`}
+          source={darkTextboxFillSource}
+          resizeMode="stretch"
+        />
+      ) : null}
+      {!textboxSplitSources && textboxSource ? (
+        <StableFrameImage
+          cacheKey={`${cacheKey}-transparent-textbox`}
+          source={textboxSource}
+          imageStyle={{ opacity: textboxTextureOpacity }}
+          resizeMode="stretch"
+        />
+      ) : null}
+      <Svg
+        pointerEvents="none"
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${CARD_COORDINATES.width} ${CARD_COORDINATES.height}`}
+        preserveAspectRatio="none"
+        style={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+        }}
+      >
+        <Defs>
+          <Mask
+            id={maskId}
+            x="0"
+            y="0"
+            width={CARD_COORDINATES.width}
+            height={CARD_COORDINATES.height}
+            maskUnits="userSpaceOnUse"
+            maskType="luminance"
+          >
+            <SvgImage
+              href={maskSource as never}
+              x="0"
+              y="0"
+              width={CARD_COORDINATES.width}
+              height={CARD_COORDINATES.height}
+              preserveAspectRatio="none"
+            />
+          </Mask>
+          {textboxSplitSources ? (
+            <>
+              <SvgLinearGradient id={textboxBlendGradientId} x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor="black" stopOpacity="0" />
+                <Stop offset="0.34" stopColor="black" stopOpacity="0" />
+                <Stop offset="0.66" stopColor="white" stopOpacity="1" />
+                <Stop offset="1" stopColor="white" stopOpacity="1" />
+              </SvgLinearGradient>
+              <Mask
+                id={textboxBlendMaskId}
+                x="0"
+                y="0"
+                width={CARD_COORDINATES.width}
+                height={CARD_COORDINATES.height}
+                maskUnits="userSpaceOnUse"
+              >
+                <Rect
+                  x="0"
+                  y="0"
+                  width={CARD_COORDINATES.width}
+                  height={CARD_COORDINATES.height}
+                  fill={`url(#${textboxBlendGradientId})`}
+                />
+              </Mask>
+            </>
+          ) : null}
+        </Defs>
+        {textboxSplitSources ? (
+          <>
+            <SvgImage
+              href={textboxSplitSources.left as never}
+              x="0"
+              y="0"
+              width={CARD_COORDINATES.width}
+              height={CARD_COORDINATES.height}
+              preserveAspectRatio="none"
+              opacity={textboxTextureOpacity}
+            />
+            <SvgImage
+              href={textboxSplitSources.right as never}
+              x="0"
+              y="0"
+              width={CARD_COORDINATES.width}
+              height={CARD_COORDINATES.height}
+              preserveAspectRatio="none"
+              opacity={textboxTextureOpacity}
+              mask={`url(#${textboxBlendMaskId})`}
+            />
+          </>
+        ) : null}
+        {Platform.OS === "web" && exportMode ? null : (
+          <SvgImage
+            href={textureSource as never}
+            x="0"
+            y="0"
+            width={CARD_COORDINATES.width}
+            height={CARD_COORDINATES.height}
+            preserveAspectRatio="none"
+            mask={`url(#${maskId})`}
+          />
+        )}
+      </Svg>
+      {Platform.OS === "web" && exportMode ? (
+        <CssMaskedFrameImage
+          cacheKey={`${cacheKey}-transparent-export-frame`}
+          source={textureSource}
+          maskSource={maskSource}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function CssMaskedFrameImage({
+  source,
+  splitSources,
+  maskSource,
+  cacheKey,
+}: {
+  source: ImageSourcePropType;
+  splitSources?: SplitFrameSources | null;
+  maskSource: ImageSourcePropType;
+  cacheKey: string;
+}) {
+  const maskUri = getImageSourceUri(maskSource);
+
+  if (!maskUri) {
+    return <StableFrameImage cacheKey={cacheKey} source={source} resizeMode="stretch" />;
+  }
+
+  const containerStyle = {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    overflow: "hidden",
+    WebkitMaskImage: `url("${maskUri}")`,
+    maskImage: `url("${maskUri}")`,
+    WebkitMaskPosition: "center",
+    maskPosition: "center",
+    WebkitMaskRepeat: "no-repeat",
+    maskRepeat: "no-repeat",
+    WebkitMaskSize: "100% 100%",
+    maskSize: "100% 100%",
+  } as unknown as ViewStyle;
+
+  return (
+    <View
+      pointerEvents="none"
+      style={containerStyle}
+    >
+      {splitSources ? (
+        <MseSplitFrameImage cacheKey={`${cacheKey}-split`} sources={splitSources} />
+      ) : (
+        <StableFrameImage cacheKey={cacheKey} source={source} resizeMode="stretch" />
+      )}
+    </View>
+  );
+}
+
+function getImageSourceUri(source: ImageSourcePropType): string | null {
+  if (source && typeof source === "object" && "uri" in source && typeof source.uri === "string") {
+    return source.uri;
+  }
+
+  const resolveAssetSource = (Image as typeof Image & {
+    resolveAssetSource?: (source: ImageSourcePropType) => { uri?: string } | null;
+  }).resolveAssetSource;
+
+  return resolveAssetSource?.(source)?.uri ?? null;
+}
+
+function MsePinlineOnlyRestoreLayer({
+  source,
+  splitSources,
+  maskSource,
+  cacheKey,
+  mirrorX = false,
+  exportMode,
+}: {
+  source: ImageSourcePropType;
+  splitSources?: SplitFrameSources | null;
+  maskSource: ImageSourcePropType;
+  cacheKey: string;
+  mirrorX?: boolean;
+  exportMode: boolean;
+}) {
+  if (Platform.OS === "web" && exportMode) {
+    return (
+      <CssMaskedFrameImage cacheKey={cacheKey} source={source} splitSources={splitSources} maskSource={maskSource} />
+    );
+  }
+
+  const maskId = `${cacheKey}-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const gradientId = `${cacheKey}-split-gradient`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const rightMaskId = `${cacheKey}-right-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const imageTransform = mirrorX ? `translate(${CARD_COORDINATES.width} 0) scale(-1 1)` : undefined;
+
+  return (
+    <Svg
+      pointerEvents="none"
+      width="100%"
+      height="100%"
+      viewBox={`0 0 ${CARD_COORDINATES.width} ${CARD_COORDINATES.height}`}
+      preserveAspectRatio="none"
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+      }}
+    >
+      <Defs>
+        <Mask
+          id={maskId}
+          x="0"
+          y="0"
+          width={CARD_COORDINATES.width}
+          height={CARD_COORDINATES.height}
+          maskUnits="userSpaceOnUse"
+          maskType="luminance"
+        >
+          <SvgImage
+            href={maskSource as never}
+            x="0"
+            y="0"
+            width={CARD_COORDINATES.width}
+            height={CARD_COORDINATES.height}
+            preserveAspectRatio="none"
+          />
+        </Mask>
+        {splitSources ? (
+          <>
+            <SvgLinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
+              <Stop offset="0" stopColor="black" stopOpacity="0" />
+              <Stop offset="0.34" stopColor="black" stopOpacity="0" />
+              <Stop offset="0.66" stopColor="white" stopOpacity="1" />
+              <Stop offset="1" stopColor="white" stopOpacity="1" />
+            </SvgLinearGradient>
+            <Mask
+              id={rightMaskId}
+              x="0"
+              y="0"
+              width={CARD_COORDINATES.width}
+              height={CARD_COORDINATES.height}
+              maskUnits="userSpaceOnUse"
+            >
+              <Rect
+                x="0"
+                y="0"
+                width={CARD_COORDINATES.width}
+                height={CARD_COORDINATES.height}
+                fill={`url(#${gradientId})`}
+              />
+            </Mask>
+          </>
+        ) : null}
+      </Defs>
+      {splitSources ? (
+        <>
+          <SvgImage
+            href={splitSources.left as never}
+            x="0"
+            y="0"
+            width={CARD_COORDINATES.width}
+            height={CARD_COORDINATES.height}
+            preserveAspectRatio="none"
+            mask={`url(#${maskId})`}
+            transform={imageTransform}
+          />
+          <G mask={`url(#${maskId})`}>
+            <SvgImage
+              href={splitSources.right as never}
+              x="0"
+              y="0"
+              width={CARD_COORDINATES.width}
+              height={CARD_COORDINATES.height}
+              preserveAspectRatio="none"
+              mask={`url(#${rightMaskId})`}
+              transform={imageTransform}
+              opacity={0.96}
+            />
+          </G>
+        </>
+      ) : (
+        <SvgImage
+          href={source as never}
+          x="0"
+          y="0"
+          width={CARD_COORDINATES.width}
+          height={CARD_COORDINATES.height}
+          preserveAspectRatio="none"
+          mask={`url(#${maskId})`}
+          transform={imageTransform}
+        />
+      )}
+    </Svg>
+  );
 }
 
 function MseSplitFrameImage({
@@ -7706,71 +8725,6 @@ function MseSplitFrameImage({
         mask={`url(#${maskId})`}
         transform={imageTransform}
       />
-    </Svg>
-  );
-}
-
-function MseArtifactMainframeBlendOverlay({
-  colorSource,
-  cacheKey,
-  mirrorX = false,
-}: {
-  colorSource: ImageSourcePropType;
-  cacheKey: string;
-  mirrorX?: boolean;
-}) {
-  const sourceSize = MSE_M15_ARTIFACT_MAINFRAME_BLEND_MASK_SIZE;
-  const maskSource = getMseM15ArtifactMainframeBlendMaskSource();
-  const maskId = `${cacheKey}-artifact-mainframe-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const imageTransform = mirrorX ? `translate(${sourceSize.width} 0) scale(-1 1)` : undefined;
-
-  return (
-    <Svg
-      pointerEvents="none"
-      width="100%"
-      height="100%"
-      viewBox={`0 0 ${sourceSize.width} ${sourceSize.height}`}
-      preserveAspectRatio="none"
-      style={{
-        position: "absolute",
-        top: 0,
-        right: 0,
-        bottom: 0,
-        left: 0,
-        width: "100%",
-        height: "100%",
-      }}
-    >
-      <Defs>
-        <Mask
-          id={maskId}
-          x="0"
-          y="0"
-          width={sourceSize.width}
-          height={sourceSize.height}
-          maskUnits="userSpaceOnUse"
-          maskType="luminance"
-        >
-          <SvgImage
-            href={maskSource as never}
-            x="0"
-            y="0"
-            width={sourceSize.width}
-            height={sourceSize.height}
-            preserveAspectRatio="none"
-          />
-        </Mask>
-      </Defs>
-      <G mask={`url(#${maskId})`} transform={imageTransform}>
-        <SvgImage
-          href={colorSource as never}
-          x="0"
-          y="0"
-          width={sourceSize.width}
-          height={sourceSize.height}
-          preserveAspectRatio="none"
-        />
-      </G>
     </Svg>
   );
 }
@@ -8265,8 +9219,184 @@ function FrameTreatmentArtOverlay({
   );
 }
 
+function SubjectMaskArtOverlay({
+  faceCard,
+  artRect,
+  artTransform,
+  imageAspectRatio,
+  overlayBottomY,
+  exportMode,
+  cacheKey,
+}: {
+  faceCard: CardDraft;
+  artRect: CoordinateRect;
+  artTransform: ArtTransform;
+  imageAspectRatio?: number | null;
+  overlayBottomY: number;
+  exportMode: boolean;
+  cacheKey: string;
+}) {
+  if (!faceCard.artUri || !faceCard.artSubjectMaskUri) {
+    return null;
+  }
+
+  const maskId = `${cacheKey}-alpha-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const clipId = `${cacheKey}-subject-overlay-clip`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const fittedLayout = getCoverFittedImageLayout(artRect.width, artRect.height, imageAspectRatio);
+  const artX = artRect.x + fittedLayout.left;
+  const artY = artRect.y + fittedLayout.top;
+  const transformedArtRect = getTransformedCoverImageRect(
+    { x: artX, y: artY, width: fittedLayout.width, height: fittedLayout.height },
+    artTransform,
+  );
+
+  if (Platform.OS === "web" && exportMode) {
+    return (
+      <CssSubjectMaskArtOverlay
+        artUri={faceCard.artUri}
+        maskUri={faceCard.artSubjectMaskUri}
+        transformedArtRect={transformedArtRect}
+        overlayBottomY={overlayBottomY}
+      />
+    );
+  }
+
+  return (
+    <Svg
+      pointerEvents="none"
+      width="100%"
+      height="100%"
+      viewBox={`0 0 ${CARD_COORDINATES.width} ${CARD_COORDINATES.height}`}
+      preserveAspectRatio="none"
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+      }}
+    >
+      <Defs>
+        <Mask
+          id={maskId}
+          x="0"
+          y="0"
+          width={CARD_COORDINATES.width}
+          height={CARD_COORDINATES.height}
+          maskUnits="userSpaceOnUse"
+          maskType="luminance"
+	        >
+	          <SvgImage
+	            href={{ uri: faceCard.artSubjectMaskUri } as never}
+	            x={transformedArtRect.x}
+	            y={transformedArtRect.y}
+	            width={transformedArtRect.width}
+	            height={transformedArtRect.height}
+	            preserveAspectRatio="none"
+	          />
+	        </Mask>
+        <ClipPath id={clipId}>
+          <Rect
+            x="0"
+            y="0"
+            width={CARD_COORDINATES.width}
+            height={overlayBottomY}
+          />
+        </ClipPath>
+      </Defs>
+      <G clipPath={`url(#${clipId})`}>
+        <G mask={`url(#${maskId})`}>
+          <SvgImage
+            href={{ uri: faceCard.artUri } as never}
+            x={transformedArtRect.x}
+            y={transformedArtRect.y}
+            width={transformedArtRect.width}
+            height={transformedArtRect.height}
+            preserveAspectRatio="none"
+          />
+        </G>
+      </G>
+    </Svg>
+  );
+}
+
+function CssSubjectMaskArtOverlay({
+  artUri,
+  maskUri,
+  transformedArtRect,
+  overlayBottomY,
+}: {
+  artUri: string;
+  maskUri: string;
+  transformedArtRect: CoordinateRect;
+  overlayBottomY: number;
+}) {
+  const clipHeightPercent = `${Math.max(0, Math.min(1, overlayBottomY / CARD_COORDINATES.height)) * 100}%`;
+  const clipStyle = {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: clipHeightPercent,
+    overflow: "hidden",
+  } as unknown as ViewStyle;
+  const maskedImageStyle = {
+    position: "absolute",
+    left: `${(transformedArtRect.x / CARD_COORDINATES.width) * 100}%`,
+    top: `${(transformedArtRect.y / CARD_COORDINATES.height) * 100}%`,
+    width: `${(transformedArtRect.width / CARD_COORDINATES.width) * 100}%`,
+    height: `${(transformedArtRect.height / CARD_COORDINATES.height) * 100}%`,
+    overflow: "hidden",
+    WebkitMaskImage: `url("${maskUri}")`,
+    maskImage: `url("${maskUri}")`,
+    WebkitMaskPosition: "center",
+    maskPosition: "center",
+    WebkitMaskRepeat: "no-repeat",
+    maskRepeat: "no-repeat",
+    WebkitMaskSize: "100% 100%",
+    maskSize: "100% 100%",
+  } as unknown as ViewStyle;
+
+  return (
+    <View
+      pointerEvents="none"
+      style={clipStyle}
+    >
+      <View pointerEvents="none" style={maskedImageStyle}>
+        <Image
+          source={{ uri: artUri }}
+          resizeMode="stretch"
+          style={{ width: "100%", height: "100%" }}
+        />
+      </View>
+    </View>
+  );
+}
+
+function getTransformedCoverImageRect(rect: CoordinateRect, transform: ArtTransform): CoordinateRect {
+  const width = rect.width * transform.scale;
+  const height = rect.height * transform.scale;
+
+  return {
+    x: rect.x + (rect.width - width) / 2 + transform.offsetX,
+    y: rect.y + (rect.height - height) / 2 + transform.offsetY,
+    width,
+    height,
+  };
+}
+
 function shouldDrawTreatmentArtOverFrame(treatment: FrameTreatment): boolean {
   return treatment === "retro";
+}
+
+function shouldDrawSubjectArtOverFrame(treatment: FrameTreatment, faceCard: CardDraft): boolean {
+  return (
+    (treatment === "borderless" || treatment === "transparentBorderless") &&
+    Boolean(faceCard.artUri) &&
+    Boolean(faceCard.artSubjectMaskUri)
+  );
 }
 
 function supportsFrameEffectOverlays(typeFrame: TypeFrame): boolean {
@@ -8288,6 +9418,14 @@ function shouldUseMseM15ColorBlend(card: CardDraft, frameColors: ManaColor[]): b
 
 function shouldShowDfcColorIndicator(typeFrame: TypeFrame, card: CardDraft): boolean {
   return typeFrame === "dfc" && isDfcBackFace(card) && getDfcMode(card) !== "modal";
+}
+
+function getSetSymbolMarkSize(baseSize: number, card: CardDraft): number {
+  return card.setSymbolUri && card.setSymbolUsesRarityTreatment ? baseSize * 1.35 : baseSize;
+}
+
+function shouldRenderDfcFrontWithStandardTreatmentGeometry(treatment: FrameTreatment): boolean {
+  return treatment === "borderless" || treatment === "transparentBorderless";
 }
 
 function getTreatmentArtRect(treatment: FrameTreatment): CoordinateRect {
@@ -8329,8 +9467,11 @@ export function getVisibleArtRectForCard(card: CardDraft): {
   }
 
   const isDfcBack = selectedTypeFrame === "dfc" && isDfcBackFace(card);
-  const typeFrame = isBattleBackFace || isDfcBack ? "standard" : selectedTypeFrame;
   const treatment = isDfcBack ? card.backFrameTreatment ?? "standard" : card.frameTreatment ?? "standard";
+  const typeFrame =
+    isBattleBackFace || isDfcBack || (selectedTypeFrame === "dfc" && shouldRenderDfcFrontWithStandardTreatmentGeometry(treatment))
+      ? "standard"
+      : selectedTypeFrame;
   const showcaseFrame = isDfcBack
     ? card.backShowcaseFrame ?? DEFAULT_SHOWCASE_FRAME
     : card.showcaseFrame ?? DEFAULT_SHOWCASE_FRAME;
@@ -8368,7 +9509,15 @@ function getTreatmentHeaderInk(treatment: FrameTreatment, frameIdentity: FrameId
     return "#f8f2df";
   }
 
-  if (treatment === "borderless" || treatment === "etchedFoil") {
+  if (treatment === "etchedFoil") {
+    return "#f8f2df";
+  }
+
+  if (treatment === "transparentBorderless") {
+    return "#f8f2df";
+  }
+
+  if (treatment === "borderless") {
     return "#f8f2df";
   }
 
@@ -8386,6 +9535,10 @@ function getTreatmentHeaderInk(treatment: FrameTreatment, frameIdentity: FrameId
 function getTreatmentBodyInk(treatment: FrameTreatment): string | null {
   if (treatment === "retro") {
     return "#050505";
+  }
+
+  if (treatment === "transparentBorderless") {
+    return "#f8f2df";
   }
 
   if (treatment === "borderless") {
@@ -9239,7 +10392,7 @@ function getRulesFlavorLayout(
     ? textArea.y + textArea.height
     : showPowerToughness
       ? ptBox.y + 4 - reservedBottomInset
-      : footer.y - 18;
+      : footer.y - 7;
   const areaHeight = Math.max(64, Math.min(textArea.y + textArea.height, bottomLimit) - textArea.y);
   const areaRect = { ...textArea, height: areaHeight };
   const hasRules = card.rulesText.trim().length > 0;
@@ -9254,6 +10407,9 @@ function getRulesFlavorLayout(
   const flavorLineCount = estimateWrappedLineCount(card.flavorText, charsPerLine);
   const neededRulesHeight = Math.max(1, rulesLineCount) * baseRulesLineHeight + 2;
   const neededFlavorHeight = Math.max(1, flavorLineCount) * baseFlavorLineHeight + 2;
+  const keywordRulesText = getKeywordRulesText(card.keywords);
+  const isKeywordOnlyRulesText =
+    keywordRulesText.trim().length > 0 && keywordRulesText.trim() === card.rulesText.trim();
 
   if (showDivider) {
     const dividerHeight = 2;
@@ -9265,8 +10421,13 @@ function getRulesFlavorLayout(
     let flavorHeight: number;
 
     if (neededRulesHeight + neededFlavorHeight <= usableHeight) {
-      rulesHeight = Math.max(minRulesHeight, neededRulesHeight);
-      flavorHeight = Math.max(minFlavorHeight, neededFlavorHeight);
+      const surplusHeight = usableHeight - neededRulesHeight - neededFlavorHeight;
+      const totalLineCount = Math.max(1, rulesLineCount + flavorLineCount);
+      rulesHeight = Math.max(
+        minRulesHeight,
+        neededRulesHeight + surplusHeight * (rulesLineCount / totalLineCount),
+      );
+      flavorHeight = Math.max(minFlavorHeight, usableHeight - rulesHeight);
     } else {
       const ratio = neededRulesHeight / (neededRulesHeight + neededFlavorHeight);
       rulesHeight = clamp(
@@ -9287,6 +10448,7 @@ function getRulesFlavorLayout(
       showRules: true,
       showFlavor: true,
       showDivider: true,
+      centerRulesContent: false,
       rulesRect: { ...areaRect, y, height: rulesHeight },
       flavorRect: {
         ...areaRect,
@@ -9310,13 +10472,10 @@ function getRulesFlavorLayout(
   const neededHeight = hasFlavor ? neededFlavorHeight : neededRulesHeight;
   const showFlavor = hasFlavor && !hasRules;
   const showRules = hasRules || !showFlavor;
-  const singleMinHeight = singleLineHeight + 2;
-  const singleHeight = clamp(
-    Math.max(neededHeight, singleMinHeight),
-    singleMinHeight,
-    areaHeight,
-  );
-  const singleY = areaRect.y + Math.max(0, (areaHeight - singleHeight) / 2);
+  const shouldCenterCompactRulesBlock =
+    showRules && hasRules && !hasFlavor && (rulesLineCount <= 3 || isKeywordOnlyRulesText);
+  const singleHeight = areaHeight;
+  const singleY = areaRect.y;
   const singleScale = getTextScale(neededHeight, singleHeight);
   const hiddenRect = { ...areaRect, y: singleY, height: singleHeight };
 
@@ -9324,6 +10483,7 @@ function getRulesFlavorLayout(
     showRules,
     showFlavor,
     showDivider: false,
+    centerRulesContent: shouldCenterCompactRulesBlock,
     rulesRect: showRules ? { ...areaRect, y: singleY, height: singleHeight } : hiddenRect,
     flavorRect: showFlavor ? { ...areaRect, y: singleY, height: singleHeight } : hiddenRect,
     dividerRect: { ...dividerRect, y: singleY + singleHeight },
@@ -9472,57 +10632,58 @@ function TransformableArtImage({
 
 function GeneratingArtAnimation({ scale, colors }: { scale: number; colors: ManaColor[] }) {
   const drift = useRef(new Animated.Value(0)).current;
-  const swirl = useRef(new Animated.Value(0)).current;
-  const palette = useMemo(() => getGeneratingSmokePalette(colors), [colors]);
+  const flicker = useRef(new Animated.Value(0)).current;
+  const colorKey = colors.join("");
+  const { palette, pixels, originPath } = useMemo(() => {
+    const smokePalette = getGeneratingSmokePalette(colors);
+    const smokeOriginPath = createGeneratingSmokeOriginPath(`${colorKey || "C"}-origin`);
+
+    return {
+      palette: smokePalette,
+      pixels: createGeneratingPixelSmokeTrail(colorKey || "C", smokePalette, smokeOriginPath),
+      originPath: smokeOriginPath,
+    };
+  }, [colorKey]);
 
   useEffect(() => {
     const driftLoop = Animated.loop(
       Animated.timing(drift, {
         toValue: 1,
-        duration: 5400,
-        easing: Easing.inOut(Easing.sin),
+        duration: 5600,
+        easing: Easing.linear,
         useNativeDriver: true,
       }),
     );
-    const swirlLoop = Animated.loop(
+    const flickerLoop = Animated.loop(
       Animated.sequence([
-        Animated.timing(swirl, {
+        Animated.timing(flicker, {
           toValue: 1,
-          duration: 3600,
-          easing: Easing.inOut(Easing.cubic),
+          duration: 680,
+          easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
-        Animated.timing(swirl, {
+        Animated.timing(flicker, {
           toValue: 0,
-          duration: 2900,
-          easing: Easing.inOut(Easing.cubic),
+          duration: 920,
+          easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
       ]),
     );
 
     driftLoop.start();
-    swirlLoop.start();
+    flickerLoop.start();
 
     return () => {
       driftLoop.stop();
-      swirlLoop.stop();
+      flickerLoop.stop();
     };
-  }, [drift, swirl]);
-
-  const plumeOpacity = swirl.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [0.28, 0.66, 0.34],
-  });
-  const plumeScale = swirl.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.94, 1.08],
-  });
+  }, [drift, flicker]);
 
   return (
-    <View pointerEvents="none" style={{ flex: 1, overflow: "hidden", backgroundColor: "#07080b" }}>
+    <View pointerEvents="none" style={{ flex: 1, overflow: "hidden", backgroundColor: "#050608" }}>
       <LinearGradient
-        colors={["#06070a", rgba(palette[0], 0.22), rgba(palette[1], 0.18), "#111018"]}
+        colors={["#050608", rgba(palette[0], 0.18), "rgba(8,10,14,0.9)", rgba(palette[1], 0.16)]}
         start={{ x: 0.05, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: "absolute", inset: 0 }}
@@ -9530,89 +10691,121 @@ function GeneratingArtAnimation({ scale, colors }: { scale: number; colors: Mana
       <Animated.View
         style={{
           position: "absolute",
-          left: "18%",
-          top: "17%",
-          width: "64%",
-          height: "54%",
-          borderRadius: 999,
-          backgroundColor: rgba(palette[0], 0.12),
-          opacity: plumeOpacity,
-          transform: [{ scale: plumeScale }],
-        }}
-      />
-      {GENERATING_SMOKE_PARTICLES.map((particle, index) => {
-        const color = palette[(index + particle.colorOffset) % palette.length];
-
-        return (
-          <Animated.View
-            key={`generating-smoke-${index}`}
-            style={{
-              position: "absolute",
-              left: `${particle.x}%`,
-              top: `${particle.y}%`,
-              width: `${particle.size}%`,
-              height: `${particle.size}%`,
-              borderRadius: 999,
-              opacity: swirl.interpolate({
-                inputRange: [0, 0.45, 1],
-                outputRange: [particle.opacity * 0.52, particle.opacity, particle.opacity * 0.62],
-              }),
-              transform: [
-                {
-                  translateX: drift.interpolate({
-                    inputRange: [0, 0.5, 1],
-                    outputRange: [
-                      -particle.driftX * scale,
-                      particle.driftX * scale,
-                      -particle.driftX * 0.45 * scale,
-                    ],
-                  }),
-                },
-                {
-                  translateY: swirl.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [particle.driftY * scale, -particle.driftY * scale],
-                  }),
-                },
-                {
-                  scale: drift.interpolate({
-                    inputRange: [0, 0.5, 1],
-                    outputRange: [0.92, particle.scale, 1.04],
-                  }),
-                },
-              ],
-            }}
-          >
-            <LinearGradient
-              colors={[rgba(color, 0.42), rgba(color, 0.2), rgba(color, 0)]}
-              start={{ x: 0.32, y: 0.22 }}
-              end={{ x: 0.82, y: 0.88 }}
-              style={{ flex: 1, borderRadius: 999 }}
-            />
-          </Animated.View>
-        );
-      })}
-      <Animated.View
-        style={{
-          position: "absolute",
-          left: "12%",
-          top: "64%",
-          width: "76%",
-          height: "16%",
-          borderRadius: 999,
-          backgroundColor: rgba(palette[1], 0.1),
-          opacity: plumeOpacity,
+          left: "50%",
+          top: "56%",
+          width: Math.max(4, 7 * scale),
+          height: Math.max(4, 7 * scale),
+          marginLeft: Math.max(-2, -3.5 * scale),
+          marginTop: Math.max(-2, -3.5 * scale),
+          borderRadius: Math.max(2, 3.5 * scale),
+          backgroundColor: rgba(palette[0], 0.52),
+          opacity: flicker.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0.35, 0.82],
+          }),
           transform: [
             {
               translateX: drift.interpolate({
-                inputRange: [0, 1],
-                outputRange: [-18 * scale, 18 * scale],
+                inputRange: GENERATING_SMOKE_ORIGIN_INPUT_RANGE,
+                outputRange: originPath.x.map((offset) => offset * scale),
               }),
             },
-            { scaleX: plumeScale },
+            {
+              translateY: drift.interpolate({
+                inputRange: GENERATING_SMOKE_ORIGIN_INPUT_RANGE,
+                outputRange: originPath.y.map((offset) => offset * scale),
+              }),
+            },
+            {
+              scale: flicker.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0.84, 1.16],
+              }),
+            },
           ],
         }}
       />
+      <View
+        style={{
+          position: "absolute",
+          inset: 0,
+        }}
+      >
+        {pixels.map((particle, index) => {
+          const color = palette[particle.colorIndex % palette.length];
+          const pixelSize = Math.max(2, particle.size * scale);
+
+          return (
+            <Animated.View
+              key={`generating-pixel-smoke-${index}`}
+              style={{
+                position: "absolute",
+                left: `${particle.x}%`,
+                top: `${particle.y}%`,
+                width: pixelSize,
+                height: pixelSize,
+                borderRadius: Math.max(0, Math.round(scale)),
+                backgroundColor: color,
+                opacity: drift.interpolate({
+                  inputRange: particle.opacityInputRange,
+                  outputRange: [0, particle.opacity, 0],
+                }),
+                transform: [
+                  {
+                    translateX: drift.interpolate({
+                      inputRange: particle.motionInputRange,
+                      outputRange: [0, particle.wobbleX * scale, particle.wobbleX * scale * 1.35],
+                    }),
+                  },
+                  {
+                    translateY: drift.interpolate({
+                      inputRange: particle.motionInputRange,
+                      outputRange: [0, -particle.rise * scale * 0.68, -particle.rise * scale],
+                    }),
+                  },
+                  {
+                    scale: drift.interpolate({
+                      inputRange: particle.motionInputRange,
+                      outputRange: [particle.scale * 0.76, particle.scale, particle.scale * 1.16],
+                    }),
+                  },
+                ],
+              }}
+            />
+          );
+        })}
+      </View>
+      <Animated.View
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: "56%",
+          width: Math.max(10, 18 * scale),
+          height: Math.max(10, 18 * scale),
+          marginLeft: Math.max(-5, -9 * scale),
+          marginTop: Math.max(-5, -9 * scale),
+          opacity: 0.22,
+          transform: [
+            {
+              translateX: drift.interpolate({
+                inputRange: GENERATING_SMOKE_ORIGIN_INPUT_RANGE,
+                outputRange: originPath.x.map((offset) => offset * scale),
+              }),
+            },
+            {
+              translateY: drift.interpolate({
+                inputRange: GENERATING_SMOKE_ORIGIN_INPUT_RANGE,
+                outputRange: originPath.y.map((offset) => offset * scale),
+              }),
+            },
+          ],
+        }}
+      >
+        <LinearGradient
+          colors={[rgba(palette[0], 0.42), "rgba(255,255,255,0)"]}
+          style={{ flex: 1, borderRadius: Math.max(5, 9 * scale) }}
+        />
+      </Animated.View>
       <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "28%" }}>
         <LinearGradient
           colors={["rgba(7,8,11,0)", "rgba(7,8,11,0.82)"]}
@@ -9636,7 +10829,7 @@ function GeneratingArtAnimation({ scale, colors }: { scale: number; colors: Mana
           letterSpacing: 0,
         }}
       >
-        Generating art
+        Generating art, please wait
       </Text>
     </View>
   );
@@ -9651,24 +10844,112 @@ const GENERATING_SMOKE_COLORS: Record<ManaColor | "C", string> = {
   C: "#cfd5cf",
 };
 
-const GENERATING_SMOKE_PARTICLES = [
-  { x: 6, y: 70, size: 19, opacity: 0.44, driftX: 16, driftY: 12, scale: 1.14, colorOffset: 0 },
-  { x: 14, y: 61, size: 16, opacity: 0.5, driftX: 20, driftY: 18, scale: 1.2, colorOffset: 1 },
-  { x: 23, y: 54, size: 22, opacity: 0.42, driftX: 14, driftY: 22, scale: 1.08, colorOffset: 2 },
-  { x: 32, y: 45, size: 14, opacity: 0.48, driftX: 22, driftY: 13, scale: 1.22, colorOffset: 0 },
-  { x: 42, y: 38, size: 24, opacity: 0.36, driftX: 17, driftY: 19, scale: 1.12, colorOffset: 1 },
-  { x: 55, y: 31, size: 17, opacity: 0.46, driftX: 24, driftY: 15, scale: 1.18, colorOffset: 2 },
-  { x: 67, y: 24, size: 23, opacity: 0.34, driftX: 18, driftY: 21, scale: 1.1, colorOffset: 0 },
-  { x: 78, y: 18, size: 15, opacity: 0.44, driftX: 21, driftY: 12, scale: 1.24, colorOffset: 1 },
-  { x: 84, y: 34, size: 20, opacity: 0.32, driftX: 13, driftY: 18, scale: 1.16, colorOffset: 2 },
-  { x: 63, y: 49, size: 13, opacity: 0.42, driftX: 19, driftY: 11, scale: 1.28, colorOffset: 0 },
-  { x: 48, y: 58, size: 18, opacity: 0.36, driftX: 15, driftY: 20, scale: 1.12, colorOffset: 1 },
-  { x: 30, y: 70, size: 12, opacity: 0.4, driftX: 23, driftY: 14, scale: 1.2, colorOffset: 2 },
-  { x: 10, y: 34, size: 11, opacity: 0.34, driftX: 12, driftY: 16, scale: 1.18, colorOffset: 1 },
-  { x: 22, y: 24, size: 15, opacity: 0.3, driftX: 18, driftY: 10, scale: 1.1, colorOffset: 0 },
-  { x: 74, y: 63, size: 14, opacity: 0.34, driftX: 20, driftY: 17, scale: 1.22, colorOffset: 2 },
-  { x: 88, y: 72, size: 18, opacity: 0.28, driftX: 14, driftY: 13, scale: 1.16, colorOffset: 1 },
-];
+const GENERATING_SMOKE_ORIGIN_INPUT_RANGE = [0, 0.09, 0.19, 0.31, 0.43, 0.56, 0.69, 0.82, 0.93, 1];
+
+type GeneratingPixelSmokeParticle = {
+  x: number;
+  y: number;
+  size: number;
+  opacity: number;
+  rise: number;
+  wobbleX: number;
+  scale: number;
+  colorIndex: number;
+  motionInputRange: [number, number, number];
+  opacityInputRange: [number, number, number];
+};
+
+function createGeneratingPixelSmokeTrail(
+  seedKey: string,
+  palette: string[],
+  originPath: { x: number[]; y: number[] },
+): GeneratingPixelSmokeParticle[] {
+  const random = createSeededRandom(seedKey);
+
+  return Array.from({ length: 96 }, (_, index) => {
+    const emissionProgress = (index / 96) * 0.82;
+    const densityBand = (index % 4) / 3;
+    const sourceOffset = sampleGeneratingSmokeOriginPath(originPath, emissionProgress);
+    const sourceX = 50 + sourceOffset.x / 3.75;
+    const sourceY = 56 + sourceOffset.y / 5.23;
+    const scatter = 1.8 + densityBand * 4.2;
+    const start = emissionProgress;
+    const middle = Math.min(start + 0.08 + random() * 0.035, 0.98);
+    const end = Math.min(middle + 0.11 + random() * 0.055, 1);
+    const size = 2 + Math.floor(random() * 4);
+
+    return {
+      x: clamp(sourceX + (random() - 0.5) * scatter, 5, 95),
+      y: clamp(sourceY + (random() - 0.5) * scatter, 12, 86),
+      size,
+      opacity: 0.26 + random() * 0.54,
+      rise: 30 + random() * 52,
+      wobbleX: (random() - 0.5) * (9 + densityBand * 16),
+      scale: 0.82 + random() * 0.62,
+      colorIndex: Math.floor(random() * palette.length),
+      motionInputRange: [start, middle, end],
+      opacityInputRange: [start, start + (middle - start) * 0.45, end],
+    };
+  });
+}
+
+function createGeneratingSmokeOriginPath(seedKey: string): { x: number[]; y: number[] } {
+  const random = createSeededRandom(seedKey);
+  const x: number[] = [];
+  const y: number[] = [];
+
+  GENERATING_SMOKE_ORIGIN_INPUT_RANGE.forEach((_, index) => {
+    const angle = random() * Math.PI * 2;
+    const radiusX = 58 + random() * 102;
+    const radiusY = 34 + random() * 86;
+
+    x.push(index === 0 || index === GENERATING_SMOKE_ORIGIN_INPUT_RANGE.length - 1 ? 0 : Math.round(Math.cos(angle) * radiusX));
+    y.push(index === 0 || index === GENERATING_SMOKE_ORIGIN_INPUT_RANGE.length - 1 ? 0 : Math.round(Math.sin(angle) * radiusY));
+  });
+
+  return { x, y };
+}
+
+function sampleGeneratingSmokeOriginPath(originPath: { x: number[]; y: number[] }, progress: number): { x: number; y: number } {
+  const clampedProgress = clamp(progress, 0, 1);
+  const nextIndex = GENERATING_SMOKE_ORIGIN_INPUT_RANGE.findIndex((stop) => stop >= clampedProgress);
+
+  if (nextIndex <= 0) {
+    return { x: originPath.x[0] ?? 0, y: originPath.y[0] ?? 0 };
+  }
+
+  const previousIndex = nextIndex - 1;
+  const previousStop = GENERATING_SMOKE_ORIGIN_INPUT_RANGE[previousIndex] ?? 0;
+  const nextStop = GENERATING_SMOKE_ORIGIN_INPUT_RANGE[nextIndex] ?? 1;
+  const segmentProgress = nextStop === previousStop ? 0 : (clampedProgress - previousStop) / (nextStop - previousStop);
+  const previousX = originPath.x[previousIndex] ?? 0;
+  const nextX = originPath.x[nextIndex] ?? previousX;
+  const previousY = originPath.y[previousIndex] ?? 0;
+  const nextY = originPath.y[nextIndex] ?? previousY;
+
+  return {
+    x: previousX + (nextX - previousX) * segmentProgress,
+    y: previousY + (nextY - previousY) * segmentProgress,
+  };
+}
+
+function createSeededRandom(seedKey: string): () => number {
+  let seed = 2166136261;
+
+  for (let index = 0; index < seedKey.length; index += 1) {
+    seed ^= seedKey.charCodeAt(index);
+    seed = Math.imul(seed, 16777619);
+  }
+
+  return () => {
+    seed += 0x6d2b79f5;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 function getGeneratingSmokePalette(colors: ManaColor[]) {
   const uniqueColors = colors.filter((color, index) => colors.indexOf(color) === index);

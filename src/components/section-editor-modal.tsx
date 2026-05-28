@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, ImagePlus, ListPlus, Pencil, Share2, Trash2, X } from "lucide-react-native";
+import { Check, ChevronDown, ChevronRight, ImagePlus, ListPlus, Pencil, Share2, Sparkles, Trash2, X } from "lucide-react-native";
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
@@ -16,6 +16,7 @@ import {
 } from "react-native";
 
 import { CardBackPicker } from "@/components/card-back-picker";
+import { CustomCardBackEntry } from "@/data/card-backs";
 import { EditorField } from "@/components/editor-field";
 import { ManaCostControl } from "@/components/mana-cost-control";
 import { ManaSymbol } from "@/components/mana-symbol";
@@ -47,7 +48,6 @@ import {
   FRAME_COLOR_LABELS,
   FRAME_MANA_COLORS,
   getManualFrameColors,
-  inferAutomaticFrameIdentity,
   inferFrameIdentity,
   normalizeManaInput,
 } from "@/lib/card-style";
@@ -100,6 +100,7 @@ import {
   CardRarity,
   CardSection,
   DfcMode,
+  FrameTreatment,
   FrameSelection,
   ManaColor,
   PlaneswalkerLoyaltyAbility,
@@ -203,14 +204,14 @@ const DFC_MODE_LABELS: Record<DfcMode, string> = {
   modal: "Modal",
   dayNight: "Day/Night",
 };
-const SHOW_RULES_TEXT_AI_FIXER = false;
+const SHOW_RULES_TEXT_AI_FIXER = true;
 const RULES_TEXT_COLOR_OPTIONS: Array<{
-  value: CardTextColorPreset | undefined;
+  value?: CardTextColorPreset;
   label: string;
   ink: string;
   swatch: string;
 }> = [
-  { value: undefined, label: "Auto", ink: "#1f2530", swatch: "linear-gradient(135deg, #151820 0%, #151820 50%, #ffffff 50%, #ffffff 100%)" },
+  { value: undefined, label: "Default", ink: "#1f2530", swatch: "#d8dbe2" },
   { value: "black", label: "Black", ink: "#1f2530", swatch: "#151820" },
   { value: "white", label: "White", ink: "#f7f1df", swatch: "#f7f1df" },
 ];
@@ -220,6 +221,9 @@ type SectionEditorModalProps = {
   section: CardSection | null;
   setCardBackId?: CardBackId;
   cardBackOverrideId?: CardBackId;
+  setSymbolDefaults?: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">;
+  customCardBacks?: CustomCardBackEntry[];
+  generatedSetSymbols?: GeneratedSetSymbolEntry[];
   customKeywordDefinitions?: KeywordDefinition[];
   rulesTextAiFixer?: RulesTextAiFixerControls;
   onClose: () => void;
@@ -227,15 +231,33 @@ type SectionEditorModalProps = {
   onEditArt: () => void;
   onPickArt: () => void;
   onPickSetSymbol: () => void;
+  onGenerateSetSymbol: () => void;
+  onGenerateCardBack?: () => void;
+  onPickCustomCardBack?: () => void;
+  onChangeSetDefaultCardBack?: (cardBackId: CardBackId) => void;
+  onChangeSetDefaultSymbol?: (
+    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
+  ) => void;
   onPickWatermark: () => void;
 };
 
+export type GeneratedSetSymbolEntry = {
+  id: string;
+  label: string;
+  uri: string;
+  createdAt: string;
+};
+
 type RulesTextAiFixerControls = {
-  apiKey: string;
   busy: boolean;
   error: string | null;
-  onChangeApiKey: (apiKey: string) => void;
+  suggestion: {
+    original: string;
+    corrected: string;
+  } | null;
   onFixRulesText: () => void;
+  onApplySuggestion: () => void;
+  onDismissSuggestion: () => void;
 };
 
 export function SectionEditorModal({
@@ -243,6 +265,9 @@ export function SectionEditorModal({
   section,
   setCardBackId,
   cardBackOverrideId,
+  setSymbolDefaults,
+  customCardBacks = [],
+  generatedSetSymbols = [],
   customKeywordDefinitions = [],
   rulesTextAiFixer,
   onClose,
@@ -250,6 +275,11 @@ export function SectionEditorModal({
   onEditArt,
   onPickArt,
   onPickSetSymbol,
+  onGenerateSetSymbol,
+  onGenerateCardBack,
+  onPickCustomCardBack,
+  onChangeSetDefaultCardBack,
+  onChangeSetDefaultSymbol,
   onPickWatermark,
 }: SectionEditorModalProps) {
   const visible = section !== null;
@@ -392,6 +422,7 @@ export function SectionEditorModal({
                 label="Card name"
                 value={faceCard.name}
                 onChangeText={(name) => updateFace({ name })}
+                autoCapitalize="words"
               />
               <BaseCardNameAutocompleteField
                 value={faceCard.baseCardName ?? ""}
@@ -435,31 +466,6 @@ export function SectionEditorModal({
 
           {section === "art" ? (
             <View style={{ gap: 14 }}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={faceCard.artUri ? "Pick a new image" : "Pick an image"}
-                onPress={onPickArt}
-                style={{
-                  minHeight: 54,
-                  borderRadius: 9,
-                  borderCurve: "continuous",
-                  backgroundColor: "#151820",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexDirection: "row",
-                  gap: 10,
-                  paddingHorizontal: 14,
-                }}
-              >
-                <ImagePlus size={20} color="#ffffff" strokeWidth={2.3} />
-                <Text selectable={false} style={{ color: "#ffffff", fontSize: 16, fontWeight: "800" }}>
-                  {faceCard.artUri
-                    ? "Pick new image"
-                    : isTransformingTypeFrame(card)
-                      ? `Pick ${getDfcFaceLabel(card).toLowerCase()} image`
-                      : "Pick image"}
-                </Text>
-              </Pressable>
               {faceCard.artUri ? (
                 <Pressable
                   accessibilityRole="button"
@@ -484,7 +490,31 @@ export function SectionEditorModal({
                     Edit image
                   </Text>
                 </Pressable>
-              ) : null}
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Pick an image"
+                  onPress={onPickArt}
+                  style={{
+                    minHeight: 54,
+                    borderRadius: 9,
+                    borderCurve: "continuous",
+                    backgroundColor: "#151820",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexDirection: "row",
+                    gap: 10,
+                    paddingHorizontal: 14,
+                  }}
+                >
+                  <ImagePlus size={20} color="#ffffff" strokeWidth={2.3} />
+                  <Text selectable={false} style={{ color: "#ffffff", fontSize: 16, fontWeight: "800" }}>
+                    {isTransformingTypeFrame(card)
+                      ? `Pick ${getDfcFaceLabel(card).toLowerCase()} image`
+                      : "Pick image"}
+                  </Text>
+                </Pressable>
+              )}
               <EditorField
                 label="Artist credit"
                 value={card.artist}
@@ -519,14 +549,6 @@ export function SectionEditorModal({
 
           {section === "rules" ? (
             <View style={{ gap: 18 }}>
-              {SHOW_RULES_TEXT_AI_FIXER &&
-              rulesTextAiFixer &&
-              !splitFrame &&
-              card.typeFrame !== "planeswalker" &&
-              card.typeFrame !== "adventure" ? (
-                <RulesTextAiFixerPanel controls={rulesTextAiFixer} />
-              ) : null}
-
               {card.typeFrame === "saga" ? (
                 <SagaRulesEditor
                   card={card}
@@ -554,8 +576,17 @@ export function SectionEditorModal({
               ) : (
                 <>
                   <RulesTextColorPicker
-                    value={faceCard.rulesTextColor}
-                    onChange={(rulesTextColor) => updateFace({ rulesTextColor })}
+                    value={faceCard.rulesTextColors?.[faceCard.frameTreatment ?? "standard"]}
+                    onChange={(rulesTextColor) =>
+                      updateFace({
+                        rulesTextColors: getNextFrameTextColorOverrides(
+                          faceCard.rulesTextColors,
+                          faceCard.frameTreatment ?? "standard",
+                          rulesTextColor,
+                        ),
+                        rulesTextColor: undefined,
+                      })
+                    }
                   />
                   <RichTextEditor
                     label="Rules text"
@@ -566,6 +597,9 @@ export function SectionEditorModal({
                     onChangeKeywords={(keywords) => updateFace({ keywords })}
                     showSymbolPalette
                   />
+                  {SHOW_RULES_TEXT_AI_FIXER && rulesTextAiFixer ? (
+                    <RulesTextAiFixerButton controls={rulesTextAiFixer} />
+                  ) : null}
                   <RichTextEditor
                     label="Flavor text"
                     value={faceCard.flavorText}
@@ -679,13 +713,21 @@ export function SectionEditorModal({
                 value={cardBackOverrideId}
                 effectiveValue={cardBackOverrideId ?? setCardBackId}
                 setDefaultValue={setCardBackId}
+                customBacks={customCardBacks}
                 includeSetDefault
+                onChangeSetDefault={onChangeSetDefaultCardBack}
+                onGenerateCardBack={onGenerateCardBack}
+                onPickCustomCardBack={onPickCustomCardBack}
                 onChange={(cardBackId) => onChange({ cardBackId })}
               />
               <SetSymbolEditor
                 card={card}
+                setSymbolDefaults={setSymbolDefaults}
+                generatedSetSymbols={generatedSetSymbols}
                 onChange={onChange}
+                onChangeSetDefaultSymbol={onChangeSetDefaultSymbol}
                 onPickSetSymbol={onPickSetSymbol}
+                onGenerateSetSymbol={onGenerateSetSymbol}
               />
               <View style={{ gap: 8 }}>
                 <Text
@@ -772,6 +814,22 @@ export function SectionEditorModal({
   );
 }
 
+function getNextFrameTextColorOverrides(
+  current: Partial<Record<FrameTreatment, CardTextColorPreset>> | undefined,
+  treatment: FrameTreatment,
+  color: CardTextColorPreset | undefined,
+): Partial<Record<FrameTreatment, CardTextColorPreset>> | undefined {
+  const next = { ...(current ?? {}) };
+
+  if (color) {
+    next[treatment] = color;
+  } else {
+    delete next[treatment];
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 function RulesTextColorPicker({
   value,
   onChange,
@@ -790,19 +848,18 @@ function RulesTextColorPicker({
           textTransform: "uppercase",
         }}
       >
-        Rules text color
+        Card text color
       </Text>
       <View style={{ flexDirection: "row", gap: 8 }}>
         {RULES_TEXT_COLOR_OPTIONS.map((option) => {
           const selected = value === option.value;
-          const isGradientSwatch = option.swatch.startsWith("linear-gradient");
 
           return (
             <Pressable
               key={option.label}
               accessibilityRole="button"
               accessibilityState={{ selected }}
-              accessibilityLabel={`Set rules text color to ${option.label.toLowerCase()}`}
+              accessibilityLabel={`Set card text color to ${option.label.toLowerCase()}`}
               onPress={() => onChange(option.value)}
               style={{
                 flex: 1,
@@ -826,24 +883,10 @@ function RulesTextColorPicker({
                   borderRadius: 8,
                   borderWidth: 1,
                   borderColor: selected ? "rgba(255, 255, 255, 0.55)" : "#a8b0bc",
-                  backgroundColor: isGradientSwatch ? "#ffffff" : option.swatch,
+                  backgroundColor: option.swatch,
                   overflow: "hidden",
                 }}
-              >
-                {isGradientSwatch ? (
-                  <View
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: 16,
-                      height: 16,
-                      backgroundColor: "#151820",
-                      transform: [{ translateX: -8 }, { rotate: "45deg" }],
-                    }}
-                  />
-                ) : null}
-              </View>
+              />
               <Text
                 selectable={false}
                 numberOfLines={1}
@@ -864,87 +907,122 @@ function RulesTextColorPicker({
   );
 }
 
-function RulesTextAiFixerPanel({ controls }: { controls: RulesTextAiFixerControls }) {
-  return (
-    <View
-      style={{
-        borderRadius: 12,
-        borderCurve: "continuous",
-        borderWidth: 1,
-        borderColor: "#d8dbe2",
-        backgroundColor: "#ffffff",
-        padding: 12,
-        gap: 10,
-      }}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <View style={{ flex: 1 }}>
-          <Text selectable style={{ color: "#151820", fontSize: 15, fontWeight: "900" }}>
-            Oracle templating fixer
-          </Text>
-          <Text selectable style={{ color: "#68707d", fontSize: 12, lineHeight: 16, fontWeight: "700" }}>
-            Rewrites the visible rules text using official-style templating while preserving custom keywords.
-          </Text>
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Fix rules text with AI"
-          disabled={controls.busy}
-          onPress={controls.onFixRulesText}
-          style={{
-            minHeight: 40,
-            borderRadius: 20,
-            borderCurve: "continuous",
-            backgroundColor: controls.busy ? "#4b5565" : "#151820",
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "row",
-            gap: 8,
-            paddingHorizontal: 14,
-            opacity: controls.busy ? 0.78 : 1,
-          }}
-        >
-          <Pencil size={16} color="#ffffff" strokeWidth={2.5} />
-          <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-            {controls.busy ? "Fixing..." : "Fix"}
-          </Text>
-        </Pressable>
-      </View>
+function RulesTextAiFixerButton({ controls }: { controls: RulesTextAiFixerControls }) {
+  const unchanged = controls.suggestion?.original === controls.suggestion?.corrected;
 
-      <View style={{ gap: 6 }}>
-        <Text
-          selectable
-          style={{
-            color: "#5f6470",
-            fontSize: 11,
-            fontWeight: "800",
-            textTransform: "uppercase",
-          }}
-        >
-          OpenAI API Key
+  return (
+    <View style={{ gap: 10 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Check rules text wording with AI"
+        disabled={controls.busy}
+        onPress={controls.onFixRulesText}
+        style={{
+          alignSelf: "flex-start",
+          minHeight: 40,
+          borderRadius: 20,
+          borderCurve: "continuous",
+          backgroundColor: controls.busy ? "#4b5565" : "#151820",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "row",
+          gap: 8,
+          paddingHorizontal: 14,
+          opacity: controls.busy ? 0.78 : 1,
+        }}
+      >
+        <Sparkles size={16} color="#ffffff" strokeWidth={2.5} />
+        <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+          {controls.busy ? "Checking wording..." : "Check official wording"}
         </Text>
-        <TextInput
-          value={controls.apiKey}
-          onChangeText={controls.onChangeApiKey}
-          placeholder="OpenAI API key"
-          placeholderTextColor="#8b93a0"
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
+      </Pressable>
+
+      {controls.suggestion ? (
+        <View
           style={{
-            minHeight: 42,
-            borderRadius: 9,
+            borderRadius: 10,
             borderCurve: "continuous",
             borderWidth: 1,
-            borderColor: "#d8dbe2",
-            backgroundColor: "#f7f8fb",
-            color: "#151820",
-            fontSize: 14,
-            fontWeight: "700",
-            paddingHorizontal: 12,
+            borderColor: unchanged ? "#cfd6df" : "#b7ddc8",
+            backgroundColor: unchanged ? "#f7f8fb" : "#f3fbf6",
+            padding: 10,
+            gap: 10,
           }}
-        />
-      </View>
+        >
+          <Text selectable={false} style={{ color: "#1f2530", fontSize: 12, fontWeight: "900", textTransform: "uppercase" }}>
+            {unchanged ? "No wording changes suggested" : "Suggested wording changes"}
+          </Text>
+          <InlineRulesTextDiff original={controls.suggestion.original} corrected={controls.suggestion.corrected} />
+          {!unchanged ? (
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Apply suggested rules text wording"
+                onPress={controls.onApplySuggestion}
+                style={{
+                  flex: 1,
+                  minHeight: 40,
+                  borderRadius: 20,
+                  borderCurve: "continuous",
+                  backgroundColor: "#126b3a",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 8,
+                  paddingHorizontal: 12,
+                }}
+              >
+                <Check size={16} color="#ffffff" strokeWidth={2.6} />
+                <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                  Apply
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss suggested rules text wording"
+                onPress={controls.onDismissSuggestion}
+                style={{
+                  flex: 1,
+                  minHeight: 40,
+                  borderRadius: 20,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: "#d4d8e0",
+                  backgroundColor: "#ffffff",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingHorizontal: 12,
+                }}
+              >
+                <Text selectable={false} style={{ color: "#1f2530", fontSize: 13, fontWeight: "900" }}>
+                  Keep mine
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss rules text wording result"
+              onPress={controls.onDismissSuggestion}
+              style={{
+                minHeight: 38,
+                borderRadius: 19,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#d4d8e0",
+                backgroundColor: "#ffffff",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 12,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#1f2530", fontSize: 13, fontWeight: "900" }}>
+                Done
+              </Text>
+            </Pressable>
+          )}
+        </View>
+      ) : null}
 
       {controls.error ? (
         <Text selectable style={{ color: "#a52735", fontSize: 12, lineHeight: 16, fontWeight: "800" }}>
@@ -953,6 +1031,107 @@ function RulesTextAiFixerPanel({ controls }: { controls: RulesTextAiFixerControl
       ) : null}
     </View>
   );
+}
+
+type RulesTextDiffToken = {
+  value: string;
+  kind: "same" | "added" | "removed";
+};
+
+function InlineRulesTextDiff({ original, corrected }: { original: string; corrected: string }) {
+  const tokens = useMemo(() => buildRulesTextDiffTokens(original, corrected), [corrected, original]);
+
+  return (
+    <Text selectable style={{ color: "#1f2530", fontSize: 13, lineHeight: 20, fontWeight: "800" }}>
+      {tokens.map((token, index) => {
+        if (token.kind === "same") {
+          return token.value;
+        }
+
+        const removed = token.kind === "removed";
+
+        return (
+          <Text
+            key={`${token.kind}-${index}-${token.value}`}
+            selectable
+            style={{
+              color: removed ? "#9f1d1d" : "#116b36",
+              backgroundColor: removed ? "#fde8e8" : "#def7e9",
+              textDecorationLine: removed ? "line-through" : "none",
+              fontWeight: "900",
+            }}
+          >
+            {token.value}
+          </Text>
+        );
+      })}
+    </Text>
+  );
+}
+
+function buildRulesTextDiffTokens(original: string, corrected: string): RulesTextDiffToken[] {
+  const oldTokens = tokenizeRulesTextForDiff(original);
+  const newTokens = tokenizeRulesTextForDiff(corrected);
+  const oldLength = oldTokens.length;
+  const newLength = newTokens.length;
+  const table = Array.from({ length: oldLength + 1 }, () => Array<number>(newLength + 1).fill(0));
+
+  for (let oldIndex = oldLength - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = newLength - 1; newIndex >= 0; newIndex -= 1) {
+      table[oldIndex][newIndex] =
+        oldTokens[oldIndex] === newTokens[newIndex]
+          ? table[oldIndex + 1][newIndex + 1] + 1
+          : Math.max(table[oldIndex + 1][newIndex], table[oldIndex][newIndex + 1]);
+    }
+  }
+
+  const tokens: RulesTextDiffToken[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+
+  while (oldIndex < oldLength && newIndex < newLength) {
+    if (oldTokens[oldIndex] === newTokens[newIndex]) {
+      tokens.push({ value: oldTokens[oldIndex], kind: "same" });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (table[oldIndex + 1][newIndex] >= table[oldIndex][newIndex + 1]) {
+      tokens.push({ value: oldTokens[oldIndex], kind: "removed" });
+      oldIndex += 1;
+    } else {
+      tokens.push({ value: newTokens[newIndex], kind: "added" });
+      newIndex += 1;
+    }
+  }
+
+  while (oldIndex < oldLength) {
+    tokens.push({ value: oldTokens[oldIndex], kind: "removed" });
+    oldIndex += 1;
+  }
+
+  while (newIndex < newLength) {
+    tokens.push({ value: newTokens[newIndex], kind: "added" });
+    newIndex += 1;
+  }
+
+  return mergeAdjacentRulesTextDiffTokens(tokens);
+}
+
+function tokenizeRulesTextForDiff(value: string) {
+  return value.match(/\s+|[^\s]+/g) ?? [];
+}
+
+function mergeAdjacentRulesTextDiffTokens(tokens: RulesTextDiffToken[]) {
+  return tokens.reduce<RulesTextDiffToken[]>((merged, token) => {
+    const previous = merged[merged.length - 1];
+
+    if (previous?.kind === token.kind) {
+      previous.value += token.value;
+    } else {
+      merged.push({ ...token });
+    }
+
+    return merged;
+  }, []);
 }
 
 function BaseCardNameAutocompleteField({
@@ -1386,14 +1565,37 @@ function DfcFaceToggle({
 
 function SetSymbolEditor({
   card,
+  setSymbolDefaults,
+  generatedSetSymbols,
   onChange,
+  onChangeSetDefaultSymbol,
   onPickSetSymbol,
+  onGenerateSetSymbol,
 }: {
   card: CardDraft;
+  setSymbolDefaults?: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">;
+  generatedSetSymbols: GeneratedSetSymbolEntry[];
   onChange: (patch: Partial<CardDraft>) => void;
+  onChangeSetDefaultSymbol?: (
+    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
+  ) => void;
   onPickSetSymbol: () => void;
+  onGenerateSetSymbol: () => void;
 }) {
   const activePreset = card.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id;
+  const setDefaultPreset = setSymbolDefaults?.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id;
+  const activeCustomSymbol = generatedSetSymbols.find((symbol) => symbol.uri === card.setSymbolUri);
+  const applySymbolPatch = onChangeSetDefaultSymbol ?? onChange;
+  const customSymbolLabel = card.setSymbolUsesRarityTreatment
+    ? activeCustomSymbol?.label ?? "Custom symbol"
+    : card.setSymbolUri
+      ? "Custom uploaded image"
+      : "Preset icon";
+  const hasSetSymbolDefault = Boolean(
+    setSymbolDefaults?.setSymbolPreset ||
+      setSymbolDefaults?.setSymbolUri ||
+      typeof setSymbolDefaults?.setSymbolUsesRarityTreatment === "boolean",
+  );
 
   return (
     <View style={{ gap: 12 }}>
@@ -1414,8 +1616,9 @@ function SetSymbolEditor({
           <SetSymbolMark
             presetId={activePreset}
             imageUri={card.setSymbolUri}
+            usesRarityTreatment={card.setSymbolUsesRarityTreatment}
             rarity={card.rarity}
-            size={28}
+            size={card.setSymbolUri && card.setSymbolUsesRarityTreatment ? 32 : 28}
           />
         </View>
         <View style={{ flex: 1, gap: 3 }}>
@@ -1431,37 +1634,125 @@ function SetSymbolEditor({
             Set Symbol
           </Text>
           <Text selectable style={{ color: "#1f2530", fontSize: 14, fontWeight: "800" }}>
-            {card.setSymbolUri ? "Custom uploaded image" : "Preset icon"}
+            {customSymbolLabel}
           </Text>
+          {hasSetSymbolDefault ? (
+            <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
+              Using set default
+            </Text>
+          ) : null}
         </View>
       </View>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Upload custom set symbol"
-        onPress={onPickSetSymbol}
-        style={{
-          minHeight: 46,
-          borderRadius: 8,
-          borderCurve: "continuous",
-          backgroundColor: "#151820",
-          alignItems: "center",
-          justifyContent: "center",
-          flexDirection: "row",
-          gap: 10,
-          paddingHorizontal: 14,
-        }}
-      >
-        <ImagePlus size={18} color="#ffffff" strokeWidth={2.3} />
-        <Text selectable={false} style={{ color: "#ffffff", fontSize: 15, fontWeight: "800" }}>
-          Upload custom symbol
-        </Text>
-      </Pressable>
+      {onChangeSetDefaultSymbol ? (
+        <View
+          style={{
+            borderRadius: 9,
+            borderCurve: "continuous",
+            borderWidth: 1,
+            borderColor: "#d8dbe2",
+            backgroundColor: "#f7f8fb",
+            padding: 10,
+            gap: 10,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <View
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 8,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#d4d8e0",
+                backgroundColor: "#ffffff",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <SetSymbolMark
+                presetId={setDefaultPreset}
+                imageUri={setSymbolDefaults?.setSymbolUri}
+                usesRarityTreatment={setSymbolDefaults?.setSymbolUsesRarityTreatment}
+                rarity={card.rarity}
+                size={setSymbolDefaults?.setSymbolUri && setSymbolDefaults.setSymbolUsesRarityTreatment ? 27 : 23}
+              />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text selectable={false} style={{ color: "#5f6470", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
+                Set default symbol
+              </Text>
+              <Text selectable={false} numberOfLines={1} style={{ color: "#1f2530", fontSize: 13, fontWeight: "800" }}>
+                Changing this updates every card in the set.
+              </Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
 
-      {card.setSymbolUri ? (
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
         <Pressable
           accessibilityRole="button"
-          onPress={() => onChange({ setSymbolUri: undefined })}
+          accessibilityLabel="Upload custom set symbol"
+          onPress={onPickSetSymbol}
+          style={{
+            flexGrow: 1,
+            flexBasis: 168,
+            minHeight: 46,
+            borderRadius: 8,
+            borderCurve: "continuous",
+            backgroundColor: "#151820",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 9,
+            paddingHorizontal: 12,
+          }}
+        >
+          <ImagePlus size={18} color="#ffffff" strokeWidth={2.3} />
+          <Text
+            selectable={false}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}
+          >
+            Upload symbol
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Generate set symbol"
+          onPress={onGenerateSetSymbol}
+          style={{
+            flexGrow: 1,
+            flexBasis: 168,
+            minHeight: 46,
+            borderRadius: 8,
+            borderCurve: "continuous",
+            backgroundColor: "#0b7180",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 9,
+            paddingHorizontal: 12,
+          }}
+        >
+          <Sparkles size={18} color="#ffffff" strokeWidth={2.3} />
+          <Text
+            selectable={false}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}
+          >
+            Generate symbol
+          </Text>
+        </Pressable>
+      </View>
+
+      {card.setSymbolUri && !card.setSymbolUsesRarityTreatment ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => applySymbolPatch({ setSymbolUri: undefined, setSymbolUsesRarityTreatment: undefined })}
           style={{
             minHeight: 40,
             borderRadius: 8,
@@ -1480,6 +1771,69 @@ function SetSymbolEditor({
         </Pressable>
       ) : null}
 
+      {generatedSetSymbols.length > 0 ? (
+        <View style={{ gap: 8 }}>
+          <Text
+            selectable
+            style={{
+              color: "#5f6470",
+              fontSize: 12,
+              fontWeight: "800",
+              textTransform: "uppercase",
+            }}
+          >
+            Custom icons
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {generatedSetSymbols.map((symbol) => {
+              const selected = card.setSymbolUri === symbol.uri && card.setSymbolUsesRarityTreatment;
+
+              return (
+                <Pressable
+                  key={symbol.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Choose custom ${symbol.label} set symbol`}
+                  onPress={() =>
+                    applySymbolPatch({
+                      setSymbolUri: symbol.uri,
+                      setSymbolUsesRarityTreatment: true,
+                    })
+                  }
+                  style={{
+                    width: 58,
+                    minHeight: 54,
+                    borderRadius: 8,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: selected ? "#151820" : "#d4d8e0",
+                    backgroundColor: selected ? "#151820" : "#ffffff",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: 6,
+                  }}
+                >
+                  <SetSymbolMark imageUri={symbol.uri} usesRarityTreatment rarity={card.rarity} size={28} />
+                  <Text
+                    selectable={false}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.7}
+                    style={{
+                      color: selected ? "#ffffff" : "#1f2530",
+                      fontSize: 10,
+                      lineHeight: 12,
+                      fontWeight: "800",
+                    }}
+                  >
+                    {symbol.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+
       <View style={{ gap: 8 }}>
         <Text
           selectable
@@ -1492,56 +1846,79 @@ function SetSymbolEditor({
         >
           Preset icons
         </Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {SET_SYMBOL_PRESETS.map((preset) => {
-            const selected = !card.setSymbolUri && activePreset === preset.id;
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{
+            flexDirection: "row",
+            gap: 8,
+            paddingRight: 2,
+          }}
+        >
+          {chunkArray(SET_SYMBOL_PRESETS, 2).map((presetColumn, columnIndex) => (
+            <View key={`preset-column-${columnIndex}`} style={{ gap: 8 }}>
+              {presetColumn.map((preset) => {
+                const selected = !card.setSymbolUri && activePreset === preset.id;
 
-            return (
-              <Pressable
-                key={preset.id}
-                accessibilityRole="button"
-                accessibilityLabel={`Choose ${preset.label} set symbol`}
-                onPress={() =>
-                  onChange({
-                    setSymbolPreset: preset.id,
-                    setSymbolUri: undefined,
-                  })
-                }
-                style={{
-                  width: 58,
-                  minHeight: 54,
-                  borderRadius: 8,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: selected ? "#151820" : "#d4d8e0",
-                  backgroundColor: selected ? "#151820" : "#ffffff",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: 6,
-                }}
-              >
-                <SetSymbolMark presetId={preset.id} rarity={card.rarity} size={24} />
-                <Text
-                  selectable={false}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.7}
-                  style={{
-                    color: selected ? "#ffffff" : "#1f2530",
-                    fontSize: 10,
-                    lineHeight: 12,
-                    fontWeight: "800",
-                  }}
-                >
-                  {preset.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+                return (
+                  <Pressable
+                    key={preset.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Choose ${preset.label} set symbol`}
+                    onPress={() =>
+                      applySymbolPatch({
+                        setSymbolPreset: preset.id,
+                        setSymbolUri: undefined,
+                        setSymbolUsesRarityTreatment: undefined,
+                      })
+                    }
+                    style={{
+                      width: 58,
+                      minHeight: 54,
+                      borderRadius: 8,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: selected ? "#151820" : "#d4d8e0",
+                      backgroundColor: selected ? "#151820" : "#ffffff",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 6,
+                    }}
+                  >
+                    <SetSymbolMark presetId={preset.id} rarity={card.rarity} size={24} />
+                    <Text
+                      selectable={false}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
+                      style={{
+                        color: selected ? "#ffffff" : "#1f2530",
+                        fontSize: 10,
+                        lineHeight: 12,
+                        fontWeight: "800",
+                      }}
+                    >
+                      {preset.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ))}
+        </ScrollView>
       </View>
     </View>
   );
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
 }
 
 function WatermarkEditor({
@@ -3223,6 +3600,7 @@ function SplitHalfEditor({
         label="Half name"
         value={half.name}
         onChangeText={(name) => onChange({ name })}
+        autoCapitalize="words"
       />
       <View style={{ flexDirection: "row", gap: 12 }}>
         <EditorField
@@ -3237,6 +3615,7 @@ function SplitHalfEditor({
           label="Type line"
           value={half.typeLine}
           onChangeText={(typeLine) => onChange({ typeLine: normalizeTypeLineInput(typeLine) })}
+          autoCapitalize="words"
         />
       </View>
       <ManaCostControl value={half.manaCost} onChange={(manaCost) => onChange({ manaCost })} />
@@ -3319,7 +3698,9 @@ function SagaRulesEditor({
       <RichTextEditor
         label="Saga rules text"
         value={sagaRulesEditorText}
-        onChangeText={(rulesText) => updateFace({ rulesText: normalizeSagaChapterBreaks(rulesText) })}
+        onChangeText={(rulesText) =>
+          updateFace({ rulesText: normalizeSagaChapterBreaks(rulesText) })
+        }
         autocompleteDefinitions={customKeywordDefinitions}
         keywords={faceCard.keywords ?? []}
         onChangeKeywords={(keywords) => updateFace({ keywords })}
@@ -4245,8 +4626,7 @@ function FrameEditor({
 }) {
   const faceCard = getEditableCardFace(card);
   const selection = faceCard.frameSelection ?? "auto";
-  const treatment = card.frameTreatment ?? "standard";
-  const automaticFrame = inferAutomaticFrameIdentity(faceCard);
+  const manualFrameSelections = FRAME_SELECTIONS.filter((frameSelection) => frameSelection !== "auto");
   const manualFrameColors = getManualFrameColors(faceCard);
   const frameSelectionColors: Partial<Record<FrameSelection, ManaColor>> = {
     white: "W",
@@ -4273,7 +4653,7 @@ function FrameEditor({
 
     onChange(
       toDfcFacePatch(card, {
-        frameSelection: "auto",
+        frameSelection: undefined,
         frameColors: frameColors.length > 0 ? frameColors : undefined,
       }),
     );
@@ -4315,11 +4695,10 @@ function FrameEditor({
           Default frames
         </Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {FRAME_SELECTIONS.map((frameSelection) => {
+          {manualFrameSelections.map((frameSelection) => {
             const manaColor = frameSelectionColors[frameSelection];
             const selected = isFrameOptionSelected(frameSelection);
-            const resolvedFrame =
-              frameSelection === "auto" ? automaticFrame : frameSelection;
+            const resolvedFrame = frameSelection;
 
             return (
               <Pressable
@@ -4454,10 +4833,6 @@ function TypeLineComposer({
             manaCost: "",
             power: card.power || "1",
             toughness: card.toughness || "1",
-            frameSelection:
-              card.frameSelection && card.frameSelection !== "auto"
-                ? card.frameSelection
-                : inferAutomaticFrameIdentity(card),
           }
         : {};
     const planeswalkerPatch =
@@ -4595,6 +4970,7 @@ function TypeLineComposer({
             label="Subtypes"
             value={subtypeText}
             onChangeText={(subtypes) => updateTypeLine(buildTypeLine(selectedTypeWords, subtypes))}
+            autoCapitalize="words"
           />
           <TypeLineAutocompleteField
             label="Manual type line"
@@ -4654,6 +5030,7 @@ function TypeLineAutocompleteField({
         <TextInput
           value={value}
           onChangeText={onChangeText}
+          autoCapitalize="words"
           onChange={updateCursorIndex}
           onFocus={() => setFocused(true)}
           onBlur={() => {

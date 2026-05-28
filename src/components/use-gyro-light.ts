@@ -1,4 +1,3 @@
-import { DeviceMotion } from "expo-sensors";
 import { useEffect } from "react";
 import { makeMutable, type SharedValue } from "react-native-reanimated";
 
@@ -12,13 +11,28 @@ export const gyroY: SharedValue<number> = makeMutable(0.5);
 
 let subscriberCount = 0;
 let subscription: { remove: () => void } | null = null;
+let gravityCenterX: number | null = null;
+let gravityCenterY: number | null = null;
 
-function start() {
+const TILT_RANGE_RADIANS = 0.7;
+const GRAVITY_RECENTER_RATE = 0.018;
+
+function clampTilt(value: number) {
+  return Math.max(-TILT_RANGE_RADIANS, Math.min(TILT_RANGE_RADIANS, value));
+}
+
+function normalizeTilt(delta: number) {
+  return 0.5 + (clampTilt(delta) / TILT_RANGE_RADIANS) * 0.5;
+}
+
+async function start() {
   if (subscription) {
     return;
   }
 
   try {
+    const { DeviceMotion } = await import("expo-sensors");
+
     DeviceMotion.setUpdateInterval(60);
     subscription = DeviceMotion.addListener((data) => {
       const rotation = data.rotation;
@@ -27,11 +41,19 @@ function start() {
         return;
       }
 
-      const tiltX = Math.max(-0.7, Math.min(0.7, rotation.gamma));
-      const tiltY = Math.max(-0.7, Math.min(0.7, rotation.beta - 0.4));
+      const sampleX = rotation.gamma;
+      const sampleY = rotation.beta;
 
-      gyroX.value = 0.5 + (tiltX / 0.7) * 0.5;
-      gyroY.value = 0.5 + (tiltY / 0.7) * 0.5;
+      if (gravityCenterX === null || gravityCenterY === null) {
+        gravityCenterX = sampleX;
+        gravityCenterY = sampleY;
+      }
+
+      gravityCenterX += (sampleX - gravityCenterX) * GRAVITY_RECENTER_RATE;
+      gravityCenterY += (sampleY - gravityCenterY) * GRAVITY_RECENTER_RATE;
+
+      gyroX.value = normalizeTilt(sampleX - gravityCenterX);
+      gyroY.value = normalizeTilt(sampleY - gravityCenterY);
     });
   } catch {
     subscription = null;
@@ -45,14 +67,22 @@ function stop() {
 
   subscription.remove();
   subscription = null;
+  gravityCenterX = null;
+  gravityCenterY = null;
+  gyroX.value = 0.5;
+  gyroY.value = 0.5;
 }
 
-export function useGyroLight(): { x: SharedValue<number>; y: SharedValue<number> } {
+export function useGyroLight(enabled = true): { x: SharedValue<number>; y: SharedValue<number> } {
   useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
     subscriberCount += 1;
 
     if (subscriberCount === 1) {
-      start();
+      void start();
     }
 
     return () => {
@@ -62,7 +92,7 @@ export function useGyroLight(): { x: SharedValue<number>; y: SharedValue<number>
         stop();
       }
     };
-  }, []);
+  }, [enabled]);
 
   return { x: gyroX, y: gyroY };
 }

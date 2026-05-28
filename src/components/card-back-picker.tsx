@@ -1,35 +1,49 @@
-import { Pressable, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { ImagePlus, Sparkles } from "lucide-react-native";
+import { type ReactNode } from "react";
 
 import { CardBackPreview } from "@/components/card-back-preview";
-import { CARD_BACK_OPTIONS, getCardBackOption } from "@/data/card-backs";
+import { CustomCardBackEntry, getCardBackOption, getCardBackOptions } from "@/data/card-backs";
 import { CardBackId } from "@/types/card";
 
 type CardBackPickerProps = {
   value?: CardBackId;
   effectiveValue?: CardBackId;
   setDefaultValue?: CardBackId;
+  customBacks?: CustomCardBackEntry[];
   includeSetDefault?: boolean;
   showSummary?: boolean;
   onChange: (cardBackId: CardBackId | undefined) => void;
+  onChangeSetDefault?: (cardBackId: CardBackId) => void;
+  onGenerateCardBack?: () => void;
+  onPickCustomCardBack?: () => void;
 };
 
 export function CardBackPicker({
   value,
   effectiveValue,
   setDefaultValue,
+  customBacks = [],
   includeSetDefault = false,
-  showSummary = true,
+  showSummary = false,
   onChange,
+  onChangeSetDefault,
+  onGenerateCardBack,
+  onPickCustomCardBack,
 }: CardBackPickerProps) {
   const resolvedValue = effectiveValue ?? value ?? setDefaultValue;
-  const activeOption = getCardBackOption(resolvedValue);
-  const setDefaultOption = getCardBackOption(setDefaultValue);
+  const activeOption = getCardBackOption(resolvedValue, customBacks);
+  const setDefaultOption = getCardBackOption(setDefaultValue, customBacks);
+  const visibleOptions = getCardBackOptions(customBacks).filter(
+    (option) => !(includeSetDefault && option.id === setDefaultValue),
+  );
+  const canApplyOverrideToSetDefault = includeSetDefault && value !== undefined && onChangeSetDefault;
 
   return (
     <View style={{ gap: 12 }}>
       {showSummary ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <CardBackPreview cardBackId={activeOption.id} width={54} />
+          <CardBackPreview cardBackId={activeOption.id} customBacks={customBacks} width={54} />
           <View style={{ flex: 1, gap: 2 }}>
             <Text
               selectable
@@ -54,25 +68,81 @@ export function CardBackPicker({
         </View>
       ) : null}
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{
+          gap: 12,
+          paddingRight: 2,
+        }}
+      >
         {includeSetDefault ? (
           <CardBackChoice
             label="Set default"
             selected={value === undefined}
             previewId={setDefaultOption.id}
+            customBacks={customBacks}
             onPress={() => onChange(undefined)}
           />
         ) : null}
-        {CARD_BACK_OPTIONS.map((option) => (
+        {visibleOptions.map((option) => (
           <CardBackChoice
             key={option.id}
             label={option.label}
             selected={value === option.id}
             previewId={option.id}
+            customBacks={customBacks}
             onPress={() => onChange(option.id)}
           />
         ))}
-      </View>
+      </ScrollView>
+
+      {onGenerateCardBack || onPickCustomCardBack ? (
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          {onGenerateCardBack ? (
+            <CardBackActionButton
+              label="Generate back"
+              accessibilityLabel="Generate card back"
+              onPress={onGenerateCardBack}
+            >
+              <Sparkles size={16} color="#ffffff" strokeWidth={2.5} />
+            </CardBackActionButton>
+          ) : null}
+          {onPickCustomCardBack ? (
+            <CardBackActionButton
+              label="Upload back"
+              accessibilityLabel="Upload custom card back"
+              onPress={onPickCustomCardBack}
+            >
+              <ImagePlus size={16} color="#151820" strokeWidth={2.5} />
+            </CardBackActionButton>
+          ) : null}
+        </View>
+      ) : null}
+
+      {canApplyOverrideToSetDefault ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Use selected card back as set default"
+          onPress={() => {
+            onChangeSetDefault(value);
+            onChange(undefined);
+          }}
+          style={{
+            minHeight: 40,
+            borderRadius: 8,
+            borderCurve: "continuous",
+            backgroundColor: "#151820",
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 14,
+          }}
+        >
+          <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "900" }}>
+            Use as set default
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -81,11 +151,13 @@ function CardBackChoice({
   label,
   selected,
   previewId,
+  customBacks,
   onPress,
 }: {
   label: string;
   selected: boolean;
   previewId: CardBackId;
+  customBacks: CustomCardBackEntry[];
   onPress: () => void;
 }) {
   return (
@@ -95,31 +167,83 @@ function CardBackChoice({
       accessibilityLabel={`Choose ${label} card back`}
       onPress={onPress}
       style={{
-        width: 92,
-        minHeight: 142,
-        borderRadius: 10,
-        borderCurve: "continuous",
-        borderWidth: 1.5,
-        borderColor: selected ? "#151820" : "#d4d8e0",
-        backgroundColor: selected ? "#151820" : "#ffffff",
+        width: 96,
+        minHeight: 146,
         alignItems: "center",
-        justifyContent: "center",
-        gap: 7,
-        padding: 8,
+        gap: 6,
       }}
     >
-      <CardBackPreview cardBackId={previewId} width={58} />
+      <View
+        style={{
+          borderRadius: 8,
+          borderCurve: "continuous",
+          borderWidth: selected ? 2 : 0,
+          borderColor: "#151820",
+          padding: selected ? 3 : 5,
+        }}
+      >
+        <CardBackPreview cardBackId={previewId} customBacks={customBacks} width={78} />
+      </View>
       <Text
         selectable={false}
         numberOfLines={2}
         adjustsFontSizeToFit
         minimumFontScale={0.72}
         style={{
-          color: selected ? "#ffffff" : "#1f2530",
-          fontSize: 11,
-          lineHeight: 13,
+          color: selected ? "#151820" : "#1f2530",
+          fontSize: 12,
+          lineHeight: 14,
           fontWeight: "900",
           textAlign: "center",
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function CardBackActionButton({
+  accessibilityLabel,
+  label,
+  children,
+  onPress,
+}: {
+  accessibilityLabel: string;
+  label: string;
+  children: ReactNode;
+  onPress: () => void;
+}) {
+  const primary = label.startsWith("Generate");
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      style={{
+        flex: 1,
+        minHeight: 42,
+        borderRadius: 8,
+        borderCurve: "continuous",
+        borderWidth: primary ? 0 : 1,
+        borderColor: "#d8dbe2",
+        backgroundColor: primary ? "#151820" : "#ffffff",
+        alignItems: "center",
+        justifyContent: "center",
+        flexDirection: "row",
+        gap: 8,
+        paddingHorizontal: 12,
+      }}
+    >
+      {children}
+      <Text
+        selectable={false}
+        numberOfLines={1}
+        style={{
+          color: primary ? "#ffffff" : "#151820",
+          fontSize: 13,
+          fontWeight: "900",
         }}
       >
         {label}

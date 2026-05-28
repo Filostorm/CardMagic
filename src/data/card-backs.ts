@@ -21,6 +21,15 @@ export type CardBackOption = {
   };
 };
 
+export type CustomCardBackEntry = {
+  id: CardBackId;
+  label: string;
+  description: string;
+  uri: string;
+  createdAt: string;
+  prompt?: string;
+};
+
 export const DEFAULT_CARD_BACK_ID: CardBackId = "cardmagicProxy";
 
 export const CARD_BACK_OPTIONS: CardBackOption[] = [
@@ -155,6 +164,34 @@ export const CARD_BACK_OPTIONS: CardBackOption[] = [
   },
 ];
 
-export function getCardBackOption(id: CardBackId | undefined | null) {
-  return CARD_BACK_OPTIONS.find((option) => option.id === id) ?? CARD_BACK_OPTIONS[0];
+const CUSTOM_CARD_BACK_PALETTE = {
+  outer: "#050403",
+  inner: "#24201a",
+  panel: "#6c5140",
+  panelDeep: "#17120f",
+  oval: "#293f57",
+  ovalDeep: "#121d2b",
+  title: "#f1e1ba",
+  accent: "#c85a3c",
+};
+
+export function getCustomCardBackOption(entry: CustomCardBackEntry): CardBackOption {
+  return {
+    id: entry.id,
+    label: entry.label,
+    description: entry.description,
+    source: { uri: entry.uri },
+    palette: CUSTOM_CARD_BACK_PALETTE,
+  };
+}
+
+export function getCardBackOptions(customBacks: CustomCardBackEntry[] = []) {
+  return [
+    ...CARD_BACK_OPTIONS,
+    ...customBacks.map(getCustomCardBackOption),
+  ];
+}
+
+export function getCardBackOption(id: CardBackId | undefined | null, customBacks: CustomCardBackEntry[] = []) {
+  return getCardBackOptions(customBacks).find((option) => option.id === id) ?? CARD_BACK_OPTIONS[0];
 }

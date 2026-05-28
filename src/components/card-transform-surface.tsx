@@ -17,7 +17,7 @@ import Animated, {
 
 import { CardSurfaceEffectsLayer } from "@/components/card-surface-effects-layer";
 import { useGyroLight } from "@/components/use-gyro-light";
-import type { CardSurfaceEffects } from "@/lib/card-surface-effects";
+import { hasCardSurfaceEffects, type CardSurfaceEffects } from "@/lib/card-surface-effects";
 
 type CardTransformSurfaceProps = {
   width: number;
@@ -57,7 +57,8 @@ export function CardTransformSurface({
   const flip = useSharedValue(1);
   const rotation = useSharedValue(rotationDegrees);
   const idlePivot = useSharedValue(0);
-  const gyro = useGyroLight();
+  const hasEffects = hasCardSurfaceEffects(effects);
+  const gyro = useGyroLight(interactive);
   const previousChildren = useRef(children);
   const previousFlipKey = useRef(flipKey);
   const transitionId = useRef(0);
@@ -156,12 +157,12 @@ export function CardTransformSurface({
       dragY.value = event.translationY;
     })
     .onEnd(() => {
-      dragX.value = withSpring(0, { damping: 15, stiffness: 120 });
-      dragY.value = withSpring(0, { damping: 15, stiffness: 120 });
+      dragX.value = withTiming(0, { duration: 720, easing: Easing.out(Easing.cubic) });
+      dragY.value = withTiming(0, { duration: 720, easing: Easing.out(Easing.cubic) });
     })
     .onFinalize(() => {
-      dragX.value = withSpring(0, { damping: 15, stiffness: 120 });
-      dragY.value = withSpring(0, { damping: 15, stiffness: 120 });
+      dragX.value = withTiming(0, { duration: 720, easing: Easing.out(Easing.cubic) });
+      dragY.value = withTiming(0, { duration: 720, easing: Easing.out(Easing.cubic) });
     });
 
   const cardStyle = useAnimatedStyle(() => ({
@@ -215,7 +216,7 @@ export function CardTransformSurface({
       <CardSurfaceEffectsLayer
         width={width}
         height={height}
-        effects={effects}
+        effects={hasEffects ? effects : undefined}
         tiltX={tiltX}
         tiltY={tiltY}
       />

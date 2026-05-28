@@ -1,4 +1,4 @@
-import { Image, View } from "react-native";
+import { Image, Platform, View } from "react-native";
 import Svg, { Defs, G, LinearGradient, Path, Stop } from "react-native-svg";
 
 import { getMseWatermarkPreset } from "@/data/mse-watermarks";
@@ -203,15 +203,122 @@ export const SET_SYMBOL_PRESETS: SetSymbolPreset[] = [
 export function SetSymbolMark({
   presetId,
   imageUri,
+  usesRarityTreatment = false,
   rarity,
   size,
+  exportMode = false,
 }: {
   presetId?: string;
   imageUri?: string;
+  usesRarityTreatment?: boolean;
   rarity: CardRarity;
   size: number;
+  exportMode?: boolean;
 }) {
   if (imageUri) {
+    if (usesRarityTreatment) {
+      const treatment = RARITY_TREATMENTS[rarity];
+      const fill = rarity === "common" ? treatment.fill : treatment.high;
+
+      if (Platform.OS === "web" && !exportMode) {
+        const createMaskStyle = (background: string) => ({
+          background,
+          WebkitMaskImage: `url("${imageUri}")`,
+          maskImage: `url("${imageUri}")`,
+          WebkitMaskPosition: "center",
+          maskPosition: "center",
+          WebkitMaskRepeat: "no-repeat",
+          maskRepeat: "no-repeat",
+          WebkitMaskSize: "contain",
+          maskSize: "contain",
+        });
+        const fillBackground =
+          rarity === "common"
+            ? `linear-gradient(135deg, ${treatment.high} 0%, ${treatment.fill} 48%, ${treatment.low} 100%)`
+            : `linear-gradient(135deg, ${treatment.high} 0%, ${treatment.fill} 48%, ${treatment.low} 100%)`;
+
+        return (
+          <View
+            style={{
+              width: size,
+              height: size,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <View
+              style={[
+                {
+                  position: "absolute",
+                  width: size,
+                  height: size,
+                  opacity: 0.42,
+                  transform: [{ scale: 1.05 }, { translateX: size * 0.018 }, { translateY: size * 0.026 }],
+                },
+                createMaskStyle(treatment.shadow),
+              ] as any}
+            />
+            <View
+              style={[
+                {
+                  position: "absolute",
+                  width: size,
+                  height: size,
+                  opacity: 1,
+                  transform: [{ scale: 1.08 }],
+                },
+                createMaskStyle(treatment.outline),
+              ] as any}
+            />
+            <View
+              style={[
+                {
+                  width: size,
+                  height: size,
+                },
+                createMaskStyle(fillBackground),
+              ] as any}
+            />
+          </View>
+        );
+      }
+
+      return (
+        <View
+          style={{
+            width: size,
+            height: size,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Image
+            accessibilityIgnoresInvertColors
+            source={{ uri: imageUri }}
+            resizeMode="contain"
+            style={{
+              position: "absolute",
+              width: size,
+              height: size,
+              tintColor: treatment.outline,
+              opacity: exportMode ? 0.58 : 0.42,
+              transform: [{ scale: 1.05 }, { translateX: size * 0.018 }, { translateY: size * 0.026 }],
+            }}
+          />
+          <Image
+            accessibilityIgnoresInvertColors
+            source={{ uri: imageUri }}
+            resizeMode="contain"
+            style={{
+              width: size,
+              height: size,
+              tintColor: fill,
+            }}
+          />
+        </View>
+      );
+    }
+
     return (
       <Image
         accessibilityIgnoresInvertColors

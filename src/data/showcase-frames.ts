@@ -40,6 +40,7 @@ export type ShowcaseFrameSpec = {
   nonStampRimSources?: Record<FrameIdentity, ImageSourcePropType>;
   stampBorderMask?: ImageSourcePropType;
   securityStampSource?: ImageSourcePropType;
+  twoColorFrameBlend?: "linear";
   securityStampRect?: {
     x: number;
     y: number;
@@ -65,6 +66,7 @@ export const SHOWCASE_FRAME_ORDER: ShowcaseFrameId[] = [
   "stainedGlass",
   "mysticalArchive",
   "dndRulebook",
+  "customShowcaseLab",
   "stellarSights",
 ];
 
@@ -77,6 +79,7 @@ export const SHOWCASE_FRAME_LABELS: Record<ShowcaseFrameId, string> = {
   mysticalArchive: "Mystical Archive",
   dndRulebook: "Dungeons & Dragons Rulebook",
   firstPlace: "First Place",
+  customShowcaseLab: "Custom Showcase Lab",
   stellarSights: "Stellar Sights",
   posterStellarSights: "Poster Stellar Sights",
 };
@@ -225,6 +228,18 @@ const DND_RULEBOOK_FRAMES = {
   artifact: require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-monster-manual.mse-style/frame.png"),
   land: require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-monster-manual.mse-style/frame.png"),
   colorless: require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-monster-manual.mse-style/frame.png"),
+} satisfies Record<FrameIdentity, ImageSourcePropType>;
+
+const CUSTOM_SHOWCASE_LAB_FRAMES = {
+  white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/white.png"),
+  blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/blue.png"),
+  black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/black.png"),
+  red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/red.png"),
+  green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/green.png"),
+  gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/gold.png"),
+  artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/artifact.png"),
+  land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/land.png"),
+  colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/colorless.png"),
 } satisfies Record<FrameIdentity, ImageSourcePropType>;
 
 const FIRST_PLACE_FRAME = require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-aetherdrift-first-place.mse-style/card.png");
@@ -394,6 +409,7 @@ export const SHOWCASE_FRAMES: Record<ShowcaseFrameId, ShowcaseFrameSpec> = {
     ],
     frameSources: MYSTICAL_ARCHIVE_FRAMES,
     previewSource: MYSTICAL_ARCHIVE_FRAMES.white,
+    textIsLight: true,
   },
   dndRulebook: {
     id: "dndRulebook",
@@ -413,6 +429,18 @@ export const SHOWCASE_FRAMES: Record<ShowcaseFrameId, ShowcaseFrameSpec> = {
       sources: require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-monster-manual.mse-style/pt.png"),
     },
     previewSource: DND_RULEBOOK_FRAMES.green,
+  },
+  customShowcaseLab: {
+    id: "customShowcaseLab",
+    label: SHOWCASE_FRAME_LABELS.customShowcaseLab,
+    cardCount: 0,
+    msePackage: "mse-renderer/treatments/showcase-zendikar",
+    designWidth: 375,
+    designHeight: 523,
+    artRect: { x: 29, y: 60, width: 316, height: 231 },
+    twoColorFrameBlend: "linear",
+    frameSources: CUSTOM_SHOWCASE_LAB_FRAMES,
+    previewSource: CUSTOM_SHOWCASE_LAB_FRAMES.gold,
   },
   firstPlace: {
     id: "firstPlace",
@@ -449,6 +477,7 @@ export const SHOWCASE_FRAMES: Record<ShowcaseFrameId, ShowcaseFrameSpec> = {
       clipHeight: 958,
     },
     textIsLight: true,
+    twoColorFrameBlend: "linear",
     frameMasks: [
       require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-eternities-stellar-sights.mse-style/border_mask.png"),
       require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-eternities-stellar-sights.mse-style/card_mask.png"),

@@ -344,6 +344,7 @@ export function createRandomCard(previous?: CardDraft): CardDraft {
     copyrightLine: previous?.copyrightLine || DEFAULT_CARD_COPYRIGHT_LINE,
     setSymbolPreset: previous?.setSymbolPreset,
     setSymbolUri: previous?.setSymbolUri,
+    setSymbolUsesRarityTreatment: previous?.setSymbolUsesRarityTreatment,
     artUri: previous?.artUri,
     artTransform: previous?.artTransform,
     frameSelection: tokenFields?.frameSelection ?? previous?.frameSelection,

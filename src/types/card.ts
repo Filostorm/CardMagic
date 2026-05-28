@@ -20,7 +20,8 @@ export type CardBackId =
   | "cardmagicNature"
   | "cardmagicDragon"
   | "cardmagicCircuit"
-  | "cardmagicArmor";
+  | "cardmagicArmor"
+  | `custom:${string}`;
 
 export type ManaColor = "W" | "U" | "B" | "R" | "G";
 
@@ -42,6 +43,7 @@ export type FrameTreatment =
   | "fullArt"
   | "extendedArt"
   | "borderless"
+  | "transparentBorderless"
   | "promo"
   | "showcase"
   | "textless"
@@ -57,11 +59,13 @@ export type ShowcaseFrameId =
   | "mysticalArchive"
   | "dndRulebook"
   | "firstPlace"
+  | "customShowcaseLab"
   | "stellarSights"
   | "posterStellarSights";
 
 export type FrameEffect = "nyx" | "legendary";
 export type CardTextColorPreset = "black" | "white";
+export type FrameTextColorOverrides = Partial<Record<FrameTreatment, CardTextColorPreset>>;
 
 export type TypeFrame =
   | "standard"
@@ -163,6 +167,7 @@ export type CardDraft = {
   backManaCost?: string;
   backTypeLine?: string;
   backRulesText?: string;
+  backRulesTextColors?: FrameTextColorOverrides;
   backRulesTextColor?: CardTextColorPreset;
   backFlavorText?: string;
   backKeywords?: CardKeyword[];
@@ -185,11 +190,14 @@ export type CardDraft = {
   copyrightLine?: string;
   cardBackId?: CardBackId;
   artUri?: string;
+  artSubjectMaskUri?: string;
   artTransform?: ArtTransform;
   backArtUri?: string;
+  backArtSubjectMaskUri?: string;
   backArtTransform?: ArtTransform;
   setSymbolPreset?: string;
   setSymbolUri?: string;
+  setSymbolUsesRarityTreatment?: boolean;
   watermarkPreset?: string;
   watermarkUri?: string;
   watermarkOpacity?: number;
@@ -204,5 +212,6 @@ export type CardDraft = {
   showcaseFrame?: ShowcaseFrameId;
   typeFrame?: TypeFrame;
   frameCustomization?: FrameCustomization;
+  rulesTextColors?: FrameTextColorOverrides;
   rulesTextColor?: CardTextColorPreset;
 };

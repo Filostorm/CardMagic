@@ -2,7 +2,7 @@
   "expo": {
     "name": "CardMagic",
     "slug": "CardMagic",
-    "version": "1.2.0",
+    "version": "3.9.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -139,7 +139,8 @@
             ]
           }
         }
-      ]
+      ],
+      "./plugins/with-ios-source-rn-and-fmt"
     ],
     "extra": {
       "eas": {

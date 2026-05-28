@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Platform, Text, TextInput, View } from "react-native";
+import type { TextInputProps } from "react-native";
 
 type EditorFieldProps = {
   label: string;
@@ -8,6 +9,7 @@ type EditorFieldProps = {
   onBlur?: () => void;
   multiline?: boolean;
   compact?: boolean;
+  autoCapitalize?: TextInputProps["autoCapitalize"];
 };
 
 export function EditorField({
@@ -17,6 +19,7 @@ export function EditorField({
   onBlur,
   multiline = false,
   compact = false,
+  autoCapitalize,
 }: EditorFieldProps) {
   const [contentHeight, setContentHeight] = useState(0);
   const multilineMinHeight = 108;
@@ -49,6 +52,7 @@ export function EditorField({
         value={value}
         onChangeText={onChangeText}
         onBlur={onBlur}
+        autoCapitalize={autoCapitalize}
         multiline={multiline}
         scrollEnabled={multiline ? false : undefined}
         blurOnSubmit={multiline ? false : undefined}

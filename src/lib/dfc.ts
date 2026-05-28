@@ -8,12 +8,14 @@ type FacePatch = Pick<
   | "manaCost"
   | "typeLine"
   | "rulesText"
+  | "rulesTextColors"
   | "rulesTextColor"
   | "flavorText"
   | "keywords"
   | "power"
   | "toughness"
   | "artUri"
+  | "artSubjectMaskUri"
   | "artTransform"
   | "frameSelection"
   | "frameColors"
@@ -55,12 +57,14 @@ export function getEditableCardFace(card: CardDraft): CardDraft {
     manaCost: card.backManaCost ?? backDefaults.backManaCost ?? "",
     typeLine: card.backTypeLine ?? backDefaults.backTypeLine ?? "",
     rulesText: card.backRulesText ?? backDefaults.backRulesText ?? "",
+    rulesTextColors: card.backRulesTextColors ?? backDefaults.backRulesTextColors,
     rulesTextColor: card.backRulesTextColor ?? backDefaults.backRulesTextColor,
     flavorText: card.backFlavorText ?? backDefaults.backFlavorText ?? "",
     keywords: card.backKeywords ?? backDefaults.backKeywords,
     power: card.backPower ?? backDefaults.backPower ?? "",
     toughness: card.backToughness ?? backDefaults.backToughness ?? "",
     artUri: card.backArtUri,
+    artSubjectMaskUri: card.backArtSubjectMaskUri,
     artTransform: card.backArtTransform,
     frameSelection:
       card.backFrameSelection ?? backDefaults.backFrameSelection ?? card.frameSelection,
@@ -81,12 +85,14 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
     manaCost,
     typeLine,
     rulesText,
+    rulesTextColors,
     rulesTextColor,
     flavorText,
     keywords,
     power,
     toughness,
     artUri,
+    artSubjectMaskUri,
     artTransform,
     frameSelection,
     frameColors,
@@ -116,7 +122,11 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
     nextPatch.backRulesText = rulesText;
   }
 
-  if (rulesTextColor !== undefined) {
+  if (Object.prototype.hasOwnProperty.call(patch, "rulesTextColors")) {
+    nextPatch.backRulesTextColors = rulesTextColors;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "rulesTextColor")) {
     nextPatch.backRulesTextColor = rulesTextColor;
   }
 
@@ -138,6 +148,10 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
 
   if (artUri !== undefined) {
     nextPatch.backArtUri = artUri;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskUri")) {
+    nextPatch.backArtSubjectMaskUri = artSubjectMaskUri;
   }
 
   if (artTransform !== undefined) {

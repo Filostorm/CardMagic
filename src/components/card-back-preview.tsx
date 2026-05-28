@@ -2,10 +2,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Image, Text, View } from "react-native";
 
 import { CardBackId } from "@/types/card";
-import { DEFAULT_CARD_BACK_ID, getCardBackOption } from "@/data/card-backs";
+import { CustomCardBackEntry, DEFAULT_CARD_BACK_ID, getCardBackOption } from "@/data/card-backs";
 
 type CardBackPreviewProps = {
   cardBackId?: CardBackId | null;
+  customBacks?: CustomCardBackEntry[];
   width: number;
   label?: string;
 };
@@ -21,10 +22,11 @@ const COLOR_PIPS = [
 
 export function CardBackPreview({
   cardBackId = DEFAULT_CARD_BACK_ID,
+  customBacks = [],
   width,
   label,
 }: CardBackPreviewProps) {
-  const option = getCardBackOption(cardBackId);
+  const option = getCardBackOption(cardBackId, customBacks);
   const height = width / CARD_BACK_ASPECT_RATIO;
   const scale = width / 375;
   const sourceScale = option.sourceScale ?? 1;

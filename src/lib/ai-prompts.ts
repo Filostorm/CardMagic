@@ -6,6 +6,7 @@ import { CardDraft, CardKeyword, FrameIdentity, KeywordDefinition, ManaColor } f
 
 export type AiPromptId =
   | "cardArt"
+  | "subjectMask"
   | "setSymbol"
   | "watermark"
   | "cardFromArt"
@@ -21,7 +22,112 @@ export type AiPromptOption = {
 
 export type ArtGeneratorPromptOptions = {
   variationSeed?: number;
+  styleId?: ArtGeneratorStyleId;
 };
+
+export function buildSubjectMaskGeneratorPrompt(card: CardDraft) {
+  return [
+    "Create a tight foreground alpha mask for the provided trading-card artwork.",
+    "Return only a flat black-and-white PNG mask on the exact same canvas composition as the input image.",
+    "White pixels must mark only the main foreground character and foreground elements physically attached to or held by that character.",
+    "Black pixels must mark all background, scenery, atmosphere, sky, ground, architecture, distant figures, loose particles, broad spell effects, border areas, and empty negative space.",
+    "Keep the mask tight to the visible silhouette of the main subject; do not expand around glow, haze, shadows, or background motion.",
+    "Use hard-to-medium antialiased edges only; no gray shading except edge antialiasing.",
+    "Preserve small attached foreground details such as weapons, wings, horns, hair, clothing edges, and held objects.",
+    "Do not draw a new illustration. Do not add color. Do not add shadows. Do not include text, UI, borders, checkerboards, gradients, or labels.",
+  ].join("\n");
+}
+
+export const ART_GENERATOR_STYLE_PRESETS = [
+  {
+    id: "wash",
+    label: "Wash",
+    profile: "transparent watercolor wash, pale paper grain, minimal background, soft lost-and-found edges",
+  },
+  {
+    id: "oil",
+    label: "Oil",
+    profile: "classical oil-painted realism, sculpted anatomy, controlled brush texture, museum-painting finish",
+  },
+  {
+    id: "gothic",
+    label: "Gothic",
+    profile: "gothic chiaroscuro illustration, near-black negative space, hard rim light, sparse cathedral geometry",
+  },
+  {
+    id: "vista",
+    label: "Vista",
+    profile: "epic matte-painting landscape, tiny subject against vast simple shapes, clean atmospheric perspective",
+  },
+  {
+    id: "poster",
+    label: "Poster",
+    profile: "graphic action poster, diagonal silhouette, flat shadow masses, limited motion debris",
+  },
+  {
+    id: "storybook",
+    label: "Storybook",
+    profile: "illuminated storybook plate, decorative contour shapes, clean ornamental rhythm inside the scene",
+  },
+  {
+    id: "symbolic",
+    label: "Symbolic",
+    profile: "surreal symbolic tableau, isolated props, quiet dream staging, uncluttered negative space",
+  },
+  {
+    id: "specimen",
+    label: "Specimen",
+    profile: "natural history creature plate, side-lit anatomy, specimen clarity, plain habitat backdrop",
+  },
+  {
+    id: "cinematic",
+    label: "Cinematic",
+    profile: "heroic cinematic key art, bold central silhouette, polished surfaces, simple radial light structure",
+  },
+  {
+    id: "fresco",
+    label: "Fresco",
+    profile: "ancient fresco or mural, flattened perspective, mineral pigments, sculptural iconography",
+  },
+  {
+    id: "battle",
+    label: "Battle",
+    profile: "battlefield concept art, one decisive gesture, broad smoke planes, very few readable props",
+  },
+  {
+    id: "arcane",
+    label: "Arcane",
+    profile: "arcane diagram realism, precise instruments, clean desk or wall geometry, controlled glow",
+  },
+  {
+    id: "ethereal",
+    label: "Ethereal",
+    profile: "ethereal enchantment vignette, translucent subject layers, soft gradients, open airy background",
+  },
+  {
+    id: "brutalist",
+    label: "Brutalist",
+    profile: "brutalist dark fantasy, heavy simple forms, abrasive material texture, sparse smoky void",
+  },
+  {
+    id: "biolume",
+    label: "Biolume",
+    profile: "bioluminescent nature study, organic silhouette, black-green depth, selective glowing accents only",
+  },
+  {
+    id: "retro",
+    label: "Retro",
+    profile: "retro paperback cover, bold central staging, screenprint-like color blocks, visible brush edges",
+  },
+] as const;
+
+export type ArtGeneratorPresetStyleId = (typeof ART_GENERATOR_STYLE_PRESETS)[number]["id"];
+export type ArtGeneratorStyleId = "random" | ArtGeneratorPresetStyleId;
+
+export const ART_GENERATOR_STYLE_OPTIONS = [
+  { id: "random", label: "Random" },
+  ...ART_GENERATOR_STYLE_PRESETS.map(({ id, label }) => ({ id, label })),
+] as const satisfies ReadonlyArray<{ id: ArtGeneratorStyleId; label: string }>;
 
 const EXPLICIT_VISUAL_STYLE_PATTERN =
   /\b(?:style|anime|manga|cartoon|cel[- ]?shaded|comic|graphic novel|pixel art|8[- ]?bit|16[- ]?bit|low poly|3d|rendered|photoreal|photo[- ]?real|realistic|oil painting|watercolor|gouache|ink|sketch|line art|charcoal|pastel|stained glass|woodcut|cut paper|clay|miniature|storybook|children'?s book|noir|cyberpunk|steampunk|art deco|retro|vintage|chibi)\b/i;
@@ -33,30 +139,18 @@ const LIGHTING_CUE_PATTERN =
   /\b(?:lighting|lit|backlit|rim light|rim-lit|moonlight|sunlight|firelight|candlelight|spotlight|god-rays|volumetric|chiaroscuro|glow|glowing|bioluminescent|dawn|dusk|sunset|sunrise|noon|night)\b/i;
 
 const DEFAULT_ENVIRONMENT_VARIATIONS = [
-  "foreground relics half-buried in dust",
-  "wind-torn banners and broken masonry",
-  "ancient carved threshold framing the subject",
-  "rain-slick stone and reflective puddles",
-  "floating motes of ash, pollen, or magical dust",
-  "distant monumental architecture in atmospheric haze",
-  "shattered statues hinting at old conflict",
-  "ritual circles etched into the ground",
-  "gnarled roots or cables leading the eye toward the subject",
-  "weathered road markers and abandoned gear",
-  "layered foreground foliage creating depth",
-  "cracked stone steps descending into shadow",
-  "hanging chains, vines, or banners adding vertical rhythm",
-  "distant silhouettes of towers, cliffs, or colossal trees",
-  "foreground water, glass, or polished metal catching reflections",
-  "storm clouds breaking open behind the subject",
-  "small narrative props showing what happened moments before",
-  "embers, leaves, snow, or feathers carried through the air",
-  "tilted horizon and debris implying motion",
-  "arched doorway or natural opening behind the subject",
-  "broken weapons or tools embedded in the foreground",
-  "soft background figures reduced to painterly silhouettes",
-  "dramatic depth layers from foreground, middle ground, and background",
-  "ancient inscriptions and worn symbolic carvings",
+  "one simple architectural shape framing the subject",
+  "a clean horizon line with broad atmospheric depth",
+  "two or three large foreground shapes leading toward the subject",
+  "a restrained reflective surface beneath the focal point",
+  "a single symbolic prop near the subject",
+  "large quiet background masses with minimal small detail",
+  "a clear doorway, arch, or natural opening behind the subject",
+  "a simplified terrain plane with one readable landmark",
+  "a broad silhouette of distant architecture or trees",
+  "negative space around the head, face, weapon, or spell effect",
+  "a sparse environmental vignette with no crowding",
+  "clean depth separation between foreground, subject, and background",
 ];
 
 const DEFAULT_PALETTE_VARIATIONS = [
@@ -97,24 +191,7 @@ const DEFAULT_LIGHTING_VARIATIONS = [
   "light spilling from an unseen opening behind the subject",
 ];
 
-const DEFAULT_TRADING_CARD_ART_PROFILES = [
-  "luminous watercolor fantasy, elegant negative space, delicate edges, lyrical atmosphere",
-  "high-detail classical fantasy realism, polished anatomy, dramatic fabric and armor texture",
-  "moody gothic fantasy realism, heavy atmosphere, deep shadows, restrained highlights",
-  "epic landscape-forward fantasy illustration, sweeping scale, atmospheric depth, small heroic figures",
-  "kinetic action fantasy painting, diagonal composition, explosive motion, sharp focal contrast",
-  "ornate storybook fantasy, decorative shapes, graceful silhouettes, jewel-like color accents",
-  "dark surreal fantasy, dreamlike staging, symbolic props, unsettling but readable composition",
-  "naturalistic creature illustration, anatomical believability, textured fur, feathers, bark, or scales",
-  "bright heroic fantasy poster painting, clean focal hierarchy, radiant highlights, bold silhouette",
-  "ancient mythic mural feeling, sculptural forms, weathered texture, ceremonial composition",
-  "painterly battlefield drama, dust, banners, sparks, expressive gesture, cinematic depth",
-  "arcane academic fantasy, precise props, glowing diagrams, controlled architectural framing",
-  "soft ethereal enchantment art, translucent layers, quiet expression, shimmering atmosphere",
-  "brutal dark fantasy, rough surfaces, smoky air, aggressive contrast, grounded physicality",
-  "lush bioluminescent fantasy, organic forms, glowing flora, saturated magical accents",
-  "retro fantasy paperback cover energy, bold staging, warm filmic color, visible brush texture",
-];
+const DEFAULT_TRADING_CARD_ART_PROFILES = ART_GENERATOR_STYLE_PRESETS.map((style) => style.profile);
 
 const COLOR_LABELS: Record<ManaColor, string> = {
   W: "white",
@@ -541,10 +618,20 @@ export function buildRulesTextFixerPrompt(
     "- Preserve paragraph breaks when they represent separate abilities.",
     "- Keep mana symbols in brace notation, for example {T}, {2}, {G}, {W/U}, and {C}.",
     "- Use an em dash in type-line style constructions only when it is rules-correct; otherwise use normal punctuation.",
-    "- Do not invent new mechanics, costs, targets, durations, zones, or restrictions.",
-    "- Keep the card's mechanical intent and controller/owner semantics intact.",
+    "- Do not invent new mechanics, costs, targets, durations, zones, or restrictions unless the source text is not rules-functional without a missing selector or timing permission. When a repair is necessary, choose the smallest Oracle-style repair that preserves the apparent intent.",
+    "- Keep the card's mechanical intent and controller/owner semantics intact whenever the source text is already rules-functional.",
+    "- Validate rules semantics, not just vocabulary. If a sentence is grammatically clean but not a legal Magic instruction, rewrite it into the closest legal Oracle-style instruction.",
+    "- Enforce current in-game zone terminology. In rules text, 'deck' must be 'library', 'discard pile' must be 'graveyard', 'removed from the game' must be 'exile', and 'play area' must be 'battlefield' when referring to zones.",
+    "- Hidden-zone permissions need an object selector. Do not allow 'cast/play a card from your library' or 'cast/play a spell from your library' with no revealed, searched, exiled, top-card, or otherwise defined object.",
+    "- For library casting permissions with no selector, prefer top-card templating: 'You may cast the top card of your library ...' or 'You may play lands and cast spells from the top of your library ...' as appropriate.",
+    "- Use 'cast' for spells and 'play' when the permission can include lands. Lands are played, not cast. Spells are cast, not played, unless using the broader modern phrase 'play that card'.",
+    "- If an effect lets a player use a card from a hidden zone for a limited window, use established exile-then-play templating: 'Exile the top card of your library. You may play that card this turn.'",
+    "- If an effect searches a library, include reveal only when needed, include the destination, and end with 'Then shuffle.'",
+    "- Do not accept casual tabletop wording as official just because the intent is understandable.",
     "- Use 'this creature', 'this permanent', or the card name according to current templating conventions.",
     "- Use 'enters', 'dies', 'exile', 'create', 'draw a card', 'put a +1/+1 counter on', and 'until end of turn' style Oracle wording.",
+    "- Example correction: 'You may cast a spell from your deck without paying its mana cost.' becomes 'You may cast the top card of your library without paying its mana cost.'",
+    "- Example correction: 'Play a card from your deck this turn.' becomes 'Exile the top card of your library. You may play that card this turn.'",
     "- If the source text is already official-looking, make only minimal copyediting changes.",
     "",
     "Custom keyword and ability glossary:",
@@ -587,18 +674,23 @@ export function buildArtGeneratorPrompt(
   const variationSeed = options.variationSeed ?? 0;
   const artCodex = getArtStyleCodex(faceCard, variationSeed);
   const variedCodex = applyArtPromptVariations(artCodex, request, variationSeed);
-  const artProfile = pickSeeded(DEFAULT_TRADING_CARD_ART_PROFILES, variationSeed, 53);
+  const selectedStyle = ART_GENERATOR_STYLE_PRESETS.find((style) => style.id === options.styleId);
+  const artProfile = selectedStyle?.profile ?? pickSeeded(DEFAULT_TRADING_CARD_ART_PROFILES, variationSeed, 53);
+  const artProfileLabel = selectedStyle?.label ?? "Random";
   const actionDirection = getSpellActionDirection(faceCard);
   const styleInstruction = EXPLICIT_VISUAL_STYLE_PATTERN.test(request)
     ? [
         "Style handling:",
         "- The user request names a visual style, so preserve that style instead of forcing the randomized fantasy trading-card art profile.",
         "- Keep the color-identity environment, palette, lighting, and trading-card composition discipline.",
+        "- Make the requested style visually explicit through medium, edge quality, value structure, and surface treatment.",
       ].join("\n")
     : [
         "Default style:",
+        `- Picker: ${artProfileLabel}.`,
         `- Profile: ${artProfile}.`,
-        "- Painterly fantasy illustration with visible brushwork, cinematic staging, and high-detail materials.",
+        "- Follow the profile strongly; do not average it into generic digital fantasy art.",
+        "- Painterly fantasy illustration with visible brushwork, cinematic staging, and selective high-detail materials.",
         "- Original worldbuilding only; do not copy official characters, set logos, mana symbols, or existing card art.",
       ].join("\n");
 
@@ -618,6 +710,10 @@ export function buildArtGeneratorPrompt(
     "",
     "Composition constraints:",
     "- Use card-art composition with a clear focal subject and readable silhouette.",
+    "- Keep the background clean: broad simple value shapes, limited props, limited particles, no noisy texture fields.",
+    "- Prioritize one main subject, one secondary environmental cue, and one clear light source.",
+    "- Preserve negative space around the subject; avoid crowded scenes, busy foliage, excessive rubble, swarms, confetti, or visual clutter.",
+    "- Use detail hierarchy: sharpest detail on the face, hands, weapon, creature head, or spell focal point; softer and simpler background.",
     "- No text, no borders, no card frame, no UI, no logos, no watermarks.",
     actionDirection ? `- Spell depiction: ${actionDirection}.` : "",
     "",
@@ -637,6 +733,8 @@ function buildCardArtPrompt(card: CardDraft, cardContext: string, visualContext:
     `- Main subject: ${card.name || "an original character, creature, object, or spell moment"}.`,
     `- Mood: ${inferMood(card)}.`,
     "- Composition: readable at small card-art size, strong silhouette, clear focal point, cinematic lighting, painterly realism.",
+    "- Keep the background clean: broad simple shapes, limited props, limited particles, and no noisy texture fields.",
+    "- Use detail hierarchy: crisp focal subject, softer simplified background, clear negative space.",
     "- Camera: medium-wide card illustration crop with enough negative space for a title bar and type line outside the image.",
     "- Exclusions: no text, no card frame, no mana symbols, no logos, no signatures, no watermark, no UI, no existing copyrighted characters.",
   ].join("\n");
@@ -896,19 +994,125 @@ function getThreeColorCodexKey(colors: ManaColor[]) {
 }
 
 function buildSetSymbolPrompt(card: CardDraft, cardContext: string): string {
+  return buildSetSymbolPromptFromContext(card, cardContext, card.name || card.typeLine || "the current set concept");
+}
+
+export function buildSetSymbolGeneratorPrompt(card: CardDraft, request: string): string {
+  const faceCard = getEditableCardFace(card);
+  const normalizedRequest = request.trim() || faceCard.name || faceCard.typeLine || "an original set symbol";
+
+  return buildGeneratedSetSymbolPrompt(normalizedRequest);
+}
+
+export function buildCardBackGeneratorPrompt({
+  request,
+  mode,
+}: {
+  request: string;
+  mode: "reskin" | "custom";
+}): string {
+  const normalizedRequest = request.trim();
+  const concept =
+    normalizedRequest ||
+    (mode === "reskin"
+      ? "a premium alternate reskin of the default CardMagic brown spellbook card back"
+      : "an original premium custom CardMagic card back");
+
+  const structureRule =
+    mode === "reskin"
+      ? "- Use the attached default CardMagic card back as the image base. Preserve its rectangular border structure, corner rivets, inner frame, central vertical oval, five small colored pips, large PROXY headline, smaller Playtest Copy text, and bottom CardMagic nameplate; restyle only the materials, color palette, texture treatment, lighting, and ornamentation requested by the user."
+      : "- Create a new custom CardMagic proxy card back. The border and layout may be custom, but the result must still read as a premium CardMagic proxy card back.";
+
+  return [
+    "Create one production-ready portrait trading-card back image for CardMagic.",
+    "",
+    `User card-back concept: ${concept}.`,
+    `Generation mode: ${mode === "reskin" ? "reskin the default CardMagic card back" : "fully custom CardMagic card back"}.`,
+    "",
+    "Default composition:",
+    "- Use a straight-on orthographic card-back view on a portrait canvas.",
+    "- Use the CardMagic proxy-back visual grammar: distressed rectangular border, large central vertical oval, five small colored pips arranged like a quincunx, large PROXY headline, smaller Playtest Copy text, and bottom CardMagic nameplate.",
+    structureRule,
+    "",
+    "Text requirements:",
+    "- Include readable text exactly: PROXY, Playtest Copy, and CardMagic.",
+    "- Do not include any other readable words, labels, serial numbers, signatures, watermarks, QR codes, pseudo-logos, or microtext.",
+    "",
+    "Image requirements:",
+    "- 1024 x 1536 portrait image.",
+    "- Full card back centered with a small black bleed or margin around it.",
+    "- No perspective tilt, no drop shadow, no table, no hands, no packaging, no scene background.",
+    "- Avoid any official Magic: The Gathering logos, mana symbols, copyrighted card-back branding, or copied iconography.",
+    "- Keep edges clean enough for use as a mobile app card-back asset.",
+  ].join("\n");
+}
+
+function buildSetSymbolPromptFromContext(card: CardDraft, cardContext: string, request: string): string {
   return [
     "Design a small expansion set symbol for a custom trading-card set.",
     "",
     cardContext,
     "",
+    `User symbol concept: ${request}.`,
+    `Visual theme: ${card.name || card.typeLine || request}.`,
+    "",
     "Output requirements:",
     "- Transparent background.",
-    "- Single-color black silhouette with clean vector-like edges.",
+    "- Single centered black alpha-mask silhouette with clean vector-like edges.",
+    "- Make the silhouette similar in visual complexity to Magic-style expansion symbols: simple outer contour, one or two negative-space cuts at most.",
     "- Recognizable at 16-24 px tall when printed on a card type line.",
+    "- Balanced inside a square icon box with even optical padding.",
     "- No letters unless the set concept explicitly requires them.",
     "- No official game logos, mana symbols, trademarks, or copied iconography.",
-    "- Simple enough to recolor for common, uncommon, rare, and mythic treatments.",
+    "- No gradients, no full-color rendering, no texture, no drop shadow, no bevel, no border box.",
+    "- Simple enough to recolor cleanly for common, uncommon, rare, and mythic treatments.",
   ].join("\n");
+}
+
+function buildGeneratedSetSymbolPrompt(request: string): string {
+  return [
+    "Create one production-ready expansion set symbol as a transparent PNG alpha mask.",
+    "",
+    `Symbol concept: ${request}.`,
+    "",
+    "Primary goal:",
+    "- Make a small, flat, iconic set mark, not an illustration.",
+    "- The app will recolor this mask for common black, uncommon silver, rare gold, and mythic orange rarity treatments.",
+    "- The generated PNG itself must not contain rarity color, metallic color, gold, silver, orange, tan, gradients, or colored pixels.",
+    "- Optimize for legibility at 16-24 px tall on a trading-card type line.",
+    "",
+    "Canvas and mask requirements:",
+    "- 1024 x 1024 transparent canvas.",
+    "- Alpha outside the glyph must be fully transparent.",
+    "- Glyph pixels must be solid black (#000000) only, with hard, clean edges.",
+    "- Use alpha shape information only: black opaque glyph, transparent outside. No baked-in color styling.",
+    "- Center the glyph and make the opaque silhouette fill about 88% of the canvas with tight optical padding.",
+    "- Use a filled vector-logo silhouette, not thin line art.",
+    "- Prefer one contiguous emblem; use no more than three filled shapes.",
+    "- Use no more than two transparent internal cutouts.",
+    "- Use thick readable forms and avoid hairline strokes.",
+    "",
+    "Style target:",
+    "- Similar complexity to a Magic-style expansion symbol: compact, collectible, stamp-like, and readable when tiny.",
+    "- A simple outer contour with one memorable internal notch, gap, or cutout is ideal.",
+    "- If the concept is an object, reduce it to its most recognizable silhouette.",
+    "- Make a fresh symbol for this request; do not repeat a generic star, shield, crest, or previous composition.",
+    "",
+    "Reference example from this app, for style only. Do not copy this geometry:",
+    "- Existing preset: Rift.",
+    "- Outer silhouette SVG path: M18 23 77 9 56 42 84 45 21 91 43 55 15 53 18 23Z",
+    "- Detail path: M30 30 67 20 48 48 66 49 33 75 47 52 27 50 30 30Z",
+    "- Match its production qualities: compact black vector-mask silhouette, sharp readable contour, low detail count, large clear negative space, and strong visibility at tiny size.",
+    "",
+    "Do not include:",
+    "- No background color, border box, circle badge, card frame, paper texture, or scene.",
+    "- No colored symbol. Do not render the symbol as gold, bronze, silver, orange, yellow, red, blue, green, or multicolor.",
+    "- No gradients, shadows, bevels, highlights, metallic rendering, brush texture, or 3D depth.",
+    "- No text, letters, numbers, mana symbols, official game logos, trademarks, or copied iconography.",
+    "- No extra variants, no multiple icons, no mockup sheet, no labels.",
+    "",
+    "Return only the final single centered black transparent-background glyph.",
+  ].filter(Boolean).join("\n");
 }
 
 function buildWatermarkPrompt(card: CardDraft, cardContext: string): string {
@@ -953,6 +1157,8 @@ function buildArtFromTextColorPrompt(card: CardDraft, rulesContext: string, visu
     `- Subject should visually explain the mechanical hook of the card: ${summarizeRulesHook(card)}.`,
     "- Show a clear action, object, spell effect, or environment that matches the card colors.",
     "- Use a painterly fantasy trading-card illustration style with strong lighting and a readable silhouette.",
+    "- Keep the background clean: broad simple shapes, limited props, limited particles, and no noisy texture fields.",
+    "- Use detail hierarchy: crisp focal subject, softer simplified background, clear negative space.",
     "- Exclusions: no text, no card frame, no mana symbols, no logos, no signatures, no UI, no existing copyrighted characters.",
   ].join("\n");
 }

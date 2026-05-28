@@ -10,7 +10,10 @@
     }
   },
   "exclude": [
+    "android",
     "dist",
+    "ios",
+    "supabase",
     "node_modules",
     "trace"
   ]

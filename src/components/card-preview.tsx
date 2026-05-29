@@ -16,6 +16,7 @@ import {
   View,
   ViewStyle,
 } from "react-native";
+import type { GestureResponderEvent } from "react-native";
 import Svg, {
   ClipPath,
   Defs,
@@ -1972,6 +1973,7 @@ function CardPreviewComponent({
     titleManaRect,
     titleBaseRect,
     isRetroTreatment ? 19.5 : frameTreatment === "etchedFoil" ? 16 : 18,
+    isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroTitle : FULL_MAGIC_PACK.fontFamilies.title,
   );
   const sagaTextLayout = typeFrame === "saga" ? parseSagaText(displayedRulesText) : null;
   const futureTypeSymbolSource = isFutureshiftedShowcase
@@ -2034,6 +2036,56 @@ function CardPreviewComponent({
     0,
     (rulesLayout.flavorRect.height - displayedFlavorContentHeight) / 2,
   ) * scale;
+  const rulesInlineHitBand = getInlineTextHitBand(
+    rulesLayout.rulesRect.height * scale,
+    rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+    rulesLayout.centerRulesContent ? compactRulesContentHeightScaled : displayedRulesContentHeightScaled,
+    10 * scale,
+  );
+  const flavorInlineHitBand = getInlineTextHitBand(
+    rulesLayout.flavorRect.height * scale,
+    displayedFlavorVerticalInset,
+    displayedFlavorContentHeightScaled,
+    10 * scale,
+  );
+  // The text box's surrounding frame "ring" (the area just outside the text box,
+  // which otherwise falls through to the frame catch-all) opens the rules sheet.
+  // Expand the text-area rect outward on the sides/bottom to cover that ring.
+  const rulesSheetHitRect = (() => {
+    const base = treatmentLayout?.textArea ?? getTextAreaRect(typeFrame);
+    const sideMargin = 20;
+    const bottomMargin = 18;
+    const left = Math.max(0, base.x - sideMargin);
+    const right = Math.min(CARD_COORDINATES.width, base.x + base.width + sideMargin);
+    return {
+      x: left,
+      y: base.y,
+      width: right - left,
+      height: Math.min(CARD_COORDINATES.height - base.y, base.height + bottomMargin),
+    };
+  })();
+  const handleRulesTextPress = (event: GestureResponderEvent) => {
+    if (
+      activeSection !== "rules" &&
+      !isWithinInlineTextHitBand(event.nativeEvent.locationY, rulesInlineHitBand)
+    ) {
+      onSectionPress("rules", { openSheet: true });
+      return;
+    }
+
+    onSectionPress("rules");
+  };
+  const handleFlavorTextPress = (event: GestureResponderEvent) => {
+    if (
+      activeSection !== "rules" &&
+      !isWithinInlineTextHitBand(event.nativeEvent.locationY, flavorInlineHitBand)
+    ) {
+      onSectionPress("rules", { openSheet: true });
+      return;
+    }
+
+    onSectionPress("rules");
+  };
   useEffect(() => {
     let cancelled = false;
 
@@ -2483,6 +2535,8 @@ function CardPreviewComponent({
           right: 0,
           bottom: 0,
           left: 0,
+          zIndex: 0,
+          elevation: 0,
           ...zone("frame", 18),
         }}
       />
@@ -2922,6 +2976,7 @@ function CardPreviewComponent({
         style={{
           ...rectStyle(titleLayout.rect),
           justifyContent: "center",
+          overflow: "hidden",
           ...(showcaseEditableHitPriority ?? futureOverlayHitPriority),
           ...zone("identity"),
         }}
@@ -2938,6 +2993,9 @@ function CardPreviewComponent({
                 : FULL_MAGIC_PACK.fontFamilies.title,
               fontSize: titleLayout.fontSize * scale,
               lineHeight: titleLayout.lineHeight * scale,
+              width: "100%",
+              maxWidth: "100%",
+              minWidth: 0,
               ...EXPORT_TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
               includeFontPadding: false,
@@ -2964,6 +3022,10 @@ function CardPreviewComponent({
                 titleLayout.fontSize * scale,
                 titleLayout.lineHeight * scale,
               ),
+              width: "100%",
+              maxWidth: "100%",
+              minWidth: 0,
+              flexShrink: 1,
               height: titleLayout.lineHeight * scale,
               ...TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
@@ -2985,6 +3047,9 @@ function CardPreviewComponent({
                 : FULL_MAGIC_PACK.fontFamilies.title,
               fontSize: titleLayout.baseNameFontSize * scale,
               lineHeight: titleLayout.baseNameLineHeight * scale,
+              width: "100%",
+              maxWidth: "100%",
+              minWidth: 0,
               ...TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
               includeFontPadding: false,
@@ -3438,8 +3503,13 @@ function CardPreviewComponent({
           accessibilityLabel="Open rules editor"
           onPress={() => onSectionPress("rules", { openSheet: true })}
           style={{
-            ...rectStyle(treatmentLayout?.textArea ?? getTextAreaRect(typeFrame)),
+            ...rectStyle(rulesSheetHitRect),
             ...showcaseEditableHitPriority,
+            // z0 (rendered after the frame catch-all) keeps this above the frame
+            // ring but below later interactive zones (power/toughness, inline
+            // rules text) so they stay tappable.
+            zIndex: 0,
+            elevation: 0,
             ...zone("rules", 3),
           }}
         />
@@ -3448,11 +3518,13 @@ function CardPreviewComponent({
       {typeFrame !== "saga" && !isTextlessTreatment && rulesLayout.showRules ? (
         <Pressable
           accessibilityRole="button"
-          onPress={() => onSectionPress("rules")}
+          onPress={handleRulesTextPress}
           style={{
             ...rectStyle(rulesLayout.rulesRect),
             justifyContent: "center",
             ...showcaseEditableHitPriority,
+            zIndex: 3,
+            elevation: 3,
             ...zone("rules", 3),
           }}
         >
@@ -3530,6 +3602,8 @@ function CardPreviewComponent({
             ...rectStyle(rulesLayout.dividerRect),
             justifyContent: "center",
             ...showcaseEditableHitPriority,
+            zIndex: 3,
+            elevation: 3,
           }}
         >
           <Image
@@ -3548,11 +3622,13 @@ function CardPreviewComponent({
       {typeFrame !== "saga" && !isTextlessTreatment && rulesLayout.showFlavor ? (
         <Pressable
           accessibilityRole="button"
-          onPress={() => onSectionPress("rules")}
+          onPress={handleFlavorTextPress}
           style={{
             ...rectStyle(rulesLayout.flavorRect),
             justifyContent: activeSection === "rules" ? "flex-start" : "center",
             ...showcaseEditableHitPriority,
+            zIndex: 3,
+            elevation: 3,
             ...zone("rules", 3),
           }}
         >
@@ -9604,7 +9680,8 @@ function shouldShowDfcColorIndicator(typeFrame: TypeFrame, card: CardDraft): boo
 }
 
 function getSetSymbolMarkSize(baseSize: number, card: CardDraft): number {
-  return card.setSymbolUri && card.setSymbolUsesRarityTreatment ? baseSize * 1.35 : baseSize;
+  const visualBaseSize = baseSize * 0.9;
+  return card.setSymbolUri && card.setSymbolUsesRarityTreatment ? visualBaseSize * 1.32 : visualBaseSize;
 }
 
 function shouldRenderDfcFrontWithStandardTreatmentGeometry(treatment: FrameTreatment): boolean {
@@ -9784,6 +9861,37 @@ function getWatermarkRect(typeFrame: TypeFrame, rulesLayout: RulesFlavorLayout):
   }
 
   return rulesLayout.rulesRect;
+}
+
+function getInlineTextHitBand(
+  containerHeight: number,
+  contentTopInset: number,
+  contentHeight: number,
+  padding: number,
+): { top: number; height: number } {
+  const fallbackHeight = Math.min(containerHeight, 28);
+  const hitContentHeight = contentHeight > 0 ? contentHeight : fallbackHeight;
+  const rawTop = contentTopInset - padding;
+  const rawBottom = contentTopInset + hitContentHeight + padding;
+  const top = clamp(rawTop, 0, containerHeight);
+  const minBottom = Math.min(containerHeight, top + fallbackHeight);
+  const bottom = clamp(rawBottom, minBottom, containerHeight);
+
+  return {
+    top,
+    height: Math.max(1, bottom - top),
+  };
+}
+
+function isWithinInlineTextHitBand(
+  locationY: number | undefined,
+  band: { top: number; height: number },
+): boolean {
+  if (typeof locationY !== "number") {
+    return true;
+  }
+
+  return locationY >= band.top && locationY <= band.top + band.height;
 }
 
 function getTypeLineRect(typeFrame: TypeFrame, showColorIndicator = false): CoordinateRect {
@@ -10447,8 +10555,9 @@ function getTitleLayout(
   manaRect: CoordinateRect,
   baseRect: CoordinateRect = CARD_COORDINATES.name,
   baseFontSize = 18,
+  fontFamily: string = FULL_MAGIC_PACK.fontFamilies.title,
 ): TitleLayout {
-  const titleGap = 8;
+  const titleGap = 4;
   const width = clamp(manaRect.x - baseRect.x - titleGap, 24, baseRect.width);
   const rect = {
     ...baseRect,
@@ -10459,10 +10568,10 @@ function getTitleLayout(
   const titleBaseFontSize = hasBaseCardName ? baseFontSize * 0.74 : baseFontSize;
   const baseNameBaseFontSize = hasBaseCardName ? baseFontSize * 0.47 : 0;
   const textWidth = Math.max(
-    estimateSingleLineTextWidth(name || "Untitled", titleBaseFontSize),
-    hasBaseCardName ? estimateSingleLineTextWidth(baseCardName, baseNameBaseFontSize) : 0,
+    measureSingleLineTextWidth(name || "Untitled", titleBaseFontSize, fontFamily),
+    hasBaseCardName ? measureSingleLineTextWidth(baseCardName, baseNameBaseFontSize, fontFamily) : 0,
   );
-  const fitScale = clamp(availableWidth / textWidth, 0.3, 1);
+  const fitScale = clamp(availableWidth / Math.max(1, textWidth), 0.24, 1);
   const fontSize = titleBaseFontSize * fitScale;
   const baseNameFontSize = baseNameBaseFontSize * fitScale;
 
@@ -10486,7 +10595,7 @@ function getManaCostEditorFontSize(manaCost: string, width: number, baseFontSize
 }
 
 function getTypeLineFontSize(typeLine: string, width: number, baseFontSize = 14): number {
-  const availableWidth = Math.max(1, width - 3);
+  const availableWidth = Math.max(1, width - 1);
   const textWidth = estimateSingleLineTextWidth(typeLine || "Card Type", baseFontSize);
 
   return baseFontSize * clamp(availableWidth / textWidth, 0.58, 1);
@@ -10513,7 +10622,7 @@ function getTypeLineSetSymbolInset(typeLineRect: CoordinateRect, setSymbolRect: 
   const typeRight = typeLineRect.x + typeLineRect.width;
   const symbolOverlap = typeRight - setSymbolRect.x;
 
-  return Math.max(0, symbolOverlap + 5);
+  return Math.max(0, symbolOverlap + 1);
 }
 
 function getBattleNameFontSize(name: string, baseCardName = ""): number {
@@ -10543,7 +10652,7 @@ function estimateSingleLineTextWidth(text: string, fontSize: number): number {
     }
 
     if ("MW@#%&".includes(character)) {
-      return width + fontSize * 0.8;
+      return width + fontSize * 0.82;
     }
 
     if ("ilI1.,'|".includes(character)) {
@@ -10554,8 +10663,30 @@ function estimateSingleLineTextWidth(text: string, fontSize: number): number {
       return width + fontSize * 0.62;
     }
 
-    return width + fontSize * 0.5;
+    return width + fontSize * 0.52;
   }, 0);
+}
+
+function measureSingleLineTextWidth(text: string, fontSize: number, fontFamily: string): number {
+  const normalizedText = text.trim();
+  const estimatedWidth = estimateSingleLineTextWidth(normalizedText, fontSize);
+
+  if (Platform.OS !== "web" || typeof document === "undefined") {
+    return estimatedWidth;
+  }
+
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return estimatedWidth;
+    }
+
+    context.font = `700 ${fontSize}px ${fontFamily}`;
+    return Math.max(estimatedWidth * 0.82, context.measureText(normalizedText).width * 1.025);
+  } catch {
+    return estimatedWidth;
+  }
 }
 
 function getRulesFlavorLayout(

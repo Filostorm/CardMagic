@@ -3,7 +3,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
-import { ArrowDown, ArrowUp, BookOpen, Bug, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, Users, X } from "lucide-react-native";
+import { ArrowDown, ArrowUp, BookOpen, Bug, Check, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, Users, X } from "lucide-react-native";
 import { Component, memo, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -51,7 +51,7 @@ import {
   getVisibleArtAspectRatioForCard,
   getVisibleArtRectForCard,
 } from "@/components/card-preview";
-import { waitForFlattenedFrameComposites } from "@/lib/export-flatten";
+import { loadHtmlImage, waitForFlattenedFrameComposites } from "@/lib/export-flatten";
 import { EditorField } from "@/components/editor-field";
 import { HybridSymbolStyleProvider } from "@/components/hybrid-symbol-style-context";
 import {
@@ -85,7 +85,6 @@ import {
   type ArtGeneratorStyleId,
   buildArtGeneratorPrompt,
   buildCardBackGeneratorPrompt,
-  buildSubjectMaskGeneratorPrompt,
   buildSetSymbolGeneratorPrompt,
   buildRulesTextFixerPrompt,
   getDefaultArtGeneratorRequest,
@@ -114,6 +113,7 @@ import {
   toggleCommunityCardLike,
   toggleCommunityUserFollow,
   updateCommunityDisplayName,
+  uploadCommunityCardImage,
   uploadCommunityFeedbackScreenshot,
   type AccountCardSetPayload,
   type AccountCustomSetSymbolPayload,
@@ -130,9 +130,10 @@ import {
   fixRulesTextViaEdge,
   generateAiImageEditViaEdge,
   generateAiImageViaEdge,
-  generateAiSubjectMaskViaEdge,
   generateSubjectMatteViaEdge,
   type AiImageGenerationOptions,
+  SubjectMatteProviderError,
+  type SubjectMatteDiagnostics,
 } from "@/lib/ai-edge";
 import {
   createStripeCheckoutUrl,
@@ -561,7 +562,6 @@ const WEB_STORAGE_DB_NAME = "cardmagic-storage";
 const WEB_STORAGE_STORE_NAME = "keyValue";
 const STORAGE_LOG_PREFIX = "[CardMagic storage]";
 const OPENAI_IMAGE_GENERATION_URL = "https://api.openai.com/v1/images/generations";
-const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
 const OPENAI_IMAGE_MODELS = ["gpt-image-1.5", "gpt-image-1"] as const;
 const OPENAI_CARD_ART_IMAGE_BASE_OPTIONS = {
   size: "1536x1024",
@@ -1088,6 +1088,32 @@ async function openStripeCheckoutUrl(checkoutUrl: string, popup?: Window | null)
   await Linking.openURL(checkoutUrl);
 }
 
+// SAM segmentation doesn't need full resolution — the returned mask is scaled
+// back to the source dimensions during normalization. Downscaling shrinks the
+// request body ~4×, which keeps concurrent (parallel) fal uploads under the
+// HTTP/2 limit and speeds up inference. Aspect ratio is preserved (width-only
+// resize), so per-axis upscaling during normalization realigns it.
+const SUBJECT_MASK_REQUEST_MAX_DIMENSION = 768;
+
+async function downscaleImageForMaskRequest(uri: string) {
+  try {
+    const result = await ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: SUBJECT_MASK_REQUEST_MAX_DIMENSION } }],
+      { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+    );
+
+    if (result.base64) {
+      return `data:image/jpeg;base64,${result.base64}`;
+    }
+
+    return Platform.OS === "web" ? await readWebImageUriAsDataUri(result.uri, "image/jpeg") : result.uri;
+  } catch (error) {
+    console.warn("Unable to downscale image for mask request; using full-size art.", error);
+    return uri;
+  }
+}
+
 async function normalizeGeneratedAuxiliaryImageUri(uri: string, prefix: string) {
   try {
     const result = await ImageManipulator.manipulateAsync(
@@ -1278,7 +1304,11 @@ async function normalizePickedSetSymbolImage(asset: PickedImageAsset) {
   }
 }
 
-async function normalizeSubjectMatteImageUri(uri: string, sourceImageUri: string) {
+async function normalizeSubjectMatteImageUri(
+  uri: string,
+  sourceImageUri: string,
+  options?: { keepAllComponents?: boolean },
+) {
   const materializedUri = await materializeImageUri(uri, "subject-matte");
 
   if (Platform.OS !== "web") {
@@ -1286,14 +1316,14 @@ async function normalizeSubjectMatteImageUri(uri: string, sourceImageUri: string
   }
 
   try {
-    return await createWebSubjectAlphaMask(materializedUri, sourceImageUri);
+    return await createWebSubjectAlphaMask(materializedUri, sourceImageUri, options?.keepAllComponents);
   } catch (error) {
     console.warn("Unable to normalize subject matte alpha; using provider output.", error);
     return materializedUri;
   }
 }
 
-async function createWebSubjectAlphaMask(uri: string, sourceImageUri?: string) {
+async function createWebSubjectAlphaMask(uri: string, sourceImageUri?: string, keepAllComponents = false) {
   if (typeof document === "undefined") {
     return uri;
   }
@@ -1337,12 +1367,17 @@ async function createWebSubjectAlphaMask(uri: string, sourceImageUri?: string) {
     sourceAlpha[pixelIndex] = alpha;
   }
 
-  const primarySubjectMask = getPrimarySubjectComponentMask(sourceAlpha, width, height);
+  // For merged multi-concept mattes the segmented regions are disconnected
+  // (e.g. bow + wolf), so keep every region; the primary-component cleanup is
+  // only correct for a single subject.
+  const primarySubjectMask = keepAllComponents
+    ? null
+    : getPrimarySubjectComponentMask(sourceAlpha, width, height);
 
   for (let index = 0; index < data.length; index += 4) {
     const pixelIndex = index / 4;
     const alpha = sourceAlpha[pixelIndex];
-    const cleanedAlpha = primarySubjectMask[pixelIndex]
+    const cleanedAlpha = !primarySubjectMask || primarySubjectMask[pixelIndex]
       ? Math.round(clamp((alpha - 28) * 1.32, 0, 255))
       : 0;
 
@@ -5001,74 +5036,105 @@ async function generateOpenAiImageEditUri({
   throw new Error("OpenAI did not return edited image data.");
 }
 
-async function generateOpenAiSubjectMaskUri({
-  imageUri,
-  prompt,
-}: {
-  imageUri: string;
-  prompt: string;
-}) {
-  const size = await getOpenAiImageEditSizeForUri(imageUri);
-  const image = await generateAiSubjectMaskViaEdge({ imageUri, prompt, size });
-  let maskUri: string;
-
-  if (image.b64Json) {
-    maskUri = await materializeBase64ImageUri(image.b64Json, "png", "subject-mask");
-    return await normalizeSubjectMatteImageUri(maskUri, imageUri);
+// Unions multiple per-concept cutouts into one matte. Each cutout is the source
+// image with only its concept opaque, so stacking them with default source-over
+// compositing merges the opaque regions. Web-only (uses canvas); falls back to
+// the first cutout elsewhere.
+async function compositeSubjectCutouts(urls: string[]): Promise<string> {
+  if (Platform.OS !== "web" || typeof document === "undefined") {
+    return urls[0];
   }
 
-  if (image.url) {
-    maskUri = await materializeExternalImageUri(image.url, "subject-mask");
-    return await normalizeSubjectMatteImageUri(maskUri, imageUri);
+  const images = await Promise.all(urls.map(loadHtmlImage));
+  const width = Math.max(...images.map((image) => image.naturalWidth || 0)) || images[0].naturalWidth;
+  const height = Math.max(...images.map((image) => image.naturalHeight || 0)) || images[0].naturalHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) {
+    return urls[0];
   }
 
-  throw new Error("OpenAI did not return subject mask image data.");
+  for (const image of images) {
+    ctx.drawImage(image, 0, 0, width, height);
+  }
+
+  return canvas.toDataURL("image/png");
 }
 
-async function generateSubjectMatteUri({ imageUri }: { imageUri: string }) {
-  const matte = await generateSubjectMatteViaEdge({ imageUri });
+async function generateSubjectMatteUri({
+  imageUri,
+  targetPrompt,
+}: {
+  imageUri: string;
+  targetPrompt?: string;
+}) {
+  // Prompted SAM segmentation runs one fal call per concept (in parallel); send a
+  // downscaled image so the bodies stay small. The mask is normalized against the
+  // full-res original below, so output resolution is unaffected.
+  const requestImageUri = targetPrompt?.trim()
+    ? await downscaleImageForMaskRequest(imageUri)
+    : imageUri;
+  const matte = await generateSubjectMatteViaEdge({ imageUri: requestImageUri, targetPrompt });
   let matteUri: string;
+
+  // Per-concept cutouts (prompted segmentation): merge the enabled ones and keep
+  // the components so the UI can toggle each subject on/off without re-running.
+  const subjectMasks = (matte.subjectMasks ?? []).filter((mask) => mask && Boolean(mask.url));
+
+  if (subjectMasks.length > 0) {
+    const components = subjectMasks.map((mask) => ({ concept: mask.concept, cutoutUrl: mask.url }));
+    const cutoutUrls = components.map((component) => component.cutoutUrl);
+    const merged = cutoutUrls.length > 1 ? await compositeSubjectCutouts(cutoutUrls) : cutoutUrls[0];
+    matteUri = await materializeImageUri(merged, "subject-matte");
+    return {
+      uri: await normalizeSubjectMatteImageUri(matteUri, imageUri, { keepAllComponents: cutoutUrls.length > 1 }),
+      diagnostics: matte.diagnostics,
+      components,
+      sourceUri: imageUri,
+    };
+  }
 
   if (matte.b64Json) {
     matteUri = await materializeBase64ImageUri(matte.b64Json, "png", "subject-matte");
-    return await normalizeSubjectMatteImageUri(matteUri, imageUri);
+    return {
+      uri: await normalizeSubjectMatteImageUri(matteUri, imageUri),
+      diagnostics: matte.diagnostics,
+      components: [] as { concept: string; cutoutUrl: string }[],
+      sourceUri: imageUri,
+    };
   }
 
   if (matte.url) {
-    matteUri = await materializeExternalImageUri(matte.url, "subject-matte");
-    return await normalizeSubjectMatteImageUri(matteUri, imageUri);
+    matteUri = await materializeImageUri(matte.url, "subject-matte");
+    return {
+      uri: await normalizeSubjectMatteImageUri(matteUri, imageUri),
+      diagnostics: matte.diagnostics,
+      components: [] as { concept: string; cutoutUrl: string }[],
+      sourceUri: imageUri,
+    };
   }
 
   throw new Error("Subject matte provider did not return image data.");
 }
 
-function getImageSize(uri: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    Image.getSize(
-      uri,
-      (width, height) => resolve({ width, height }),
-      (error) => reject(error),
-    );
-  });
-}
+// Re-merge the currently-enabled per-subject cutouts into a single matte.
+// Returns null when nothing is enabled (caller should clear the mask).
+async function composeSubjectMaskFromComponents(
+  components: { concept: string; cutoutUrl: string; enabled: boolean }[],
+  sourceUri: string,
+): Promise<string | null> {
+  const enabledUrls = components.filter((component) => component.enabled).map((component) => component.cutoutUrl);
 
-async function getOpenAiImageEditSizeForUri(uri: string): Promise<OpenAiImageGenerationOptions["size"]> {
-  try {
-    const { width, height } = await getImageSize(uri);
-    const aspectRatio = width / height;
-
-    if (aspectRatio > 1.2) {
-      return "1536x1024";
-    }
-
-    if (aspectRatio < 0.8) {
-      return "1024x1536";
-    }
-  } catch {
-    // Fall through to a square edit canvas when intrinsic dimensions are unavailable.
+  if (enabledUrls.length === 0) {
+    return null;
   }
 
-  return "1024x1024";
+  const merged = enabledUrls.length > 1 ? await compositeSubjectCutouts(enabledUrls) : enabledUrls[0];
+  const matteUri = await materializeImageUri(merged, "subject-matte");
+  return normalizeSubjectMatteImageUri(matteUri, sourceUri, { keepAllComponents: enabledUrls.length > 1 });
 }
 
 async function generateOpenAiRulesText({
@@ -5200,78 +5266,6 @@ async function generateOpenAiImageUriWithModel({
   }
 
   throw new Error("OpenAI did not return image data.");
-}
-
-async function appendImageUriToFormData(formData: FormData, fieldName: string, uri: string, fileName: string) {
-  const mimeType = `image/${getImageUriExtension(uri, "png") === "jpg" ? "jpeg" : getImageUriExtension(uri, "png")}`;
-
-  if (Platform.OS === "web") {
-    const response = await fetch(uri);
-
-    if (!response.ok) {
-      throw new Error(`Image fetch failed with ${response.status}.`);
-    }
-
-    formData.append(fieldName, await response.blob(), fileName);
-    return;
-  }
-
-  formData.append(fieldName, {
-    uri,
-    name: fileName,
-    type: mimeType,
-  } as unknown as Blob);
-}
-
-async function generateOpenAiSubjectMaskUriWithModel({
-  apiKey,
-  imageUri,
-  prompt,
-  model,
-  size,
-}: {
-  apiKey: string;
-  imageUri: string;
-  prompt: string;
-  model: (typeof OPENAI_IMAGE_MODELS)[number];
-  size: OpenAiImageGenerationOptions["size"];
-}) {
-  const formData = new FormData();
-
-  formData.append("model", model);
-  formData.append("prompt", prompt);
-  formData.append("size", size);
-  formData.append("quality", "medium");
-  formData.append("output_format", "png");
-  await appendImageUriToFormData(formData, "image", imageUri, "card-art.png");
-
-  const response = await fetch(OPENAI_IMAGE_EDIT_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: formData,
-  });
-  const payload = (await response.json().catch(() => ({}))) as OpenAiImageGenerationResponse;
-
-  if (!response.ok) {
-    throw new Error(payload.error?.message || `OpenAI subject mask generation failed with HTTP ${response.status}.`);
-  }
-
-  const image = payload.data?.[0];
-  let maskUri: string;
-
-  if (image?.b64_json) {
-    maskUri = await materializeBase64ImageUri(image.b64_json, "png", "subject-mask");
-    return await normalizeSubjectMatteImageUri(maskUri, imageUri);
-  }
-
-  if (image?.url) {
-    maskUri = await materializeExternalImageUri(image.url, "subject-mask");
-    return await normalizeSubjectMatteImageUri(maskUri, imageUri);
-  }
-
-  throw new Error("OpenAI did not return subject mask image data.");
 }
 
 function shouldTryNextImageModel(error: Error) {
@@ -5633,6 +5627,13 @@ export default function App() {
   const [subjectMaskBusy, setSubjectMaskBusy] = useState(false);
   const [subjectMaskStatus, setSubjectMaskStatus] = useState<string | null>(null);
   const [subjectMaskError, setSubjectMaskError] = useState<string | null>(null);
+  const [subjectMaskDiagnostics, setSubjectMaskDiagnostics] = useState<SubjectMatteDiagnostics | null>(null);
+  // Per-subject cutouts from the last prompted segmentation, each toggleable on/off.
+  const [subjectMaskComponents, setSubjectMaskComponents] = useState<
+    { concept: string; cutoutUrl: string; enabled: boolean }[]
+  >([]);
+  const subjectMaskSourceUriRef = useRef<string | null>(null);
+  const [subjectMaskToggleBusy, setSubjectMaskToggleBusy] = useState(false);
   const [rulesTextFixerBusy, setRulesTextFixerBusy] = useState(false);
   const [rulesTextFixerError, setRulesTextFixerError] = useState<string | null>(null);
   const [rulesTextFixerSuggestion, setRulesTextFixerSuggestion] = useState<{
@@ -7575,7 +7576,16 @@ export default function App() {
     }
   };
 
-  const generateSubjectMask = async () => {
+  // Updates the on-screen subject-mask status and mirrors every in-progress
+  // message to the browser console (not just the fal request step).
+  const reportSubjectMaskStatus = (message: string | null) => {
+    if (message) {
+      console.log(`[CardMagic subject mask] ${message}`);
+    }
+    setSubjectMaskStatus(message);
+  };
+
+  const generateSubjectMask = async (targetPrompt?: string) => {
     if (subjectMaskBusy) {
       return;
     }
@@ -7602,30 +7612,69 @@ export default function App() {
     }
 
     setSubjectMaskBusy(true);
-    setSubjectMaskStatus("Preparing art for subject segmentation.");
+    reportSubjectMaskStatus("Preparing your art…");
     setSubjectMaskError(null);
+    setSubjectMaskDiagnostics(null);
+    setSubjectMaskComponents([]);
 
     try {
       let maskUri: string;
+      const normalizedTargetPrompt = targetPrompt?.trim();
 
       try {
         if (Platform.OS !== "web") {
           throw new Error("Dedicated subject matte normalization is currently web-only.");
         }
 
-        setSubjectMaskStatus("Requesting a foreground alpha matte from fal.");
-        maskUri = await generateSubjectMatteUri({ imageUri: artUri });
-        setSubjectMaskStatus("Normalizing the matte for card compositing.");
+        const concepts = normalizedTargetPrompt
+          ? normalizedTargetPrompt.split(/[,;]+/).map((concept) => concept.trim()).filter(Boolean)
+          : [];
+        const segmentationStartedAt = Date.now();
+        let progressTimer: ReturnType<typeof setInterval> | null = null;
+
+        if (normalizedTargetPrompt) {
+          // Each subject is a separate (slow) SAM inference; show live elapsed +
+          // which subject so the wait reflects progress instead of freezing.
+          let tick = 0;
+          const renderProgress = () => {
+            const elapsed = Math.round((Date.now() - segmentationStartedAt) / 1000);
+            const subject =
+              concepts.length > 1
+                ? `${concepts.length} subjects — “${concepts[tick % concepts.length]}”`
+                : `“${concepts[0] ?? normalizedTargetPrompt}”`;
+            reportSubjectMaskStatus(`Segmenting ${subject}… (${elapsed}s)`);
+            tick += 1;
+          };
+          renderProgress();
+          progressTimer = setInterval(renderProgress, 1800);
+        } else {
+          reportSubjectMaskStatus("Removing the background from your art…");
+        }
+
+        try {
+          const generatedMask = await generateSubjectMatteUri({
+            imageUri: artUri,
+            targetPrompt: normalizedTargetPrompt,
+          });
+          maskUri = generatedMask.uri;
+          setSubjectMaskDiagnostics(generatedMask.diagnostics ?? null);
+          subjectMaskSourceUriRef.current = generatedMask.sourceUri ?? artUri;
+          setSubjectMaskComponents(
+            (generatedMask.components ?? []).map((component) => ({ ...component, enabled: true })),
+          );
+        } finally {
+          if (progressTimer) {
+            clearInterval(progressTimer);
+          }
+        }
+
+        reportSubjectMaskStatus(concepts.length > 1 ? "Combining the masks…" : "Cleaning up the cutout…");
       } catch (matteError) {
-        console.warn("Dedicated subject matte provider unavailable; falling back to OpenAI mask generation.", matteError);
-        setSubjectMaskStatus("fal matte unavailable; falling back to OpenAI mask generation.");
-        maskUri = await generateOpenAiSubjectMaskUri({
-          imageUri: artUri,
-          prompt: buildSubjectMaskGeneratorPrompt(card),
-        });
+        console.warn("Dedicated subject matte provider unavailable.", matteError);
+        throw matteError;
       }
 
-      setSubjectMaskStatus("Applying the subject matte to the frame overlay.");
+      reportSubjectMaskStatus("Applying the cutout to your card…");
       updateCurrentFace({ artSubjectMaskUri: maskUri });
       setActiveSection("art");
       setSheetSection(null);
@@ -7635,11 +7684,43 @@ export default function App() {
       recordSuccessfulCreditSpend("subjectMask");
     } catch (error) {
       console.warn("Unable to generate subject mask.", error);
+      if (error instanceof SubjectMatteProviderError) {
+        setSubjectMaskDiagnostics(error.diagnostics ?? null);
+      }
       setSubjectMaskError(error instanceof Error ? error.message : "CardMagic could not generate the subject mask.");
       setArtSourceOpen(true);
     } finally {
       setSubjectMaskBusy(false);
       setSubjectMaskStatus(null);
+    }
+  };
+
+  // Toggle one segmented subject in/out of the matte and re-merge the enabled
+  // cutouts locally (no re-segmentation).
+  const toggleSubjectMaskComponent = async (concept: string) => {
+    if (subjectMaskToggleBusy) {
+      return;
+    }
+
+    const sourceUri = subjectMaskSourceUriRef.current;
+
+    if (!sourceUri) {
+      return;
+    }
+
+    const next = subjectMaskComponents.map((component) =>
+      component.concept === concept ? { ...component, enabled: !component.enabled } : component,
+    );
+    setSubjectMaskComponents(next);
+    setSubjectMaskToggleBusy(true);
+
+    try {
+      const composed = await composeSubjectMaskFromComponents(next, sourceUri);
+      updateCurrentFace({ artSubjectMaskUri: composed ?? undefined });
+    } catch (error) {
+      console.warn("Unable to update subject mask toggle.", error);
+    } finally {
+      setSubjectMaskToggleBusy(false);
     }
   };
 
@@ -8196,11 +8277,20 @@ export default function App() {
       : `community-${accountUser.id}-${createUuid()}`;
 
     try {
+      const communityCard = cloneCardDraft(previewCard);
+      const imageUrl = await renderCommunityCardImageForUpload(
+        communityCard,
+        accountFooterOwnerName,
+        accountUser.id,
+        communityCardId,
+      );
+
       await publishCommunityCard({
         id: communityCardId,
         userId: accountUser.id,
         localSnapshotId: activeSetCardId ? `community-${activeSetCardId}` : undefined,
-        card: cloneCardDraft(previewCard),
+        card: communityCard,
+        imageUrl,
       });
 
       setAuthToast({
@@ -8214,6 +8304,46 @@ export default function App() {
       );
     }
   };
+
+  const renderCommunityCardImageForUpload = useCallback(async (
+    communityCard: CardDraft,
+    footerOwnerName: string,
+    userId: string,
+    communityCardId: string,
+  ) => {
+    const exportCard = cloneCardDraft(communityCard);
+    const exportTarget: FlatCardExportTarget = {
+      kind: "card",
+      card: exportCard,
+      footerOwnerName,
+      artImageAspectRatio: await getCardExportArtImageAspectRatio(exportCard),
+      flattenMasksExport: Platform.OS === "web",
+    };
+
+    setWebPhotoExportBusy(Platform.OS === "web");
+    try {
+      await applyExportRenderTargetUpdate(() => setSingleExportTarget(exportTarget));
+      const exportPreview = await waitForExportPreviewRef(singleExportContainerRef, {
+        nativeID: CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID,
+        timeoutMs: 8000,
+        errorMessage: "CardMagic could not find the rendered card preview.",
+      });
+      if (Platform.OS === "web") {
+        await waitForFlattenedFrameComposites();
+      }
+      await waitForExportPreviewImages(exportPreview);
+      const renderedPng = await captureCardMagicPng(exportPreview);
+      const uploadBody =
+        Platform.OS === "web"
+          ? await webPngExportUriToBlob(renderedPng)
+          : await readPngCaptureBytes(renderedPng);
+
+      return await uploadCommunityCardImage(userId, communityCardId, uploadBody);
+    } finally {
+      setWebPhotoExportBusy(false);
+      setSingleExportTarget(null);
+    }
+  }, []);
 
   const exportCurrentCard = async () => {
     setCardActionMenuOpen(false);
@@ -9706,6 +9836,10 @@ export default function App() {
           subjectMaskBusy={subjectMaskBusy}
           subjectMaskStatus={subjectMaskStatus}
           subjectMaskError={subjectMaskError}
+          subjectMaskDiagnostics={subjectMaskDiagnostics}
+          subjectMaskComponents={subjectMaskComponents}
+          subjectMaskToggleBusy={subjectMaskToggleBusy}
+          onToggleSubjectMaskComponent={toggleSubjectMaskComponent}
           onPickPhoto={() => {
             setArtAdjustOpen(false);
             setArtAdjustmentInitialMode("crop");
@@ -9948,7 +10082,7 @@ function ArtSourceModal({
   artLibraryEntries: ArtLibraryEntry[];
   onPickPhoto: () => void;
   onGenerateArt: () => void;
-  onGenerateSubjectMask: () => void;
+  onGenerateSubjectMask: (targetPrompt?: string) => void;
   onEditImage: () => void;
   onSelectLibraryArt: (entry: ArtLibraryEntry) => void;
   subjectMaskBusy: boolean;
@@ -10039,7 +10173,7 @@ function ArtSourceModal({
                     <Layers size={20} color="#151820" strokeWidth={2.5} />
                   )
                 }
-                onPress={onGenerateSubjectMask}
+                onPress={() => onGenerateSubjectMask()}
               />
               {subjectMaskStatus ? (
                 <View
@@ -10930,6 +11064,57 @@ function CardBackGeneratorModal({
   );
 }
 
+function getSubjectMaskAttemptMode(applyMask: boolean) {
+  return applyMask ? "masked preview" : "mask image";
+}
+
+function getSubjectMaskAttemptSummary(summary: unknown) {
+  if (!summary || typeof summary !== "object") {
+    return null;
+  }
+
+  const record = summary as {
+    keys?: unknown;
+    masksLength?: unknown;
+    firstMaskKeys?: unknown;
+    imageKeys?: unknown;
+    dataKeys?: unknown;
+    outputType?: unknown;
+    resultKeys?: unknown;
+  };
+  const details: string[] = [];
+
+  if (Array.isArray(record.keys)) {
+    details.push(`keys: ${record.keys.join(", ")}`);
+  }
+
+  if (typeof record.masksLength === "number") {
+    details.push(`masks: ${record.masksLength}`);
+  }
+
+  if (Array.isArray(record.firstMaskKeys)) {
+    details.push(`first mask: ${record.firstMaskKeys.join(", ")}`);
+  }
+
+  if (Array.isArray(record.imageKeys)) {
+    details.push(`image: ${record.imageKeys.join(", ")}`);
+  }
+
+  if (Array.isArray(record.dataKeys)) {
+    details.push(`data: ${record.dataKeys.join(", ")}`);
+  }
+
+  if (typeof record.outputType === "string" && record.outputType !== "undefined") {
+    details.push(`output: ${record.outputType}`);
+  }
+
+  if (Array.isArray(record.resultKeys)) {
+    details.push(`result: ${record.resultKeys.join(", ")}`);
+  }
+
+  return details.length > 0 ? details.join(" | ") : null;
+}
+
 function ArtAdjustmentModal({
   visible,
   card,
@@ -10939,6 +11124,10 @@ function ArtAdjustmentModal({
   subjectMaskBusy,
   subjectMaskStatus,
   subjectMaskError,
+  subjectMaskDiagnostics,
+  subjectMaskComponents,
+  subjectMaskToggleBusy,
+  onToggleSubjectMaskComponent,
   onPickPhoto,
   onGenerateArt,
   onClose,
@@ -10947,10 +11136,14 @@ function ArtAdjustmentModal({
   card: CardDraft;
   initialMode: ArtAdjustmentInitialMode;
   onChange: (patch: Partial<CardDraft>) => void;
-  onGenerateSubjectMask: () => void;
+  onGenerateSubjectMask: (targetPrompt?: string) => void;
   subjectMaskBusy: boolean;
   subjectMaskStatus: string | null;
   subjectMaskError: string | null;
+  subjectMaskDiagnostics: SubjectMatteDiagnostics | null;
+  subjectMaskComponents: { concept: string; cutoutUrl: string; enabled: boolean }[];
+  subjectMaskToggleBusy: boolean;
+  onToggleSubjectMaskComponent: (concept: string) => void;
   onPickPhoto: () => void;
   onGenerateArt: () => void;
   onClose: () => void;
@@ -10963,6 +11156,7 @@ function ArtAdjustmentModal({
   const [maskBrushMode, setMaskBrushMode] = useState<MaskBrushMode>("add");
   const [maskBrushSize, setMaskBrushSize] = useState(18);
   const [maskPreviewUri, setMaskPreviewUri] = useState<string | null>(faceCard.artSubjectMaskUri ?? null);
+  const [maskTargetPrompt, setMaskTargetPrompt] = useState("");
   const [maskEditStatus, setMaskEditStatus] = useState<string | null>(null);
   const artRect = getVisibleArtRectForCard(card);
   const artAspectRatio = artRect.width / artRect.height;
@@ -11167,6 +11361,15 @@ function ArtAdjustmentModal({
     return Gesture.Simultaneous(panGesture, pinchGesture);
   }, [updateArtTransform]);
 
+  const normalizedMaskTargetPrompt = maskTargetPrompt.trim();
+  const maskGenerateLabel = subjectMaskBusy
+    ? "Masking"
+    : normalizedMaskTargetPrompt
+      ? "Generate target mask"
+      : faceCard.artSubjectMaskUri
+        ? "Replace mask"
+        : "Generate mask";
+
   if (!visible || !artUri) {
     return null;
   }
@@ -11297,6 +11500,48 @@ function ArtAdjustmentModal({
             </View>
             <View
               style={{
+                width: cropWidth,
+                borderRadius: 16,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "rgba(255, 255, 255, 0.24)",
+                backgroundColor: "rgba(255, 255, 255, 0.1)",
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                gap: 6,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
+                MASK TARGET
+              </Text>
+              <TextInput
+                value={maskTargetPrompt}
+                onChangeText={setMaskTargetPrompt}
+                placeholder="Optional: sword, wings, face, blue flame"
+                placeholderTextColor="rgba(255, 255, 255, 0.5)"
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!subjectMaskBusy}
+                style={{
+                  minHeight: 40,
+                  borderRadius: 12,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: "rgba(255, 255, 255, 0.22)",
+                  backgroundColor: "rgba(255, 255, 255, 0.12)",
+                  color: "#ffffff",
+                  fontSize: 14,
+                  fontWeight: "800",
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                }}
+              />
+              <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.62)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
+                Leave blank for the normal foreground matte. Add a phrase to use fal SAM semantic segmentation.
+              </Text>
+            </View>
+            <View
+              style={{
 	                flexDirection: "row",
 	                flexWrap: "wrap",
 	                alignItems: "center",
@@ -11349,13 +11594,12 @@ function ArtAdjustmentModal({
                   <Plus size={18} color="#ffffff" strokeWidth={2.8} />
                 </Pressable>
               </View>
-		              {!faceCard.artSubjectMaskUri ? (
-                <Pressable
+              <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={subjectMaskBusy ? "Generating subject mask" : "Generate subject mask"}
                   accessibilityState={{ busy: subjectMaskBusy }}
                   disabled={subjectMaskBusy}
-                  onPress={onGenerateSubjectMask}
+                  onPress={() => onGenerateSubjectMask(maskTargetPrompt)}
                   style={({ pressed }) => ({
                     minHeight: 46,
                     borderRadius: 999,
@@ -11387,10 +11631,9 @@ function ArtAdjustmentModal({
                       fontWeight: "800",
                     }}
                   >
-                    {subjectMaskBusy ? "Masking" : "Generate mask"}
+                    {maskGenerateLabel}
                   </Text>
                 </Pressable>
-              ) : null}
 		              {faceCard.artSubjectMaskUri ? (
 		                <Pressable
 		                  accessibilityRole="switch"
@@ -11453,6 +11696,151 @@ function ArtAdjustmentModal({
                   >
                     {subjectMaskError ?? subjectMaskStatus}
                   </Text>
+                </View>
+              ) : null}
+              {subjectMaskComponents.length > 0 ? (
+                <View
+                  style={{
+                    width: "100%",
+                    maxWidth: cropWidth,
+                    borderRadius: 14,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.2)",
+                    backgroundColor: "rgba(7, 11, 18, 0.72)",
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    gap: 8,
+                  }}
+                >
+                  <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 11, fontWeight: "900" }}>
+                    SUBJECTS IN MASK
+                  </Text>
+                  <Text selectable={false} style={{ color: "rgba(230, 247, 251, 0.66)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
+                    Tap a subject to include or exclude it from the mask.
+                  </Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {subjectMaskComponents.map((component) => (
+                      <Pressable
+                        key={component.concept}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: component.enabled, disabled: subjectMaskToggleBusy }}
+                        accessibilityLabel={`${component.enabled ? "Remove" : "Add"} ${component.concept}`}
+                        disabled={subjectMaskToggleBusy}
+                        onPress={() => onToggleSubjectMaskComponent(component.concept)}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          borderRadius: 999,
+                          borderCurve: "continuous",
+                          borderWidth: 1.5,
+                          borderColor: component.enabled ? "#31d0e0" : "rgba(255, 255, 255, 0.28)",
+                          backgroundColor: component.enabled ? "rgba(49, 208, 224, 0.22)" : "rgba(255, 255, 255, 0.04)",
+                          opacity: subjectMaskToggleBusy ? 0.6 : 1,
+                        }}
+                      >
+                        {component.enabled ? (
+                          <Check size={14} color="#9bedf7" strokeWidth={3} />
+                        ) : (
+                          <Plus size={14} color="rgba(255, 255, 255, 0.6)" strokeWidth={3} />
+                        )}
+                        <Text
+                          selectable={false}
+                          style={{
+                            color: component.enabled ? "#e6f7fb" : "rgba(255, 255, 255, 0.66)",
+                            fontSize: 13,
+                            fontWeight: "800",
+                            textTransform: "capitalize",
+                          }}
+                        >
+                          {component.concept}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+              {subjectMaskDiagnostics?.attempts?.length ? (
+                <View
+                  style={{
+                    width: "100%",
+                    maxWidth: cropWidth,
+                    borderRadius: 14,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.2)",
+                    backgroundColor: "rgba(7, 11, 18, 0.72)",
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    gap: 8,
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 11, fontWeight: "900" }}>
+                      MASK DIAGNOSTICS
+                    </Text>
+                    <Text selectable={false} style={{ color: "rgba(230, 247, 251, 0.66)", fontSize: 11, fontWeight: "800" }}>
+                      {subjectMaskDiagnostics.provider ?? "provider"}
+                    </Text>
+                  </View>
+                  {subjectMaskDiagnostics.targetPrompt ? (
+                    <Text selectable style={{ color: "rgba(230, 247, 251, 0.72)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
+                      target: {subjectMaskDiagnostics.targetPrompt}
+                    </Text>
+                  ) : null}
+                  {subjectMaskDiagnostics.attempts.map((attempt, index) => {
+                    const summaryText = getSubjectMaskAttemptSummary(attempt.summary);
+                    const isSuccess = attempt.status === "success";
+
+                    return (
+                      <View
+                        key={`${attempt.endpointId}-${attempt.applyMask ? "preview" : "mask"}-${index}`}
+                        style={{
+                          borderRadius: 10,
+                          borderCurve: "continuous",
+                          borderWidth: 1,
+                          borderColor: isSuccess ? "rgba(92, 226, 157, 0.42)" : "rgba(255, 179, 171, 0.34)",
+                          backgroundColor: isSuccess ? "rgba(49, 184, 109, 0.12)" : "rgba(180, 35, 24, 0.14)",
+                          paddingHorizontal: 10,
+                          paddingVertical: 8,
+                          gap: 3,
+                        }}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <Text selectable style={{ flex: 1, color: "#ffffff", fontSize: 11, lineHeight: 15, fontWeight: "900" }}>
+                            {attempt.endpointId}
+                          </Text>
+                          <Text
+                            selectable={false}
+                            style={{
+                              color: isSuccess ? "#9ff0bd" : "#ffd4ce",
+                              fontSize: 10,
+                              fontWeight: "900",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {attempt.status}
+                          </Text>
+                        </View>
+                        <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.64)", fontSize: 10, lineHeight: 14, fontWeight: "800" }}>
+                          output: {getSubjectMaskAttemptMode(attempt.applyMask)}
+                        </Text>
+                        {attempt.error ? (
+                          <Text selectable style={{ color: "#ffd4ce", fontSize: 10, lineHeight: 14, fontWeight: "700" }}>
+                            {attempt.error}
+                          </Text>
+                        ) : null}
+                        {summaryText ? (
+                          <Text selectable style={{ color: "rgba(255, 255, 255, 0.58)", fontSize: 10, lineHeight: 14, fontWeight: "700" }}>
+                            {summaryText}
+                          </Text>
+                        ) : null}
+                      </View>
+                    );
+                  })}
                 </View>
               ) : null}
               <Pressable
@@ -15184,6 +15572,7 @@ function WeeklyFeaturedCardPreview({
     windowWidth >= 900 ? 360 :
     windowWidth >= 620 ? 320 :
     Math.min(300, Math.max(232, windowWidth - 96));
+  const previewAspectRatio = card ? getTypeFrameSpec(getPreviewTypeFrame(card.card)).aspectRatio : CARD_BACK_PREVIEW_ASPECT_RATIO;
 
   return (
     <View
@@ -15229,15 +15618,27 @@ function WeeklyFeaturedCardPreview({
         </View>
       ) : card ? (
         <View style={{ gap: 12, alignItems: "center" }}>
-          <CardPreview
-            card={card.card}
-            activeSection={null}
-            width={previewWidth}
-            cornerRadius={9}
-            footerOwnerName={card.authorName}
-            onSectionPress={noopCardPreviewHandler}
-            onChange={noopCardPreviewHandler}
-          />
+          {card.imageUrl ? (
+            <Image
+              source={{ uri: card.imageUrl }}
+              resizeMode="contain"
+              style={{
+                width: previewWidth,
+                height: previewWidth / previewAspectRatio,
+                borderRadius: 9,
+              }}
+            />
+          ) : (
+            <CardPreview
+              card={card.card}
+              activeSection={null}
+              width={previewWidth}
+              cornerRadius={9}
+              footerOwnerName={card.authorName}
+              onSectionPress={noopCardPreviewHandler}
+              onChange={noopCardPreviewHandler}
+            />
+          )}
           <View style={{ width: "100%", gap: 4 }}>
             <Text selectable={false} numberOfLines={1} style={{ color: "#ffffff", fontSize: 15, fontWeight: "900", textAlign: "center" }}>
               {card.name || "Untitled Card"}
@@ -16697,6 +17098,7 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
   const face = getEditableCardFace(entry.card);
   const cardName = face.name || "Untitled Card";
   const label = entry.typeLine || "Community card";
+  const cardAspectRatio = getTypeFrameSpec(getPreviewTypeFrame(entry.card)).aspectRatio;
 
   return (
     <View
@@ -16757,15 +17159,27 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
           paddingVertical: 12,
         }}
       >
-        <CardPreview
-          card={entry.card}
-          activeSection={null}
-          width={cardPreviewWidth}
-          cornerRadius={9}
-          footerOwnerName={entry.authorName}
-          onSectionPress={noopCardPreviewHandler}
-          onChange={noopCardPreviewHandler}
-        />
+        {entry.imageUrl ? (
+          <Image
+            source={{ uri: entry.imageUrl }}
+            resizeMode="contain"
+            style={{
+              width: cardPreviewWidth,
+              height: cardPreviewWidth / cardAspectRatio,
+              borderRadius: 9,
+            }}
+          />
+        ) : (
+          <CardPreview
+            card={entry.card}
+            activeSection={null}
+            width={cardPreviewWidth}
+            cornerRadius={9}
+            footerOwnerName={entry.authorName}
+            onSectionPress={noopCardPreviewHandler}
+            onChange={noopCardPreviewHandler}
+          />
+        )}
       </View>
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>

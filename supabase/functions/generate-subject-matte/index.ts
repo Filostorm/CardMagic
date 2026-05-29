@@ -1,9 +1,21 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
+type MaskEntry = {
+  url?: string;
+  image?: { url?: string };
+  mask?: { url?: string };
+};
+
 type FalImageResult = {
+  data?: unknown;
+  output?: unknown;
+  result?: unknown;
   image?: {
     url?: string;
   };
+  masks?: MaskEntry[];
+  individual_masks?: MaskEntry[];
+  combined_mask?: string | { url?: string };
   url?: string;
   error?: unknown;
   detail?: unknown;
@@ -19,6 +31,43 @@ type ReplicatePrediction = {
     get?: string;
   };
 };
+
+class FalNoMaskUrlError extends Error {
+  readonly summary: unknown;
+
+  constructor(message: string, summary: unknown) {
+    super(message);
+    this.name = "FalNoMaskUrlError";
+    this.summary = summary;
+  }
+}
+
+type FalSamAttemptFailure = {
+  endpointId: string;
+  applyMask: boolean;
+  error: string;
+  summary?: unknown;
+};
+
+type FalSamDiagnosticAttempt = FalSamAttemptFailure & {
+  status: "failed" | "success";
+};
+
+type FalSamDiagnostics = {
+  targetPrompt: string;
+  provider: "fal-sam";
+  attempts: FalSamDiagnosticAttempt[];
+};
+
+class FalSamSegmentationError extends Error {
+  readonly diagnostics: FalSamDiagnostics;
+
+  constructor(message: string, diagnostics: FalSamDiagnostics) {
+    super(message);
+    this.name = "FalSamSegmentationError";
+    this.diagnostics = diagnostics;
+  }
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,17 +85,41 @@ serve(async (request) => {
   }
 
   try {
-    const { imageDataUrl } = await request.json() as { imageDataUrl?: string };
+    const { imageDataUrl, targetPrompt } = await request.json() as {
+      imageDataUrl?: string;
+      targetPrompt?: string;
+    };
 
     if (!imageDataUrl?.startsWith("data:image/")) {
       return json({ error: "A data URL image is required." }, 400);
     }
 
+    const normalizedTargetPrompt = typeof targetPrompt === "string" ? targetPrompt.trim().slice(0, 160) : "";
+    console.log("[subject-matte] request received", {
+      hasImage: imageDataUrl.startsWith("data:image/"),
+      targetPrompt: normalizedTargetPrompt || "(foreground)",
+    });
     const falKey = Deno.env.get("FAL_KEY");
 
     if (falKey) {
+      if (normalizedTargetPrompt) {
+        const result = await segmentImageWithFalSam(imageDataUrl, normalizedTargetPrompt, falKey);
+        return json({
+          url: result.subjectMasks[0]?.url,
+          urls: result.subjectMasks.map((mask) => mask.url),
+          subjectMasks: result.subjectMasks,
+          provider: "fal-sam",
+          targetPrompt: normalizedTargetPrompt,
+          diagnostics: result.diagnostics,
+        });
+      }
+
       const url = await removeBackgroundWithFal(imageDataUrl, falKey);
       return json({ url, provider: "fal" });
+    }
+
+    if (normalizedTargetPrompt) {
+      return json({ error: "Configure FAL_KEY for prompted subject segmentation." }, 501);
     }
 
     const replicateToken = Deno.env.get("REPLICATE_API_TOKEN");
@@ -58,9 +131,298 @@ serve(async (request) => {
 
     return json({ error: "Configure FAL_KEY or REPLICATE_API_TOKEN for subject matte generation." }, 501);
   } catch (error) {
+    if (error instanceof FalSamSegmentationError) {
+      return json({ error: error.message, diagnostics: error.diagnostics }, 500);
+    }
+
     return json({ error: error instanceof Error ? error.message : "Subject matte generation failed." }, 500);
   }
 });
+
+async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string, key: string) {
+  // Mirror the background-removal path: a synchronous fal.run call that returns a
+  // prompted-subject cutout (apply_mask) — same shape as normal masking.
+  //
+  // SAM-3 concept segmentation matches a SINGLE concept per call, so a comma/
+  // semicolon-separated prompt like "arch, bow" matched nothing. Split it and try
+  // each concept; return the first that yields a mask.
+  const endpointId = "fal-ai/sam-3-1/image";
+  // SAM-3 grounds ONE concept per call, so split a comma/semicolon-separated
+  // prompt and segment each concept separately, then let the client union the
+  // cutouts. Sequential calls at max_masks:1 keep memory/time within the edge
+  // function's limit (the earlier 546 came from many large sync masks at once).
+  // Cap the concept count so a long prompt can't blow the budget.
+  const MAX_CONCEPTS = 4;
+  const concepts = targetPrompt
+    .split(/[,;]+/)
+    .map((concept) => concept.trim())
+    .filter(Boolean)
+    .slice(0, MAX_CONCEPTS);
+  const conceptList = concepts.length > 0 ? concepts : [targetPrompt.trim()];
+  const attempts: FalSamDiagnosticAttempt[] = [];
+  const subjectMasks: { concept: string; url: string }[] = [];
+
+  // Parallel: wall-clock collapses to the slowest single SAM inference instead of
+  // the sum. Safe because the client sends a downscaled image (small body), so
+  // concurrent uploads no longer trip the HTTP/2 stream error; fetchWithRetry
+  // covers any residual transport blip.
+  const settled = await Promise.allSettled(
+    conceptList.map((concept) => callFalSamSyncEndpoint(endpointId, imageDataUrl, concept, key)),
+  );
+
+  settled.forEach((outcome, index) => {
+    const concept = conceptList[index];
+    const label = conceptList.length > 1 ? `${endpointId} ["${concept}"]` : endpointId;
+
+    if (outcome.status === "fulfilled") {
+      subjectMasks.push({ concept, url: outcome.value });
+      attempts.push(getFalSamSuccess(label, true));
+    } else {
+      attempts.push(getFalSamAttemptFailure(label, true, outcome.reason));
+      console.warn(`fal SAM concept "${concept}" failed.`, getErrorMessage(outcome.reason));
+    }
+  });
+
+  if (subjectMasks.length > 0) {
+    return { subjectMasks, diagnostics: getFalSamDiagnostics(targetPrompt, attempts) };
+  }
+
+  console.warn("fal SAM prompted segmentation failed.", { targetPrompt, attempts });
+  const diagnostics = getFalSamDiagnostics(targetPrompt, attempts);
+  throw new FalSamSegmentationError(
+    `fal SAM prompted segmentation failed. ${formatFalSamAttemptFailures(attempts)}`,
+    diagnostics,
+  );
+}
+
+function getFalSamAttemptFailure(endpointId: string, applyMask: boolean, error: unknown): FalSamDiagnosticAttempt {
+  return {
+    endpointId,
+    applyMask,
+    status: "failed",
+    error: getErrorMessage(error),
+    summary: error instanceof FalNoMaskUrlError ? error.summary : undefined,
+  };
+}
+
+function getFalSamSuccess(endpointId: string, applyMask: boolean): FalSamDiagnosticAttempt {
+  return {
+    endpointId,
+    applyMask,
+    status: "success",
+    error: "",
+  };
+}
+
+function getFalSamDiagnostics(targetPrompt: string, attempts: FalSamDiagnosticAttempt[]): FalSamDiagnostics {
+  return {
+    targetPrompt,
+    provider: "fal-sam",
+    attempts,
+  };
+}
+
+function formatFalSamAttemptFailures(attempts: FalSamDiagnosticAttempt[]) {
+  return attempts
+    .filter((attempt) => attempt.status === "failed")
+    .map((attempt) => {
+      const mode = attempt.applyMask ? "masked preview" : "mask image";
+      return `${attempt.endpointId} (${mode}): ${attempt.error}`;
+    })
+    .join(" ");
+}
+
+// Retries transient transport failures (e.g. Deno HTTP/2 "unspecific protocol
+// error" while uploading a large body). Only network-level throws are retried —
+// an HTTP error response is returned as-is for the caller to handle.
+async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      lastError = error;
+      console.warn(`[subject-matte] transport error (attempt ${attempt + 1}/${attempts})`, getErrorMessage(error));
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function callFalSamSyncEndpoint(
+  endpointId: string,
+  imageDataUrl: string,
+  targetPrompt: string,
+  key: string,
+) {
+  console.log("[subject-matte] calling fal", { endpointId, targetPrompt });
+  const body = JSON.stringify({
+    image_url: imageDataUrl,
+    prompt: targetPrompt,
+    apply_mask: true,
+    output_format: "png",
+    sync_mode: true,
+    // Required for text/concept segmentation to actually emit masks; without
+    // it SAM-3.1 returns an empty masks array for valid prompts.
+    return_multiple_masks: true,
+    // 1 keeps the (sync_mode, base64-inlined) response small — multiple large
+    // masks contributed to the edge function hitting its memory limit.
+    max_masks: 1,
+  });
+  // Deno's HTTP/2 client intermittently aborts the large inline-image upload
+  // with "unspecific protocol error". Retry the transient transport failure.
+  const response = await fetchWithRetry(`https://fal.run/${endpointId}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${key}`,
+      "Content-Type": "application/json",
+    },
+    body,
+  });
+  const payload = await response.json().catch(() => ({})) as FalImageResult;
+  console.log("[subject-matte] fal responded", {
+    endpointId,
+    status: response.status,
+    ok: response.ok,
+    summary: summarizeFalPayload(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(getFalError(payload) || `${endpointId} failed with HTTP ${response.status}.`);
+  }
+
+  // Prefer the apply_mask cutout (image) so the result matches normal background
+  // removal; fall back to the first raw mask.
+  const cutoutUrl = isImageUrl(payload.image?.url) ? payload.image?.url ?? null : null;
+  const url = cutoutUrl ?? getFalImageResultUrl(payload);
+
+  if (!url) {
+    const summary = summarizeFalPayload(payload);
+    console.warn(`${endpointId} response did not contain a readable mask URL.`, summary);
+    const foundNothing = !(payload.masks?.length) && !isImageUrl(payload.image?.url);
+    throw new FalNoMaskUrlError(
+      foundNothing
+        ? `Couldn't find “${targetPrompt}” in this art — try a simpler or more literal subject word. (Payload: ${JSON.stringify(summary)})`
+        : `${endpointId} did not return a segmented mask URL. Payload shape: ${JSON.stringify(summary)}`,
+      summary,
+    );
+  }
+
+  console.log("[subject-matte] resolved mask url", { endpointId, urlPrefix: url.slice(0, 64) });
+  return url;
+}
+
+function getFalImageResultUrl(payload: unknown): string | null {
+  if (typeof payload === "string") {
+    return isImageUrl(payload) ? payload : null;
+  }
+
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const url = getFalImageResultUrl(item);
+
+      if (url) {
+        return url;
+      }
+    }
+
+    return null;
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const result = payload as FalImageResult;
+
+  // Mask arrays: each entry may expose the URL directly, or nested under
+  // image/mask (schema varies across SAM endpoints).
+  for (const maskList of [result.masks, result.individual_masks]) {
+    const maskUrl = findMaskEntryUrl(maskList);
+
+    if (maskUrl) {
+      return maskUrl;
+    }
+  }
+
+  // combined_mask may be a bare URL string or an { url } object.
+  if (isImageUrl(result.combined_mask)) {
+    return result.combined_mask;
+  }
+
+  if (
+    result.combined_mask &&
+    typeof result.combined_mask === "object" &&
+    isImageUrl(result.combined_mask.url)
+  ) {
+    return result.combined_mask.url;
+  }
+
+  for (const candidate of [result.image?.url, result.url]) {
+    if (isImageUrl(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const nested of [result.data, result.output, result.result]) {
+    const url = getFalImageResultUrl(nested);
+
+    if (url) {
+      return url;
+    }
+  }
+
+  return null;
+}
+
+function findMaskEntryUrl(masks: MaskEntry[] | undefined): string | null {
+  if (!Array.isArray(masks)) {
+    return null;
+  }
+
+  for (const mask of masks) {
+    if (!mask || typeof mask !== "object") {
+      continue;
+    }
+
+    for (const candidate of [mask.url, mask.image?.url, mask.mask?.url]) {
+      if (isImageUrl(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function isImageUrl(value: unknown): value is string {
+  return typeof value === "string" && (value.startsWith("http://") || value.startsWith("https://") || value.startsWith("data:image/"));
+}
+
+function summarizeFalPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return { type: typeof payload };
+  }
+
+  const record = payload as Record<string, unknown>;
+  return {
+    keys: Object.keys(record),
+    masksLength: Array.isArray(record.masks) ? record.masks.length : undefined,
+    individualMasksLength: Array.isArray(record.individual_masks) ? record.individual_masks.length : undefined,
+    combinedMaskType: Array.isArray(record.combined_mask) ? "array" : typeof record.combined_mask,
+    firstMaskKeys: Array.isArray(record.masks) && record.masks[0] && typeof record.masks[0] === "object"
+      ? Object.keys(record.masks[0] as Record<string, unknown>)
+      : undefined,
+    imageKeys: record.image && typeof record.image === "object" ? Object.keys(record.image as Record<string, unknown>) : undefined,
+    dataKeys: record.data && typeof record.data === "object" ? Object.keys(record.data as Record<string, unknown>) : undefined,
+    outputType: Array.isArray(record.output) ? "array" : typeof record.output,
+    resultKeys: record.result && typeof record.result === "object" ? Object.keys(record.result as Record<string, unknown>) : undefined,
+  };
+}
 
 async function removeBackgroundWithFal(imageDataUrl: string, key: string) {
   const briaEndpoint = "fal-ai/bria/background/remove";

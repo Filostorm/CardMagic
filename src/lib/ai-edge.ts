@@ -21,10 +21,40 @@ type AiRulesTextFunctionResponse = {
   error?: string;
 };
 
+export type SubjectMatteDiagnosticAttempt = {
+  endpointId: string;
+  applyMask: boolean;
+  status: "failed" | "success";
+  error?: string;
+  summary?: unknown;
+};
+
+export type SubjectMatteDiagnostics = {
+  targetPrompt?: string;
+  provider?: "fal-sam" | "fal" | "replicate";
+  attempts?: SubjectMatteDiagnosticAttempt[];
+};
+
 type SubjectMatteFunctionResponse = AiImageResult & {
-  provider?: "fal" | "replicate";
+  provider?: "fal" | "fal-sam" | "replicate";
+  // One cutout URL per matched concept (prompted multi-concept segmentation).
+  // The client unions these into a single matte.
+  urls?: string[];
+  // Per-concept cutouts, so the client can offer per-subject toggles.
+  subjectMasks?: { concept: string; url: string }[];
+  diagnostics?: SubjectMatteDiagnostics;
   error?: string;
 };
+
+export class SubjectMatteProviderError extends Error {
+  readonly diagnostics?: SubjectMatteDiagnostics;
+
+  constructor(message: string, diagnostics?: SubjectMatteDiagnostics) {
+    super(message);
+    this.name = "SubjectMatteProviderError";
+    this.diagnostics = diagnostics;
+  }
+}
 
 export async function generateAiImageViaEdge({
   prompt,
@@ -81,18 +111,12 @@ export async function generateAiImageEditViaEdge({
   throw new Error(data?.error ?? "OpenAI did not return edited image data.");
 }
 
-export async function generateAiSubjectMaskViaEdge(args: {
-  imageUri: string;
-  prompt: string;
-  size: AiImageGenerationOptions["size"];
-}) {
-  return generateAiImageEditViaEdge(args);
-}
-
 export async function generateSubjectMatteViaEdge({
   imageUri,
+  targetPrompt,
 }: {
   imageUri: string;
+  targetPrompt?: string;
 }) {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
@@ -106,15 +130,18 @@ export async function generateSubjectMatteViaEdge({
       authorization: `Bearer ${supabaseAnonKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ imageDataUrl }),
+    body: JSON.stringify({ imageDataUrl, targetPrompt }),
   });
   const data = await response.json().catch(() => null) as SubjectMatteFunctionResponse | null;
 
   if (!response.ok) {
-    throw new Error(data?.error ?? `Subject matte provider failed with HTTP ${response.status}.`);
+    throw new SubjectMatteProviderError(
+      data?.error ?? `Subject matte provider failed with HTTP ${response.status}.`,
+      data?.diagnostics,
+    );
   }
 
-  if (data?.b64Json || data?.url) {
+  if (data?.b64Json || data?.url || data?.urls?.length) {
     return data;
   }
 

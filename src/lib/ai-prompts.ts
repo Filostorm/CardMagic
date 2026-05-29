@@ -25,19 +25,6 @@ export type ArtGeneratorPromptOptions = {
   styleId?: ArtGeneratorStyleId;
 };
 
-export function buildSubjectMaskGeneratorPrompt(card: CardDraft) {
-  return [
-    "Create a tight foreground alpha mask for the provided trading-card artwork.",
-    "Return only a flat black-and-white PNG mask on the exact same canvas composition as the input image.",
-    "White pixels must mark only the main foreground character and foreground elements physically attached to or held by that character.",
-    "Black pixels must mark all background, scenery, atmosphere, sky, ground, architecture, distant figures, loose particles, broad spell effects, border areas, and empty negative space.",
-    "Keep the mask tight to the visible silhouette of the main subject; do not expand around glow, haze, shadows, or background motion.",
-    "Use hard-to-medium antialiased edges only; no gray shading except edge antialiasing.",
-    "Preserve small attached foreground details such as weapons, wings, horns, hair, clothing edges, and held objects.",
-    "Do not draw a new illustration. Do not add color. Do not add shadows. Do not include text, UI, borders, checkerboards, gradients, or labels.",
-  ].join("\n");
-}
-
 export const ART_GENERATOR_STYLE_PRESETS = [
   {
     id: "wash",

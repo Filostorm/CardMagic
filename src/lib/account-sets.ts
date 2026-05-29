@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseUrl } from "@/lib/supabase";
 import type { CardDraft } from "@/types/card";
 
 export type AccountCardSetPayload = {
@@ -123,6 +123,7 @@ export type PublishCommunityCardPayload = {
   userId: string;
   localSnapshotId?: string;
   card: CardDraft;
+  imageUrl?: string;
 };
 
 type CardSetRow = {
@@ -331,6 +332,7 @@ export async function publishCommunityCard({
   userId,
   localSnapshotId,
   card,
+  imageUrl,
 }: PublishCommunityCardPayload): Promise<void> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
@@ -347,7 +349,7 @@ export async function publishCommunityCard({
     rarity: card.rarity ?? null,
     colors: card.frameColors ?? [],
     frame_treatment: card.frameTreatment ?? null,
-    image_url: null,
+    image_url: imageUrl ?? null,
     card,
     visibility: "public",
   }, {
@@ -357,6 +359,32 @@ export async function publishCommunityCard({
   if (error) {
     throw new Error(error.message);
   }
+}
+
+export async function uploadCommunityCardImage(
+  userId: string,
+  cardId: string,
+  image: Blob | ArrayBuffer | Uint8Array,
+): Promise<string> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const safeCardId = cardId.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 160);
+  const path = `${userId}/${safeCardId || Date.now()}.png`;
+  const { error } = await supabase.storage
+    .from("community-card-images")
+    .upload(path, image, {
+      contentType: "image/png",
+      upsert: true,
+    });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const { data } = supabase.storage.from("community-card-images").getPublicUrl(path);
+  return data.publicUrl || `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/community-card-images/${path}`;
 }
 
 async function replaceLegacyRemoteCardSets(userId: string, sets: AccountCardSetPayload[]) {

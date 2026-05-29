@@ -1,0 +1,37 @@
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
+const duplicateSuffixPattern = / [2-9][0-9]*$/;
+const removals = [];
+
+removeMatchingChildren("node_modules", duplicateSuffixPattern);
+removeMatchingChildren(".expo", duplicateSuffixPattern);
+removeMatchingChildren(".git", /^index [2-9][0-9]*$/);
+removeMatchingChildren(".", /^dist-stuck-/);
+
+for (const path of removals) {
+  rmSync(path, { recursive: true, force: true });
+}
+
+if (removals.length === 0) {
+  console.log("Duplicate artifact guard: clean");
+} else {
+  console.log("Duplicate artifact guard removed:");
+  for (const path of removals) {
+    console.log(`- ${path}`);
+  }
+}
+
+function removeMatchingChildren(directory, pattern) {
+  if (!existsSync(directory)) {
+    return;
+  }
+
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!pattern.test(entry.name)) {
+      continue;
+    }
+
+    removals.push(join(directory, entry.name));
+  }
+}

@@ -103,6 +103,7 @@ export function CardBackPicker({
             <CardBackActionButton
               label="Generate back"
               accessibilityLabel="Generate card back"
+              variant="generate"
               onPress={onGenerateCardBack}
             >
               <Sparkles size={16} color="#ffffff" strokeWidth={2.5} />
@@ -112,9 +113,10 @@ export function CardBackPicker({
             <CardBackActionButton
               label="Upload back"
               accessibilityLabel="Upload custom card back"
+              variant="upload"
               onPress={onPickCustomCardBack}
             >
-              <ImagePlus size={16} color="#151820" strokeWidth={2.5} />
+              <ImagePlus size={16} color="#ffffff" strokeWidth={2.5} />
             </CardBackActionButton>
           ) : null}
         </View>
@@ -206,15 +208,17 @@ function CardBackChoice({
 function CardBackActionButton({
   accessibilityLabel,
   label,
+  variant,
   children,
   onPress,
 }: {
   accessibilityLabel: string;
   label: string;
+  variant: "generate" | "upload";
   children: ReactNode;
   onPress: () => void;
 }) {
-  const primary = label.startsWith("Generate");
+  const backgroundColor = variant === "generate" ? "#0b7180" : "#151820";
 
   return (
     <Pressable
@@ -226,9 +230,7 @@ function CardBackActionButton({
         minHeight: 42,
         borderRadius: 8,
         borderCurve: "continuous",
-        borderWidth: primary ? 0 : 1,
-        borderColor: "#d8dbe2",
-        backgroundColor: primary ? "#151820" : "#ffffff",
+        backgroundColor,
         alignItems: "center",
         justifyContent: "center",
         flexDirection: "row",
@@ -241,7 +243,7 @@ function CardBackActionButton({
         selectable={false}
         numberOfLines={1}
         style={{
-          color: primary ? "#ffffff" : "#151820",
+          color: "#ffffff",
           fontSize: 13,
           fontWeight: "900",
         }}

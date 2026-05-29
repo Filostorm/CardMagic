@@ -196,6 +196,7 @@ export type CardDraft = {
   backArtSubjectMaskUri?: string;
   backArtTransform?: ArtTransform;
   setSymbolPreset?: string;
+  setSymbolId?: string;
   setSymbolUri?: string;
   setSymbolUsesRarityTreatment?: boolean;
   watermarkPreset?: string;

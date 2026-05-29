@@ -70,6 +70,12 @@ export const SHOWCASE_FRAME_ORDER: ShowcaseFrameId[] = [
   "stellarSights",
 ];
 
+const HIDDEN_SHOWCASE_FRAME_IDS = new Set<ShowcaseFrameId>(["customShowcaseLab"]);
+
+export const VISIBLE_SHOWCASE_FRAME_ORDER: ShowcaseFrameId[] = SHOWCASE_FRAME_ORDER.filter(
+  (showcaseFrame) => !HIDDEN_SHOWCASE_FRAME_IDS.has(showcaseFrame),
+);
+
 export const SHOWCASE_FRAME_LABELS: Record<ShowcaseFrameId, string> = {
   eternalNight: "Eternal Night",
   scrolls: "Scroll Showcase",

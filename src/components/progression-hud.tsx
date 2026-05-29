@@ -794,11 +794,6 @@ export function CreditStoreModal({
                 <X size={19} color="#ffffff" strokeWidth={2.7} />
               </Pressable>
             </View>
-
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <StoreMetric label="Available" value={profile.credits} icon={<Zap size={17} color="#72e6ff" />} />
-              <StoreMetric label="XP" value={profile.lifetimeXpEarned} icon={<Trophy size={17} color="#f6d26f" />} />
-            </View>
           </LinearGradient>
 
           <ScrollView
@@ -808,6 +803,35 @@ export function CreditStoreModal({
               gap: 14,
             }}
           >
+            <View
+              style={{
+                borderRadius: 14,
+                borderCurve: "continuous",
+                backgroundColor: "#ffffff",
+                borderWidth: 1,
+                borderColor: "#d9dde5",
+                padding: 12,
+                gap: 7,
+              }}
+            >
+              <Text
+                selectable={false}
+                style={{ color: "#4b5563", fontSize: 10.5, lineHeight: 16, fontWeight: "800" }}
+              >
+                Credits, subscriptions, and generated assets are digital-only content. Purchases are non-refundable.
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <Text selectable={false} style={{ color: "#66707c", fontSize: 10.5, fontWeight: "800" }}>
+                  By purchasing, you agree to
+                </Text>
+                <LegalLink label="Terms of Service" url={CARDMAGIC_TERMS_URL} />
+                <Text selectable={false} style={{ color: "#9aa3af", fontSize: 10, fontWeight: "900" }}>
+                  -
+                </Text>
+                <LegalLink label="EULA" url={CARDMAGIC_EULA_URL} />
+              </View>
+            </View>
+
             <View style={{ gap: 9 }}>
               <SectionLabel title="Credit Code" />
               <View
@@ -965,34 +989,95 @@ export function CreditStoreModal({
                 end={{ x: 1, y: 1 }}
                 style={{ padding: 15, gap: 10, borderRadius: 16, borderCurve: "continuous" }}
               >
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View
+                  style={{
+                    flexDirection: width < 430 ? "column" : "row",
+                    alignItems: width < 430 ? "stretch" : "center",
+                    gap: width < 430 ? 12 : 14,
+                  }}
+                >
+                  <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 11 }}>
+                    <View
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 19,
+                        backgroundColor: "rgba(255, 255, 255, 0.16)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      {profile.subscribedMonthly ? (
+                        <CheckCircle2 size={20} color="#baf7d0" strokeWidth={2.7} />
+                      ) : (
+                        <Crown size={20} color="#ffe08a" strokeWidth={2.7} />
+                      )}
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                      <Text selectable={false} numberOfLines={1} style={{ color: "#ffffff", fontSize: 17, fontWeight: "900" }}>
+                        {profile.subscribedMonthly ? "Creator Pass Active" : "Creator Pass"}
+                      </Text>
+                      <Text
+                        selectable={false}
+                        numberOfLines={2}
+                        style={{ color: "rgba(255,255,255,0.74)", fontSize: 12, lineHeight: 16, fontWeight: "800" }}
+                      >
+                        Monthly creator credits for art, masks, rules cleanup, and set symbols.
+                      </Text>
+                    </View>
+                  </View>
+
                   <View
                     style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 19,
-                      backgroundColor: "rgba(255, 255, 255, 0.16)",
-                      alignItems: "center",
-                      justifyContent: "center",
+                      minWidth: width < 430 ? "100%" : 158,
+                      alignItems: width < 430 ? "stretch" : "flex-end",
+                      gap: 8,
                     }}
                   >
-                    {profile.subscribedMonthly ? (
-                      <CheckCircle2 size={20} color="#baf7d0" strokeWidth={2.7} />
-                    ) : (
-                      <Crown size={20} color="#ffe08a" strokeWidth={2.7} />
-                    )}
+                    <View style={{ alignItems: width < 430 ? "flex-start" : "flex-end", gap: 2 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                        <Zap size={22} color="#72e6ff" strokeWidth={2.8} />
+                        <Text
+                          selectable={false}
+                          numberOfLines={1}
+                          style={{ color: "#ffffff", fontSize: 25, lineHeight: 29, fontWeight: "900" }}
+                        >
+                          {MONTHLY_SUBSCRIPTION_PRODUCT.credits} monthly
+                        </Text>
+                      </View>
+                      <Text selectable={false} numberOfLines={1} style={{ color: "rgba(255,255,255,0.76)", fontSize: 11.5, fontWeight: "900" }}>
+                        + {MONTHLY_SUBSCRIPTION_PRODUCT.bonusXp} XP
+                      </Text>
+                    </View>
+                    <View
+                      style={{
+                        minHeight: 38,
+                        borderRadius: 19,
+                        backgroundColor: profile.subscribedMonthly ? "rgba(186, 247, 208, 0.18)" : "#111820",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        paddingHorizontal: 15,
+                        alignSelf: width < 430 ? "stretch" : "flex-end",
+                        minWidth: width < 430 ? undefined : 118,
+                        flexDirection: "row",
+                        gap: 8,
+                      }}
+                    >
+                      {checkoutBusyProductId === "monthly" ? <ActivityIndicator color="#ffffff" /> : null}
+                      <Text
+                        selectable={false}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        style={{ color: "#ffffff", fontSize: 13.5, fontWeight: "900" }}
+                      >
+                        {checkoutBusyProductId === "monthly"
+                          ? "Opening..."
+                          : profile.subscribedMonthly
+                            ? "Active"
+                            : MONTHLY_SUBSCRIPTION_PRODUCT.priceLabel}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text selectable={false} numberOfLines={1} style={{ color: "#ffffff", fontSize: 17, fontWeight: "900" }}>
-                      {profile.subscribedMonthly ? "Creator Pass Active" : "Creator Pass"}
-                    </Text>
-                    <Text selectable={false} style={{ color: "rgba(255,255,255,0.74)", fontSize: 12, fontWeight: "800" }}>
-	                      {checkoutBusyProductId === "monthly"
-	                        ? "Opening Stripe..."
-	                        : `${MONTHLY_SUBSCRIPTION_PRODUCT.credits} credits each month - ${MONTHLY_SUBSCRIPTION_PRODUCT.priceLabel} - +${MONTHLY_SUBSCRIPTION_PRODUCT.bonusXp} XP`}
-                    </Text>
-                  </View>
-                  {checkoutBusyProductId === "monthly" ? <ActivityIndicator color="#ffffff" /> : null}
                 </View>
               </LinearGradient>
             </Pressable>
@@ -1036,26 +1121,6 @@ export function CreditStoreModal({
               </View>
             </View>
 
-            <View
-              style={{
-                alignItems: "center",
-                gap: 7,
-                paddingTop: 2,
-                paddingBottom: 4,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#808894", fontSize: 10, lineHeight: 14, fontWeight: "800", textAlign: "center" }}>
-                Purchases are subject to CardMagic legal terms.
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 }}>
-                <LegalLink label="Terms of Service" url={CARDMAGIC_TERMS_URL} />
-                <Text selectable={false} style={{ color: "#a5abb5", fontSize: 10, fontWeight: "900" }}>
-                  -
-                </Text>
-                <LegalLink label="EULA" url={CARDMAGIC_EULA_URL} />
-              </View>
-            </View>
-
           </ScrollView>
         </View>
       </View>
@@ -1063,7 +1128,7 @@ export function CreditStoreModal({
   );
 }
 
-function LegalLink({ label, url }: { label: string; url: string }) {
+function LegalLink({ label, url, color = "#0b7180" }: { label: string; url: string; color?: string }) {
   return (
     <Pressable
       accessibilityRole="link"
@@ -1071,7 +1136,7 @@ function LegalLink({ label, url }: { label: string; url: string }) {
       onPress={() => void Linking.openURL(url)}
       hitSlop={8}
     >
-      <Text selectable={false} style={{ color: "#0b7180", fontSize: 11, fontWeight: "900", textDecorationLine: "underline" }}>
+      <Text selectable={false} style={{ color, fontSize: 11, fontWeight: "900", textDecorationLine: "underline" }}>
         {label}
       </Text>
     </Pressable>
@@ -1099,14 +1164,17 @@ function StoreMetric({ label, value, icon }: { label: string; value: number; ico
           {label}
         </Text>
       </View>
-      <Text
-        selectable={false}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        style={{ color: "#ffffff", fontSize: 18, fontWeight: "900", fontVariant: ["tabular-nums"] }}
-      >
-        {value}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Zap size={18} color="#72e6ff" strokeWidth={2.8} />
+        <Text
+          selectable={false}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          style={{ color: "#ffffff", fontSize: 18, fontWeight: "900", fontVariant: ["tabular-nums"] }}
+        >
+          {value}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -1132,7 +1200,7 @@ function CreditPackPurchaseRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Buy ${pack.label}, ${pack.credits} credits, one-time purchase`}
+      accessibilityLabel={`Buy ${pack.label}, ${pack.credits} credits`}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
@@ -1178,7 +1246,6 @@ function CreditPackPurchaseRow({
               <Text selectable={false} numberOfLines={1} style={{ color: "#111820", fontSize: 15.5, fontWeight: "900" }}>
                 {pack.label}
               </Text>
-              <OneTimeBadge />
             </View>
             <Text selectable={false} numberOfLines={2} style={{ color: "#66707c", fontSize: 11.5, lineHeight: 16, fontWeight: "800" }}>
               Consumable credits for art, masks, rules cleanup, and set symbols.
@@ -1194,11 +1261,14 @@ function CreditPackPurchaseRow({
           }}
         >
           <View style={{ alignItems: compact ? "flex-start" : "flex-end", gap: 2 }}>
-            <Text selectable={false} numberOfLines={1} style={{ color: "#111820", fontSize: 25, lineHeight: 29, fontWeight: "900" }}>
-              {pack.credits}
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+              <Zap size={22} color={presentation.accent} strokeWidth={2.8} />
+              <Text selectable={false} numberOfLines={1} style={{ color: "#111820", fontSize: 25, lineHeight: 29, fontWeight: "900" }}>
+                {pack.credits}
+              </Text>
+            </View>
             <Text selectable={false} numberOfLines={1} style={{ color: "#4e5967", fontSize: 11.5, fontWeight: "900" }}>
-              credits + {pack.bonusXp} XP
+               + {pack.bonusXp} XP
             </Text>
           </View>
           <View
@@ -1222,34 +1292,12 @@ function CreditPackPurchaseRow({
               adjustsFontSizeToFit
               style={{ color: busy ? presentation.accent : "#ffffff", fontSize: 13.5, fontWeight: "900" }}
             >
-              {busy ? "Opening..." : `Buy once ${pack.priceLabel}`}
+              {busy ? "Opening..." : `${pack.priceLabel}`}
             </Text>
           </View>
         </View>
       </View>
     </Pressable>
-  );
-}
-
-function OneTimeBadge() {
-  return (
-    <View
-      style={{
-        minHeight: 22,
-        borderRadius: 11,
-        borderCurve: "continuous",
-        borderWidth: 1,
-        borderColor: "#cce7ed",
-        backgroundColor: "#eef8fb",
-        paddingHorizontal: 8,
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <Text selectable={false} numberOfLines={1} style={{ color: "#0b7180", fontSize: 10.5, fontWeight: "900" }}>
-        One-time
-      </Text>
-    </View>
   );
 }
 

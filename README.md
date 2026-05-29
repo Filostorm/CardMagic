@@ -2,7 +2,8 @@
 
 CardMagic is an Expo/React Native Magic-style card creator for web and native builds. It combines a structured card editor, MSE-derived frame rendering, image generation/upload workflows, set management, account sync, and export tools for making custom proxy cards.
 
-Production app: https://cardmagic.expo.app
+Production app: https://cardmagic.craftsmannsoftware.com
+Beta app: https://beta.cardmagic-5dy.pages.dev
 
 ## Features
 

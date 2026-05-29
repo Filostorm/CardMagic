@@ -3,8 +3,9 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
-import { ArrowDown, ArrowUp, BookOpen, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, Users, X } from "lucide-react-native";
-import { Component, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, BookOpen, Bug, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, Users, X } from "lucide-react-native";
+import { Component, memo, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +16,9 @@ import {
   Linking,
   type LayoutChangeEvent,
   Modal,
+  type NativeScrollEvent,
   NativeModules,
+  type NativeSyntheticEvent,
   Platform,
   type PointerEvent,
   Pressable,
@@ -48,6 +51,7 @@ import {
   getVisibleArtAspectRatioForCard,
   getVisibleArtRectForCard,
 } from "@/components/card-preview";
+import { waitForFlattenedFrameComposites } from "@/lib/export-flatten";
 import { EditorField } from "@/components/editor-field";
 import { HybridSymbolStyleProvider } from "@/components/hybrid-symbol-style-context";
 import {
@@ -68,7 +72,13 @@ import {
   getMseM15FrameTreatmentSource,
   getMseM15MainframeSource,
 } from "@/data/mse-frame-renderer";
-import { DEFAULT_SHOWCASE_FRAME, SHOWCASE_FRAME_LABELS, SHOWCASE_FRAME_ORDER, SHOWCASE_FRAMES } from "@/data/showcase-frames";
+import {
+  DEFAULT_SHOWCASE_FRAME,
+  SHOWCASE_FRAME_LABELS,
+  SHOWCASE_FRAME_ORDER,
+  SHOWCASE_FRAMES,
+  VISIBLE_SHOWCASE_FRAME_ORDER,
+} from "@/data/showcase-frames";
 import { INITIAL_CARD } from "@/data/sample-card";
 import {
   ART_GENERATOR_STYLE_OPTIONS,
@@ -81,11 +91,40 @@ import {
   getDefaultArtGeneratorRequest,
 } from "@/lib/ai-prompts";
 import {
+  fetchAccountProfile,
+  type AccountProfile,
+} from "@/lib/account-profile";
+import {
   fetchCommunityCards,
+  fetchCommunityCardComments,
+  fetchCommunityFeaturedCard,
+  fetchCommunityPolls,
+  fetchCommunitySets,
+  fetchRemoteCustomSetSymbols,
   fetchRemoteCardSets,
+  markCommunityCardsSeen,
+  createCommunityPoll,
+  publishCommunityCard,
+  replaceRemoteCustomSetSymbols,
   replaceRemoteCardSets,
+  saveCommunityCardComment,
+  setCommunityPollStatus,
+  submitCommunityFeedback,
+  submitCommunityPollVote,
+  toggleCommunityCardLike,
+  toggleCommunityUserFollow,
+  updateCommunityDisplayName,
+  uploadCommunityFeedbackScreenshot,
   type AccountCardSetPayload,
+  type AccountCustomSetSymbolPayload,
+  type CommunityCardFeedSort,
+  type CommunityCardPagePayload,
+  type CommunityCardCommentPayload,
   type CommunityCardPayload,
+  type CommunityFeedbackType,
+  type CommunityPollPayload,
+  type CommunityPollSelectionType,
+  type CommunitySetPayload,
 } from "@/lib/account-sets";
 import {
   fixRulesTextViaEdge,
@@ -126,6 +165,7 @@ import {
   applyProgressEvent,
   canSpendCredits,
   createDefaultUserProgress,
+  CREDIT_SPEND_COSTS,
   getXpLevelState,
   grantPromotionalCredits,
   normalizeUserProgressProfile,
@@ -185,6 +225,7 @@ type CardSet = {
   code: string;
   cardBackId?: CardBackId;
   setSymbolPreset?: string;
+  setSymbolId?: string;
   setSymbolUri?: string;
   setSymbolUsesRarityTreatment?: boolean;
   cards: SetCardSnapshot[];
@@ -252,6 +293,47 @@ function useMobileWebInputZoomGuard() {
       }
     };
   }, []);
+}
+
+function useMobileBrowserBottomInset(viewportWidth: number) {
+  const [bottomInset, setBottomInset] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      setBottomInset(0);
+      return;
+    }
+
+    const visualViewport = window.visualViewport;
+    const isCompactViewport = viewportWidth <= 700;
+    const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+    const isMobileBrowser = /\b(iPhone|iPod|Android|Mobile)\b/i.test(userAgent);
+    const fallbackInset = isCompactViewport && isMobileBrowser ? 6 : 0;
+
+    const updateInset = () => {
+      const measuredInset = visualViewport
+        ? Math.max(0, window.innerHeight - visualViewport.height - visualViewport.offsetTop)
+        : 0;
+      const nextInset = Math.min(12, Math.round(Math.max(measuredInset * 0.12, fallbackInset)));
+
+      setBottomInset((current) => (current === nextInset ? current : nextInset));
+    };
+
+    updateInset();
+    visualViewport?.addEventListener("resize", updateInset);
+    visualViewport?.addEventListener("scroll", updateInset);
+    window.addEventListener("resize", updateInset);
+    window.addEventListener("orientationchange", updateInset);
+
+    return () => {
+      visualViewport?.removeEventListener("resize", updateInset);
+      visualViewport?.removeEventListener("scroll", updateInset);
+      window.removeEventListener("resize", updateInset);
+      window.removeEventListener("orientationchange", updateInset);
+    };
+  }, [viewportWidth]);
+
+  return bottomInset;
 }
 
 function useWebTextSelectionGuard() {
@@ -350,6 +432,12 @@ type FlatCardExportTarget =
   | {
       kind: "card";
       card: CardDraft;
+      footerOwnerName?: string;
+      artImageAspectRatio?: number | null;
+      // Flatten masked layers (borderless pinline, rarity set symbol) into plain
+      // raster images via offscreen canvas so the html2canvas capture renders
+      // them faithfully. Set for web exports.
+      flattenMasksExport?: boolean;
     }
   | {
       kind: "back";
@@ -379,6 +467,39 @@ type AuthToastState = {
   id: string;
   message: string;
 };
+
+type DeletedSetTombstone = {
+  id: string;
+  deletedAt: string;
+};
+
+type DeletedCardTombstone = {
+  setId: string;
+  cardId: string;
+  deletedAt: string;
+};
+
+type DeletionTombstones = {
+  sets: DeletedSetTombstone[];
+  cards: DeletedCardTombstone[];
+};
+
+type DeleteUndoState =
+  | {
+      id: string;
+      kind: "card";
+      message: string;
+      setId: string;
+      snapshot: SetCardSnapshot;
+      index: number;
+    }
+  | {
+      id: string;
+      kind: "set";
+      message: string;
+      set: CardSet;
+      index: number;
+    };
 
 type WebFileSystemWritableFileStream = {
   write: (data: Blob) => Promise<void>;
@@ -417,6 +538,7 @@ const CARD_ART_MAX_DIMENSION = 1280;
 const CARD_BACK_MAX_DIMENSION = 1536;
 const AUXILIARY_IMAGE_MAX_DIMENSION = 512;
 const CARD_SET_STORAGE_KEY = "cardmagic.savedSets.v1";
+const DELETION_TOMBSTONE_STORAGE_KEY = "cardmagic.deletionTombstones.v1";
 const ACTIVE_CARD_STORAGE_KEY = "cardmagic.activeCard.v1";
 const FRAME_TEMPLATE_STORAGE_KEY = "cardmagic.frameTemplates.v1";
 const ART_LIBRARY_STORAGE_KEY = "cardmagic.artLibrary.v1";
@@ -455,9 +577,17 @@ const PREVIEW_ACTION_BUTTON_GAP = 10;
 const PREVIEW_ACTION_TOOLBAR_PADDING = 7;
 const PREVIEW_ACTION_HORIZONTAL_GAP = 8;
 const PREVIEW_ACTION_GRABBER_SIZE = 22;
+const PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN = 10;
+const PREVIEW_FLOATING_TOOLBAR_CARD_GAP_RESERVE = 18;
+const PREVIEW_FLOATING_TOOLBAR_Z_INDEX = 12;
+const PREVIEW_FLOATING_TOOLBAR_MENU_Z_INDEX = 24;
 const EDIT_TAB_VERTICAL_CHROME_HEIGHT = 98;
-const BOTTOM_TAB_BAR_HEIGHT = 68;
+const BOTTOM_TAB_BAR_HEIGHT = 62;
 const DEFAULT_ART_TRANSFORM: ArtTransform = { offsetX: 0, offsetY: 0, scale: 1 };
+// Shared stable no-op for read-only CardPreview renders (thumbnails, exports).
+// A module-level reference lets the memoized CardPreview skip re-rendering when
+// its host re-renders, instead of receiving a fresh `() => undefined` each time.
+const noopCardPreviewHandler = () => undefined;
 const CARD_BACK_PREVIEW_ASPECT_RATIO = 375 / 523;
 const ART_ADJUSTMENT_CROP_RADIUS = 6;
 const ART_LIBRARY_MAX_ENTRIES = 96;
@@ -472,13 +602,13 @@ const ART_IMAGE_QUALITY_OPTIONS = [
   {
     value: "medium",
     label: "Medium",
-    detail: "12 credits",
+    detail: `${CREDIT_SPEND_COSTS.artImage} credits`,
     spendCategory: "artImage",
   },
   {
     value: "high",
     label: "High",
-    detail: "20 credits",
+    detail: `${CREDIT_SPEND_COSTS.artImageHigh} credits`,
     spendCategory: "artImageHigh",
   },
 ] as const;
@@ -905,9 +1035,47 @@ async function normalizePickedImage(
   }
 }
 
-async function openStripeCheckoutUrl(checkoutUrl: string) {
+function createPendingStripeCheckoutPopup() {
+  if (Platform.OS !== "web" || typeof window === "undefined") {
+    return null;
+  }
+
+  const popup = window.open("", "_blank", "popup,width=520,height=760");
+
+  if (!popup) {
+    return null;
+  }
+
+  popup.opener = null;
+  popup.document.title = "Opening Stripe Checkout";
+  popup.document.body.style.margin = "0";
+  popup.document.body.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+  popup.document.body.style.background = "#f7f8fb";
+  popup.document.body.innerHTML = `
+    <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;color:#111820;">
+      <section style="max-width:320px;text-align:center;">
+        <div style="width:42px;height:42px;border-radius:21px;background:#111820;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:900;margin-bottom:14px;">CM</div>
+        <h1 style="font-size:20px;line-height:1.2;margin:0 0 8px;font-weight:900;">Opening Stripe Checkout</h1>
+        <p style="font-size:14px;line-height:1.45;margin:0;color:#5f6570;font-weight:700;">CardMagic is creating a secure checkout session.</p>
+      </section>
+    </main>
+  `;
+  popup.focus();
+
+  return popup;
+}
+
+async function openStripeCheckoutUrl(checkoutUrl: string, popup?: Window | null) {
   if (Platform.OS === "web" && typeof window !== "undefined") {
-    window.location.assign(checkoutUrl);
+    const checkoutWindow = popup && !popup.closed ? popup : window.open(checkoutUrl, "_blank", "popup,width=520,height=760");
+
+    if (!checkoutWindow) {
+      throw new Error("Safari blocked the Stripe Checkout popup. Allow pop-ups for CardMagic and try again.");
+    }
+
+    checkoutWindow.opener = null;
+    checkoutWindow.location.href = checkoutUrl;
+    checkoutWindow.focus();
     return;
   }
 
@@ -1707,8 +1875,10 @@ function getFrameTreatmentPreviewSource(treatment: FrameTreatment, frameIdentity
   return getMseM15FrameTreatmentSource(treatment, frameIdentity) ?? getMseM15MainframeSource(frameIdentity);
 }
 
+const DEFAULT_MAIN_SET_NAME = "Main Set";
+
 function createDefaultCardSets(): CardSet[] {
-  return [createDefaultCardSet("Main Set", DEFAULT_MAIN_SET_ID)];
+  return [createDefaultCardSet(DEFAULT_MAIN_SET_NAME, DEFAULT_MAIN_SET_ID)];
 }
 
 const DEFAULT_MAIN_SET_ID = createUuid();
@@ -1802,12 +1972,17 @@ function getSetSymbolDefaultsPatch(set?: CardSet): Partial<CardDraft> {
 
   const patch: Partial<CardDraft> = {
     setSymbolPreset: SET_SYMBOL_PRESETS[0].id,
+    setSymbolId: undefined,
     setSymbolUri: undefined,
     setSymbolUsesRarityTreatment: undefined,
   };
 
   if (typeof set.setSymbolPreset === "string") {
     patch.setSymbolPreset = set.setSymbolPreset;
+  }
+
+  if (typeof set.setSymbolId === "string") {
+    patch.setSymbolId = set.setSymbolId;
   }
 
   if (typeof set.setSymbolUri === "string") {
@@ -1853,6 +2028,45 @@ function withResolvedSetSymbol(card: CardDraft, set?: CardSet): CardDraft {
 
 function withResolvedSetDefaults(card: CardDraft, set?: CardSet): CardDraft {
   return withResolvedSetCode(withResolvedCardBack(withResolvedSetSymbol(card, set), set), set);
+}
+
+function normalizeCardDuplicateField(value: string | undefined) {
+  return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getCardDuplicateSignature(card: CardDraft) {
+  return [
+    normalizeCardDuplicateField(card.name),
+    normalizeCardDuplicateField(card.manaCost),
+    normalizeCardDuplicateField(card.typeLine),
+    normalizeCardDuplicateField(card.rulesText),
+    normalizeCardDuplicateField(card.power),
+    normalizeCardDuplicateField(card.toughness),
+    normalizeCardDuplicateField(card.frameTreatment),
+    normalizeCardDuplicateField(card.typeFrame),
+  ].join("|");
+}
+
+function findDuplicateSetCardSnapshot(
+  set: CardSet | undefined,
+  card: CardDraft,
+  excludedSnapshotId: string | null,
+) {
+  if (!set) {
+    return null;
+  }
+
+  const duplicateSignature = getCardDuplicateSignature(withResolvedSetDefaults(card, set));
+
+  return (
+    set.cards.find((snapshot) => {
+      if (snapshot.id === excludedSnapshotId) {
+        return false;
+      }
+
+      return getCardDuplicateSignature(snapshot.card) === duplicateSignature;
+    }) ?? null
+  );
 }
 
 function saveCardDraftIntoSet(
@@ -1955,7 +2169,7 @@ function getSetNumberedPreviewCard(
 }
 
 function normalizeCardSets(sets: CardSet[]): CardSet[] {
-  return sets.map(normalizeCardSet);
+  return coalesceDuplicateDefaultMainSets(sets.map(normalizeCardSet));
 }
 
 function normalizeCardSet(set: CardSet): CardSet {
@@ -1970,6 +2184,7 @@ function normalizeCardSet(set: CardSet): CardSet {
     code,
     cardBackId: rawSet.cardBackId ?? DEFAULT_CARD_BACK_ID,
     setSymbolPreset: typeof rawSet.setSymbolPreset === "string" ? rawSet.setSymbolPreset : SET_SYMBOL_PRESETS[0].id,
+    setSymbolId: typeof rawSet.setSymbolId === "string" ? rawSet.setSymbolId : undefined,
     setSymbolUri: typeof rawSet.setSymbolUri === "string" ? rawSet.setSymbolUri : undefined,
     setSymbolUsesRarityTreatment:
       typeof rawSet.setSymbolUsesRarityTreatment === "boolean"
@@ -1977,6 +2192,97 @@ function normalizeCardSet(set: CardSet): CardSet {
         : undefined,
     cards: normalizeSetCardOrder(Array.isArray(rawSet.cards) ? rawSet.cards : [], code),
   };
+}
+
+function getSetNameKey(name: string) {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isDefaultMainSetName(name: string) {
+  return getSetNameKey(name) === getSetNameKey(DEFAULT_MAIN_SET_NAME);
+}
+
+function getSetMergeScore(set: CardSet) {
+  return (
+    set.cards.length * 10 +
+    (set.cardBackId && set.cardBackId !== DEFAULT_CARD_BACK_ID ? 2 : 0) +
+    (set.setSymbolId || set.setSymbolUri ? 2 : 0) +
+    (set.setSymbolPreset && set.setSymbolPreset !== SET_SYMBOL_PRESETS[0].id ? 1 : 0)
+  );
+}
+
+function mergeSetCardSnapshots(first: SetCardSnapshot[], second: SetCardSnapshot[], setCode: string) {
+  const snapshotsById = new Map<string, SetCardSnapshot>();
+
+  for (const snapshot of [...first, ...second]) {
+    const existing = snapshotsById.get(snapshot.id);
+    const snapshotTime = new Date(snapshot.savedAt).getTime();
+    const existingTime = existing ? new Date(existing.savedAt).getTime() : Number.NEGATIVE_INFINITY;
+
+    if (!existing || snapshotTime >= existingTime) {
+      snapshotsById.set(snapshot.id, snapshot);
+    }
+  }
+
+  return normalizeSetCardOrder(Array.from(snapshotsById.values()), setCode);
+}
+
+function mergeCardSetsByDefaultIdentity(first: CardSet, second: CardSet): CardSet {
+  const preferred = getSetMergeScore(second) > getSetMergeScore(first) ? second : first;
+  const fallback = preferred === first ? second : first;
+  const code = normalizeSetCode(preferred.code, preferred.name);
+
+  return normalizeCardSet({
+    ...preferred,
+    cardBackId:
+      preferred.cardBackId && preferred.cardBackId !== DEFAULT_CARD_BACK_ID
+        ? preferred.cardBackId
+        : fallback.cardBackId ?? preferred.cardBackId,
+    setSymbolPreset:
+      preferred.setSymbolPreset && preferred.setSymbolPreset !== SET_SYMBOL_PRESETS[0].id
+        ? preferred.setSymbolPreset
+        : fallback.setSymbolPreset ?? preferred.setSymbolPreset,
+    setSymbolId: preferred.setSymbolId ?? fallback.setSymbolId,
+    setSymbolUri: preferred.setSymbolUri ?? fallback.setSymbolUri,
+    setSymbolUsesRarityTreatment:
+      preferred.setSymbolUsesRarityTreatment ?? fallback.setSymbolUsesRarityTreatment,
+    cards: mergeSetCardSnapshots(first.cards, second.cards, code),
+  });
+}
+
+function coalesceDuplicateDefaultMainSets(sets: CardSet[]): CardSet[] {
+  let canonicalMainSet: CardSet | null = null;
+  const coalescedSets: CardSet[] = [];
+
+  for (const set of sets) {
+    if (!isDefaultMainSetName(set.name)) {
+      coalescedSets.push(set);
+      continue;
+    }
+
+    if (!canonicalMainSet) {
+      canonicalMainSet = set;
+      coalescedSets.push(canonicalMainSet);
+      continue;
+    }
+
+    canonicalMainSet = mergeCardSetsByDefaultIdentity(canonicalMainSet, set);
+    const canonicalIndex = coalescedSets.findIndex((candidate) => candidate.id === canonicalMainSet?.id);
+
+    if (canonicalIndex >= 0) {
+      coalescedSets[canonicalIndex] = canonicalMainSet;
+    } else {
+      const previousMainIndex = coalescedSets.findIndex((candidate) => isDefaultMainSetName(candidate.name));
+
+      if (previousMainIndex >= 0) {
+        coalescedSets[previousMainIndex] = canonicalMainSet;
+      } else {
+        coalescedSets.push(canonicalMainSet);
+      }
+    }
+  }
+
+  return coalescedSets;
 }
 
 type StoredCardSetsRepairResult = {
@@ -2114,6 +2420,137 @@ function mergeAccountCardSets(localSets: CardSet[], remoteSets: CardSet[]): Card
   return normalizeCardSets(mergedSets.length > 0 ? mergedSets : createDefaultCardSets());
 }
 
+function createEmptyDeletionTombstones(): DeletionTombstones {
+  return { sets: [], cards: [] };
+}
+
+function normalizeDeletionTombstones(value: unknown): DeletionTombstones {
+  if (!value || typeof value !== "object") {
+    return createEmptyDeletionTombstones();
+  }
+
+  const candidate = value as Partial<DeletionTombstones>;
+  const seenSetIds = new Set<string>();
+  const seenCardKeys = new Set<string>();
+  const sets = Array.isArray(candidate.sets)
+    ? candidate.sets.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return [];
+        }
+
+        const record = entry as Partial<DeletedSetTombstone>;
+        const id = typeof record.id === "string" ? record.id : "";
+
+        if (!id || seenSetIds.has(id)) {
+          return [];
+        }
+
+        seenSetIds.add(id);
+
+        return [{
+          id,
+          deletedAt: typeof record.deletedAt === "string" ? record.deletedAt : new Date().toISOString(),
+        }];
+      })
+    : [];
+  const cards = Array.isArray(candidate.cards)
+    ? candidate.cards.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return [];
+        }
+
+        const record = entry as Partial<DeletedCardTombstone>;
+        const setId = typeof record.setId === "string" ? record.setId : "";
+        const cardId = typeof record.cardId === "string" ? record.cardId : "";
+        const key = `${setId}:${cardId}`;
+
+        if (!setId || !cardId || seenCardKeys.has(key) || seenSetIds.has(setId)) {
+          return [];
+        }
+
+        seenCardKeys.add(key);
+
+        return [{
+          setId,
+          cardId,
+          deletedAt: typeof record.deletedAt === "string" ? record.deletedAt : new Date().toISOString(),
+        }];
+      })
+    : [];
+
+  return { sets, cards };
+}
+
+function applyDeletionTombstonesToSets(sets: CardSet[], tombstones: DeletionTombstones): CardSet[] {
+  const deletedSetIds = new Set(tombstones.sets.map((entry) => entry.id));
+  const deletedCardIdsBySetId = new Map<string, Set<string>>();
+
+  for (const entry of tombstones.cards) {
+    if (deletedSetIds.has(entry.setId)) {
+      continue;
+    }
+
+    const cardIds = deletedCardIdsBySetId.get(entry.setId) ?? new Set<string>();
+    cardIds.add(entry.cardId);
+    deletedCardIdsBySetId.set(entry.setId, cardIds);
+  }
+
+  return normalizeCardSets(
+    sets
+      .filter((set) => !deletedSetIds.has(set.id))
+      .map((set) => {
+        const deletedCardIds = deletedCardIdsBySetId.get(set.id);
+
+        if (!deletedCardIds?.size) {
+          return set;
+        }
+
+        return normalizeCardSet({
+          ...set,
+          cards: set.cards.filter((snapshot) => !deletedCardIds.has(snapshot.id)),
+        });
+      }),
+  );
+}
+
+function addDeletedSetTombstone(tombstones: DeletionTombstones, setId: string): DeletionTombstones {
+  const now = new Date().toISOString();
+
+  return normalizeDeletionTombstones({
+    sets: [
+      ...tombstones.sets.filter((entry) => entry.id !== setId),
+      { id: setId, deletedAt: now },
+    ],
+    cards: tombstones.cards.filter((entry) => entry.setId !== setId),
+  });
+}
+
+function addDeletedCardTombstone(tombstones: DeletionTombstones, setId: string, cardId: string): DeletionTombstones {
+  const now = new Date().toISOString();
+
+  return normalizeDeletionTombstones({
+    sets: tombstones.sets,
+    cards: [
+      ...tombstones.cards.filter((entry) => entry.setId !== setId || entry.cardId !== cardId),
+      { setId, cardId, deletedAt: now },
+    ],
+  });
+}
+
+function removeDeletedSetTombstone(tombstones: DeletionTombstones, setId: string): DeletionTombstones {
+  return normalizeDeletionTombstones({
+    sets: tombstones.sets.filter((entry) => entry.id !== setId),
+    cards: tombstones.cards,
+  });
+}
+
+function removeDeletedCardTombstone(tombstones: DeletionTombstones, setId: string, cardId: string): DeletionTombstones {
+  return normalizeDeletionTombstones({
+    sets: tombstones.sets,
+    cards: tombstones.cards.filter((entry) => entry.setId !== setId || entry.cardId !== cardId),
+  });
+}
+
 function cardSetsEqual(first: CardSet[], second: CardSet[]) {
   return JSON.stringify(normalizeCardSets(first)) === JSON.stringify(normalizeCardSets(second));
 }
@@ -2161,10 +2598,68 @@ function toAccountCardSetPayloads(sets: CardSet[]): AccountCardSetPayload[] {
     code: set.code,
     cardBackId: set.cardBackId,
     setSymbolPreset: set.setSymbolPreset,
+    setSymbolId: set.setSymbolId,
     setSymbolUri: set.setSymbolUri,
     setSymbolUsesRarityTreatment: set.setSymbolUsesRarityTreatment,
     cards: set.cards,
   }));
+}
+
+function toAccountCustomSetSymbolPayloads(symbols: GeneratedSetSymbolEntry[]): AccountCustomSetSymbolPayload[] {
+  return normalizeGeneratedSetSymbolEntries(symbols).map((symbol) => ({
+    id: symbol.id,
+    label: symbol.label,
+    uri: symbol.uri,
+    createdAt: symbol.createdAt,
+  }));
+}
+
+function mergeCustomSetSymbols(
+  localSymbols: GeneratedSetSymbolEntry[],
+  remoteSymbols: AccountCustomSetSymbolPayload[],
+): GeneratedSetSymbolEntry[] {
+  return normalizeGeneratedSetSymbolEntries([
+    ...localSymbols,
+    ...remoteSymbols.map((symbol) => ({
+      id: symbol.id,
+      label: symbol.label,
+      uri: symbol.uri,
+      createdAt: symbol.createdAt ?? new Date().toISOString(),
+    })),
+  ]);
+}
+
+function resolveSetSymbolReferences(sets: CardSet[], symbols: GeneratedSetSymbolEntry[]): CardSet[] {
+  const symbolsById = new Map(symbols.map((symbol) => [symbol.id, symbol]));
+
+  return normalizeCardSets(sets).map((set) => {
+    if (!set.setSymbolId) {
+      return set;
+    }
+
+    const symbol = symbolsById.get(set.setSymbolId);
+
+    if (!symbol) {
+      return set;
+    }
+
+    return normalizeCardSet({
+      ...set,
+      setSymbolPreset: undefined,
+      setSymbolUri: symbol.uri,
+      setSymbolUsesRarityTreatment: true,
+      cards: set.cards.map((snapshot) => ({
+        ...snapshot,
+        card: {
+          ...snapshot.card,
+          setSymbolPreset: undefined,
+          setSymbolId: symbol.id,
+          setSymbolUri: symbol.uri,
+          setSymbolUsesRarityTreatment: true,
+        },
+      })),
+    });
+  });
 }
 
 function getCardSetStorageSummary(sets: CardSet[]) {
@@ -2514,6 +3009,7 @@ function normalizeStoredCardDraft(value: unknown): CardDraft {
     "backArtUri",
     "backArtSubjectMaskUri",
     "setSymbolPreset",
+    "setSymbolId",
     "setSymbolUri",
     "watermarkPreset",
     "watermarkUri",
@@ -3096,6 +3592,24 @@ async function loadStoredCardSets(): Promise<CardSet[] | null> {
   }
 }
 
+async function loadStoredDeletionTombstones(): Promise<DeletionTombstones> {
+  try {
+    const rawValue =
+      Platform.OS === "web" && typeof window !== "undefined"
+        ? await getWebStorageItem(DELETION_TOMBSTONE_STORAGE_KEY)
+        : await (await getNativeStorageAdapter())?.getItem(DELETION_TOMBSTONE_STORAGE_KEY);
+
+    if (!rawValue) {
+      return createEmptyDeletionTombstones();
+    }
+
+    return normalizeDeletionTombstones(JSON.parse(rawValue) as unknown);
+  } catch (error) {
+    console.warn("Unable to load CardMagic deletion tombstones.", error);
+    return createEmptyDeletionTombstones();
+  }
+}
+
 async function loadStoredActiveCardDraft(): Promise<CardDraft | null> {
   try {
     const rawCard =
@@ -3430,6 +3944,21 @@ async function storeCardSets(sets: CardSet[]) {
   }
 }
 
+async function storeDeletionTombstones(tombstones: DeletionTombstones) {
+  try {
+    const serializedTombstones = JSON.stringify(normalizeDeletionTombstones(tombstones));
+
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      await setWebStorageItem(DELETION_TOMBSTONE_STORAGE_KEY, serializedTombstones);
+      return;
+    }
+
+    await (await getNativeStorageAdapter())?.setItem(DELETION_TOMBSTONE_STORAGE_KEY, serializedTombstones);
+  } catch (error) {
+    console.warn("Unable to persist CardMagic deletion tombstones.", error);
+  }
+}
+
 async function storeActiveCardDraft(card: CardDraft) {
   try {
     const materializedCard = await materializeCardDraftImageDataUris(cloneCardDraft(card), "active-card");
@@ -3614,17 +4143,20 @@ function normalizeGeneratedSetSymbolEntries(entries: GeneratedSetSymbolEntry[]) 
 
   return [...entries]
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
-    .filter((entry) => {
-      const label = toTitleCase(entry.label.trim() || "Custom");
-      const key = entry.uri;
+    .flatMap((entry) => {
+      const normalizedEntry: GeneratedSetSymbolEntry = {
+        ...entry,
+        id: isUuid(entry.id) ? entry.id : createUuid(),
+        label: toTitleCase(entry.label.trim() || "Custom"),
+      };
+      const key = normalizedEntry.uri;
 
       if (seen.has(key)) {
-        return false;
+        return [];
       }
 
       seen.add(key);
-      entry.label = label;
-      return true;
+      return [normalizedEntry];
     })
     .slice(0, GENERATED_SET_SYMBOL_MAX_ENTRIES);
 }
@@ -3877,6 +4409,34 @@ async function waitForExportPreviewImages(target: View | HTMLElement | null, tim
     }),
   );
   await waitForRenderFrame(120);
+}
+
+async function getCardExportArtImageAspectRatio(card: CardDraft): Promise<number | null> {
+  const faceCard = getEditableCardFace(card);
+
+  if (!faceCard.artUri) {
+    return null;
+  }
+
+  return await new Promise<number | null>((resolve) => {
+    Image.getSize(
+      faceCard.artUri ?? "",
+      (width, height) => resolve(width > 0 && height > 0 ? width / height : null),
+      () => resolve(null),
+    );
+  });
+}
+
+function blurActiveWebElement() {
+  if (Platform.OS !== "web" || typeof document === "undefined") {
+    return;
+  }
+
+  const activeElement = document.activeElement;
+
+  if (activeElement && "blur" in activeElement && typeof activeElement.blur === "function") {
+    activeElement.blur();
+  }
 }
 
 async function applyExportRenderTargetUpdate(update: () => void) {
@@ -4769,23 +5329,25 @@ function normalizeFixedRulesText(value: string) {
     .trim();
 }
 
-async function captureCardMagicPng(target: View | null) {
+async function captureWebPngWithHtml2Canvas(element: HTMLElement): Promise<string> {
+  const captureWebRef = await loadWebViewShotCaptureRef();
+  const result = await withTimeout(
+    captureWebRef(element, { format: "png", quality: 1, result: "data-uri" }),
+    20000,
+    "CardMagic timed out while rasterizing the card preview.",
+  );
+  return String(result);
+}
+
+async function captureCardMagicPng(target: View | null): Promise<string> {
   if (!target) {
     throw new Error("CardMagic could not find the rendered card preview.");
   }
 
   if (Platform.OS === "web") {
-    const captureWebRef = await loadWebViewShotCaptureRef();
-
-    return await withTimeout(
-      captureWebRef(target as unknown as HTMLElement, {
-        format: "png",
-        quality: 1,
-        result: "data-uri",
-      }),
-      20000,
-      "CardMagic timed out while rasterizing the card preview.",
-    );
+    // Masked layers (borderless pinline, rarity set symbol) are pre-flattened
+    // into the export render, so html2canvas captures them faithfully.
+    return captureWebPngWithHtml2Canvas(target as unknown as HTMLElement);
   }
 
   if (!hasNativeModule("RNViewShot")) {
@@ -4794,7 +5356,7 @@ async function captureCardMagicPng(target: View | null) {
 
   const captureRef = await loadViewShotCaptureRef();
 
-  return await withTimeout(
+  const result = await withTimeout(
     captureRef(target, {
       format: "png",
       quality: 1,
@@ -4803,6 +5365,7 @@ async function captureCardMagicPng(target: View | null) {
     30000,
     "CardMagic timed out while rasterizing the card preview.",
   );
+  return String(result);
 }
 
 async function exportCardMagicPng(fileName: string, target: View | null) {
@@ -4993,16 +5556,22 @@ export default function App() {
   const [sheetSection, setSheetSection] = useState<CardSection | null>(null);
   const previewBoundsRef = useRef<CoordinateBounds | null>(null);
   const previewContainerRef = useRef<View>(null);
+  const visibleCardExportRef = useRef<View>(null);
+  const [visibleCardExportActive, setVisibleCardExportActive] = useState(false);
+  const mainScrollRef = useRef<ScrollView>(null);
   const singleExportContainerRef = useRef<View>(null);
   const batchExportContainerRef = useRef<View>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("edit");
   const [customKeywordDefinitions, setCustomKeywordDefinitions] = useState<KeywordDefinition[]>([]);
   const [cardSets, setCardSets] = useState<CardSet[]>(createDefaultCardSets);
   const cardSetsRef = useRef<CardSet[]>(cardSets);
+  const [deletionTombstones, setDeletionTombstones] = useState<DeletionTombstones>(createEmptyDeletionTombstones);
+  const deletionTombstonesRef = useRef<DeletionTombstones>(deletionTombstones);
   const [frameTemplates, setFrameTemplates] = useState<CardFrameTemplate[]>([]);
   const [artLibraryEntries, setArtLibraryEntries] = useState<ArtLibraryEntry[]>([]);
   const [customCardBacks, setCustomCardBacks] = useState<CustomCardBackEntry[]>([]);
   const [generatedSetSymbols, setGeneratedSetSymbols] = useState<GeneratedSetSymbolEntry[]>([]);
+  const generatedSetSymbolsRef = useRef<GeneratedSetSymbolEntry[]>(generatedSetSymbols);
   const [userProgress, setUserProgress] = useState<UserProgressProfile>(() => createDefaultUserProgress());
   const userProgressRef = useRef(userProgress);
   const [previewToolbarPosition, setPreviewToolbarPosition] = useState<PreviewToolbarPosition | null>(null);
@@ -5035,6 +5604,7 @@ export default function App() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [earlyAccessCodeOpen, setEarlyAccessCodeOpen] = useState(false);
   const [accountUser, setAccountUser] = useState<SupabaseUser | null>(null);
+  const [accountProfile, setAccountProfile] = useState<AccountProfile | null>(null);
   const [accountSyncBusy, setAccountSyncBusy] = useState(false);
   const [accountSetsHydrated, setAccountSetsHydrated] = useState(false);
   const [checkoutBusyProductId, setCheckoutBusyProductId] = useState<CheckoutProductId | null>(null);
@@ -5076,22 +5646,42 @@ export default function App() {
   const [singleExportTarget, setSingleExportTarget] = useState<FlatCardExportTarget | null>(null);
   const [webPhotoExport, setWebPhotoExport] = useState<WebPhotoExport | null>(null);
   const [exportConfirmationToast, setExportConfirmationToast] = useState<ExportConfirmationToastState | null>(null);
+  const [deleteUndo, setDeleteUndo] = useState<DeleteUndoState | null>(null);
   const [webPhotoExportBusy, setWebPhotoExportBusy] = useState(false);
   const [batchExportCard, setBatchExportCard] = useState<CardDraft | null>(null);
   const [batchExportProgress, setBatchExportProgress] = useState<BatchExportProgress | null>(null);
   const [activeDraftHydrated, setActiveDraftHydrated] = useState(false);
   const [setsHydrated, setSetsHydrated] = useState(false);
+  const [deletionTombstonesHydrated, setDeletionTombstonesHydrated] = useState(false);
   const [frameTemplatesHydrated, setFrameTemplatesHydrated] = useState(false);
   const [artLibraryHydrated, setArtLibraryHydrated] = useState(false);
   const [customCardBacksHydrated, setCustomCardBacksHydrated] = useState(false);
   const [generatedSetSymbolsHydrated, setGeneratedSetSymbolsHydrated] = useState(false);
   const [userProgressHydrated, setUserProgressHydrated] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [showReturnToTop, setShowReturnToTop] = useState(false);
   const { width, height } = useWindowDimensions();
+  const mobileBrowserBottomInset = useMobileBrowserBottomInset(width);
   const [cardFontsLoaded, cardFontLoadError] = useFonts(FULL_MAGIC_PACK.fonts);
   const cardFontsReady = cardFontsLoaded || Boolean(cardFontLoadError);
 
   const faceCard = useMemo(() => getEditableCardFace(card), [card]);
+  const accountFooterOwnerName = useMemo(() => {
+    const explicitName =
+      accountProfile?.username ??
+      accountProfile?.displayName ??
+      accountUser?.user_metadata?.name ??
+      accountUser?.user_metadata?.full_name ??
+      accountUser?.email?.split("@")[0];
+
+    return String(explicitName ?? "CardMagic Creator").trim() || "CardMagic Creator";
+  }, [
+    accountProfile?.displayName,
+    accountProfile?.username,
+    accountUser?.email,
+    accountUser?.user_metadata?.full_name,
+    accountUser?.user_metadata?.name,
+  ]);
   const frame = useMemo(() => inferFrameStyle(faceCard), [faceCard]);
   const isSplitFrame = isSplitTypeFrame(card);
   const splitFrameSummary = useMemo(() => {
@@ -5119,7 +5709,8 @@ export default function App() {
     : activeFrameTreatment === "showcase"
       ? SHOWCASE_FRAME_LABELS[activeShowcaseFrame]
       : FRAME_TREATMENT_LABELS[activeFrameTreatment];
-  const headerSubtitle = `v${CARDMAGIC_APP_VERSION} · ${frameTypeLabel} · ${selectedSet?.name ?? "No set"}`;
+  const headerVersionLabel = `v${CARDMAGIC_APP_VERSION}`;
+  const headerContextLabel = `${frameTypeLabel} · ${selectedSet?.name ?? "No set"}`;
   const previewCard = useMemo(
     () => withResolvedSetDefaults(getSetNumberedPreviewCard(card, selectedSet?.cards ?? [], activeSetCardId), selectedSet),
     [activeSetCardId, card, selectedSet],
@@ -5142,6 +5733,7 @@ export default function App() {
   const previewInteractionEnabled = sheetSection === null && activeSection === null;
   const hasRotateControl = !showingPhysicalBack && hasPreviewRotation(previewTypeFrame);
   const hasDeleteBackControl = hasBackFace;
+  const canAddCardBack = previewTypeFrame !== "planeswalker";
   const rotatePreview = useCallback(() => {
     previewRotateIconDegrees.value = 0;
     previewRotateIconDegrees.value = withTiming(previewRotated ? -180 : 180, {
@@ -5160,7 +5752,7 @@ export default function App() {
     180,
     height -
       EDIT_TAB_VERTICAL_CHROME_HEIGHT -
-      (keyboardVisible ? 0 : BOTTOM_TAB_BAR_HEIGHT),
+      (keyboardVisible ? 0 : BOTTOM_TAB_BAR_HEIGHT + PREVIEW_FLOATING_TOOLBAR_CARD_GAP_RESERVE),
   );
   const previewRenderWidth = Math.max(
     180,
@@ -5217,7 +5809,17 @@ export default function App() {
     12,
     (width - previewSurfaceWidth) / 2 - previewToolbarCrossSize - 10,
   );
-  const previewFixedToolbarBottom = keyboardVisible ? 16 : BOTTOM_TAB_BAR_HEIGHT + 14;
+  const previewFixedToolbarBottom = keyboardVisible
+    ? 16
+    : BOTTOM_TAB_BAR_HEIGHT + mobileBrowserBottomInset + PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
+  const previewToolbarViewportHeight =
+    Platform.OS === "web" && typeof window !== "undefined"
+      ? Math.max(
+          height,
+          Math.round(window.visualViewport?.height ?? 0),
+          Math.round(window.innerHeight || 0),
+        )
+      : height;
   const previewToolbarWidth =
     previewToolbarOrientation === "horizontal" ? previewToolbarHorizontalWidth : previewToolbarCrossSize;
   const previewToolbarHeight =
@@ -5231,24 +5833,34 @@ export default function App() {
     previewToolbarOrientation === "horizontal"
       ? {
           x: (width - previewToolbarWidth) / 2,
-          y: height - (keyboardVisible ? 16 : BOTTOM_TAB_BAR_HEIGHT + 14) - previewToolbarHeight,
+          y: previewToolbarViewportHeight - previewFixedToolbarBottom - previewToolbarHeight,
         }
       : {
           x: width - previewFixedToolbarRight - previewToolbarWidth,
-          y: height - previewFixedToolbarBottom - previewToolbarHeight,
+          y: previewToolbarViewportHeight - previewFixedToolbarBottom - previewToolbarHeight,
         };
   const clampPreviewToolbarPosition = useCallback(
     (position: PreviewToolbarPosition): PreviewToolbarPosition => {
-      const margin = 10;
+      const margin = PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
+      const bottomMargin = keyboardVisible
+        ? PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN
+        : BOTTOM_TAB_BAR_HEIGHT + mobileBrowserBottomInset + PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
       const maxX = Math.max(margin, width - previewToolbarWidth - margin);
-      const maxY = Math.max(margin, height - previewToolbarHeight - margin);
+      const maxY = Math.max(margin, previewToolbarViewportHeight - previewToolbarHeight - bottomMargin);
 
       return {
         x: Math.min(maxX, Math.max(margin, position.x)),
         y: Math.min(maxY, Math.max(margin, position.y)),
       };
     },
-    [height, previewToolbarHeight, previewToolbarWidth, width],
+    [
+      keyboardVisible,
+      mobileBrowserBottomInset,
+      previewToolbarHeight,
+      previewToolbarViewportHeight,
+      previewToolbarWidth,
+      width,
+    ],
   );
   const resolvedPreviewToolbarPosition = clampPreviewToolbarPosition(
     previewToolbarPosition ?? previewDefaultToolbarPosition,
@@ -5316,7 +5928,10 @@ export default function App() {
       orientation: PreviewToolbarOrientation,
       size: { width: number; height: number },
     ): PreviewToolbarPosition => {
-      const margin = 10;
+      const margin = PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
+      const bottomMargin = keyboardVisible
+        ? PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN
+        : BOTTOM_TAB_BAR_HEIGHT + mobileBrowserBottomInset + PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
       const grabberOffset = getGrabberOffsetForOrientation(orientation);
 
       return {
@@ -5325,24 +5940,24 @@ export default function App() {
           Math.max(margin, anchor.x - grabberOffset.x),
         ),
         y: Math.min(
-          Math.max(margin, height - size.height - margin),
+          Math.max(margin, previewToolbarViewportHeight - size.height - bottomMargin),
           Math.max(margin, anchor.y - grabberOffset.y),
         ),
       };
     },
-    [getGrabberOffsetForOrientation, height, width],
+    [getGrabberOffsetForOrientation, keyboardVisible, mobileBrowserBottomInset, previewToolbarViewportHeight, width],
   );
 
   const getDockOrientationForToolbarPosition = useCallback(
     (center: PreviewToolbarPosition): PreviewToolbarOrientation => {
       const centerX = center.x;
       const centerY = center.y;
-      const nearestHorizontalEdge = Math.min(centerY, height - centerY);
+      const nearestHorizontalEdge = Math.min(centerY, previewToolbarViewportHeight - centerY);
       const nearestVerticalEdge = Math.min(centerX, width - centerX);
 
       return nearestHorizontalEdge <= nearestVerticalEdge ? "horizontal" : "vertical";
     },
-    [height, width],
+    [previewToolbarViewportHeight, width],
   );
 
   const updatePreviewToolbarDrag = useCallback(
@@ -5450,10 +6065,16 @@ export default function App() {
     const nextOrientation: PreviewToolbarOrientation =
       previewToolbarOrientation === "horizontal" ? "vertical" : "horizontal";
     const nextSize = getToolbarSizeForOrientation(nextOrientation);
-    const margin = 10;
+    const margin = PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
+    const bottomMargin = keyboardVisible
+      ? PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN
+      : BOTTOM_TAB_BAR_HEIGHT + mobileBrowserBottomInset + PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
     const nextPosition = {
       x: Math.min(Math.max(margin, width - nextSize.width - margin), Math.max(margin, currentCenter.x - nextSize.width / 2)),
-      y: Math.min(Math.max(margin, height - nextSize.height - margin), Math.max(margin, currentCenter.y - nextSize.height / 2)),
+      y: Math.min(
+        Math.max(margin, previewToolbarViewportHeight - nextSize.height - bottomMargin),
+        Math.max(margin, currentCenter.y - nextSize.height / 2),
+      ),
     };
 
     setPreviewToolbarOrientationOverride(nextOrientation);
@@ -5462,8 +6083,10 @@ export default function App() {
     void storePreviewToolbarOrientation(nextOrientation);
     void storePreviewToolbarPosition(nextPosition);
   }, [
-    height,
     getToolbarSizeForOrientation,
+    keyboardVisible,
+    mobileBrowserBottomInset,
+    previewToolbarViewportHeight,
     previewToolbarCrossSize,
     previewToolbarHeight,
     previewToolbarHorizontalWidth,
@@ -5623,6 +6246,25 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
+    loadStoredDeletionTombstones().then((storedTombstones) => {
+      if (cancelled) {
+        return;
+      }
+
+      const normalizedTombstones = normalizeDeletionTombstones(storedTombstones);
+      deletionTombstonesRef.current = normalizedTombstones;
+      setDeletionTombstones(normalizedTombstones);
+      setDeletionTombstonesHydrated(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
     loadStoredFrameTemplates().then((storedTemplates) => {
       if (cancelled) {
         return;
@@ -5746,16 +6388,32 @@ export default function App() {
   }, [activeDraftHydrated, card]);
 
   useEffect(() => {
-    if (!setsHydrated) {
+    if (!setsHydrated || !generatedSetSymbolsHydrated) {
       return;
     }
 
     void storeCardSets(cardSets);
-  }, [cardSets, setsHydrated]);
+  }, [cardSets, generatedSetSymbolsHydrated, setsHydrated]);
 
   useEffect(() => {
     cardSetsRef.current = cardSets;
   }, [cardSets]);
+
+  useEffect(() => {
+    deletionTombstonesRef.current = deletionTombstones;
+  }, [deletionTombstones]);
+
+  useEffect(() => {
+    if (!deletionTombstonesHydrated) {
+      return;
+    }
+
+    void storeDeletionTombstones(deletionTombstones);
+  }, [deletionTombstones, deletionTombstonesHydrated]);
+
+  useEffect(() => {
+    generatedSetSymbolsRef.current = generatedSetSymbols;
+  }, [generatedSetSymbols]);
 
   useEffect(() => {
     if (!accountUser) {
@@ -5763,7 +6421,7 @@ export default function App() {
       return;
     }
 
-    if (!setsHydrated) {
+    if (!setsHydrated || !deletionTombstonesHydrated) {
       return;
     }
 
@@ -5774,14 +6432,27 @@ export default function App() {
       setAccountSetsHydrated(false);
 
       try {
-        const remoteSets = await fetchRemoteCardSets(accountUser.id);
+        const [remoteSymbols, remoteSets] = await Promise.all([
+          fetchRemoteCustomSetSymbols(accountUser.id),
+          fetchRemoteCardSets(accountUser.id),
+        ]);
 
         if (!active) {
           return;
         }
 
+        const mergedSymbols = mergeCustomSetSymbols(generatedSetSymbolsRef.current, remoteSymbols);
+
+        if (JSON.stringify(generatedSetSymbolsRef.current) !== JSON.stringify(mergedSymbols)) {
+          generatedSetSymbolsRef.current = mergedSymbols;
+          setGeneratedSetSymbols(mergedSymbols);
+        }
+
         const repairedRemoteSets = normalizeStoredCardSetsPayload(remoteSets);
-        const validRemoteSets = repairedRemoteSets?.sets ?? [];
+        const validRemoteSets = applyDeletionTombstonesToSets(
+          resolveSetSymbolReferences(repairedRemoteSets?.sets ?? [], mergedSymbols),
+          deletionTombstonesRef.current,
+        );
 
         if (repairedRemoteSets?.repaired || repairedRemoteSets?.rejectedItems) {
           logStorageWarning("Repaired Supabase account set payload before merge.", {
@@ -5793,7 +6464,10 @@ export default function App() {
           logStorageInfo("Loaded Supabase account set payload before merge.", getCardSetStorageSummary(validRemoteSets));
         }
 
-        const mergedSets = mergeAccountCardSets(cardSetsRef.current, validRemoteSets);
+        const mergedSets = applyDeletionTombstonesToSets(
+          resolveSetSymbolReferences(mergeAccountCardSets(cardSetsRef.current, validRemoteSets), mergedSymbols),
+          deletionTombstonesRef.current,
+        );
 
         if (!cardSetsEqual(cardSetsRef.current, mergedSets)) {
           cardSetsRef.current = mergedSets;
@@ -5803,6 +6477,7 @@ export default function App() {
           );
         }
 
+        await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
         await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedSets));
       } catch (error) {
         console.warn("Unable to sync Supabase account sets.", error);
@@ -5819,23 +6494,69 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [accountUser, setsHydrated]);
+  }, [accountUser, deletionTombstonesHydrated, generatedSetSymbolsHydrated, setsHydrated]);
 
   useEffect(() => {
-    if (!accountUser || !setsHydrated || !accountSetsHydrated) {
+    if (!accountUser || !setsHydrated || !generatedSetSymbolsHydrated || !deletionTombstonesHydrated || !accountSetsHydrated) {
       return;
     }
 
     const persistRemoteSets = setTimeout(() => {
-      void replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(cardSetsRef.current)).catch((error) => {
-        console.warn("Unable to persist Supabase account sets.", error);
-      });
+      void replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current))
+        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(cardSetsRef.current)))
+        .catch((error) => {
+          console.warn("Unable to persist Supabase account sets.", error);
+        });
     }, 900);
 
     return () => {
       clearTimeout(persistRemoteSets);
     };
-  }, [accountSetsHydrated, accountUser, cardSets, setsHydrated]);
+  }, [accountSetsHydrated, accountUser, cardSets, deletionTombstones, deletionTombstonesHydrated, generatedSetSymbols, generatedSetSymbolsHydrated, setsHydrated]);
+
+  useEffect(() => {
+    if (!accountUser) {
+      setAccountProfile(null);
+      return;
+    }
+
+    let active = true;
+
+    void fetchAccountProfile(accountUser.id)
+      .then((profile) => {
+        if (active) {
+          setAccountProfile(profile);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          console.warn("Unable to load Supabase account profile.", error);
+          setAccountProfile(null);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [accountUser]);
+
+  useEffect(() => {
+    if (!accountUser) {
+      return;
+    }
+
+    const displayName =
+      accountProfile?.username ??
+      accountProfile?.displayName ??
+      accountUser.user_metadata?.name ??
+      accountUser.user_metadata?.full_name ??
+      accountUser.email?.split("@")[0] ??
+      "CardMagic Creator";
+
+    void updateCommunityDisplayName(String(displayName)).catch((error) => {
+      console.warn("Unable to update Supabase community display name.", error);
+    });
+  }, [accountProfile?.displayName, accountProfile?.username, accountUser]);
 
   useEffect(() => {
     if (!frameTemplatesHydrated) {
@@ -6103,6 +6824,37 @@ export default function App() {
     setExportConfirmationToast((current) => (current?.id === id ? null : current));
   }, []);
 
+  const dismissDeleteUndo = useCallback((id: string) => {
+    setDeleteUndo((current) => (current?.id === id ? null : current));
+  }, []);
+
+  const persistAccountSetsNow = useCallback(
+    (nextSets: CardSet[]) => {
+      const normalizedSets = normalizeCardSets(nextSets);
+
+      cardSetsRef.current = normalizedSets;
+      void storeCardSets(normalizedSets);
+
+      if (!accountUser || !accountSetsHydrated) {
+        return;
+      }
+
+      void replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current))
+        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(normalizedSets)))
+        .catch((error) => {
+          console.warn("Unable to persist Supabase account sets immediately after local edit.", error);
+        });
+    },
+    [accountSetsHydrated, accountUser],
+  );
+
+  const persistDeletionTombstonesNow = useCallback((nextTombstones: DeletionTombstones) => {
+    const normalizedTombstones = normalizeDeletionTombstones(nextTombstones);
+
+    deletionTombstonesRef.current = normalizedTombstones;
+    void storeDeletionTombstones(normalizedTombstones);
+  }, []);
+
   const showLoginSuccessToast = useCallback(() => {
     setAccountOpen(false);
     setAuthToast({
@@ -6281,8 +7033,11 @@ export default function App() {
       setAccountSyncBusy(true);
 
       try {
-        const remoteProgress = await fetchRemoteUserProgress(accountUser.id);
-        const remoteSets = await fetchRemoteCardSets(accountUser.id);
+        const [remoteProgress, remoteSymbols, remoteSets] = await Promise.all([
+          fetchRemoteUserProgress(accountUser.id),
+          fetchRemoteCustomSetSymbols(accountUser.id),
+          fetchRemoteCardSets(accountUser.id),
+        ]);
 
         if (remoteProgress) {
           const remoteNormalizedProgress = normalizeUserProgressProfile(remoteProgress);
@@ -6302,8 +7057,16 @@ export default function App() {
           });
         }
 
+        const mergedSymbols = mergeCustomSetSymbols(generatedSetSymbolsRef.current, remoteSymbols);
+
+        generatedSetSymbolsRef.current = mergedSymbols;
+        setGeneratedSetSymbols(mergedSymbols);
+
         const repairedRemoteSets = normalizeStoredCardSetsPayload(remoteSets);
-        const validRemoteSets = repairedRemoteSets?.sets ?? [];
+        const validRemoteSets = applyDeletionTombstonesToSets(
+          resolveSetSymbolReferences(repairedRemoteSets?.sets ?? [], mergedSymbols),
+          deletionTombstonesRef.current,
+        );
 
         if (repairedRemoteSets?.repaired || repairedRemoteSets?.rejectedItems) {
           logStorageWarning("Repaired Supabase account set payload before manual sync.", {
@@ -6315,13 +7078,17 @@ export default function App() {
           logStorageInfo("Loaded Supabase account set payload before manual sync.", getCardSetStorageSummary(validRemoteSets));
         }
 
-        const mergedSets = mergeAccountCardSets(cardSetsRef.current, validRemoteSets);
+        const mergedSets = applyDeletionTombstonesToSets(
+          resolveSetSymbolReferences(mergeAccountCardSets(cardSetsRef.current, validRemoteSets), mergedSymbols),
+          deletionTombstonesRef.current,
+        );
 
         cardSetsRef.current = mergedSets;
         setCardSets(mergedSets);
         setSelectedSetId((current) =>
           mergedSets.some((set) => set.id === current) ? current : mergedSets[0].id,
         );
+        await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
         await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedSets));
       } catch (error) {
         Alert.alert("Account sync failed", error instanceof Error ? error.message : "Unable to sync your account.");
@@ -6400,13 +7167,18 @@ export default function App() {
       return;
     }
 
+    const checkoutPopup = createPendingStripeCheckoutPopup();
+
     setCheckoutBusyProductId(productId);
 
     try {
       await syncRemoteUserProgress();
       const checkoutUrl = await createStripeCheckoutUrl(productId);
-      await openStripeCheckoutUrl(checkoutUrl);
+      await openStripeCheckoutUrl(checkoutUrl, checkoutPopup);
     } catch (error) {
+      if (checkoutPopup && !checkoutPopup.closed) {
+        checkoutPopup.close();
+      }
       const message = error instanceof Error ? error.message : "Unable to start Stripe Checkout.";
       setCheckoutErrorMessage(message);
       Alert.alert("Checkout failed", message);
@@ -6534,6 +7306,19 @@ export default function App() {
     });
   };
 
+  const handleMainScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    measurePreviewContainer();
+
+    const shouldShowReturnToTop = event.nativeEvent.contentOffset.y > 360;
+    setShowReturnToTop((current) => (
+      current === shouldShowReturnToTop ? current : shouldShowReturnToTop
+    ));
+  };
+
+  const scrollMainToTop = () => {
+    mainScrollRef.current?.scrollTo({ y: 0, animated: true });
+  };
+
   const deselectWhenTapStartsOutsideCard = (event: PointerEvent | GestureResponderEvent) => {
     if ((!activeSection && !keyboardVisible) || sheetSection) {
       return false;
@@ -6562,14 +7347,16 @@ export default function App() {
     return false;
   };
 
-  const updateCard = (patch: Partial<CardDraft>) => {
+  // Stable identity (only uses setters + functional updates) so the memoized
+  // CardPreview can skip re-rendering when unrelated state changes.
+  const updateCard = useCallback((patch: Partial<CardDraft>) => {
     setCardHasUnsavedEdits(true);
     setCard((current) => ({
       ...current,
       ...patch,
       ...getFrameGeometryArtResetPatch(current, patch),
     }));
-  };
+  }, []);
 
   const updateCurrentFace = (patch: Partial<CardDraft>) => {
     updateCard(toDfcFacePatch(card, patch));
@@ -6653,21 +7440,24 @@ export default function App() {
     }
   };
 
-  const addCustomSetSymbolEntry = (labelBase: string, uri: string) => {
+  const addCustomSetSymbolEntry = (labelBase: string, uri: string): GeneratedSetSymbolEntry => {
     const now = new Date().toISOString();
     const label = labelBase.trim().slice(0, 18) || "Custom";
+    const entry: GeneratedSetSymbolEntry = {
+      id: createUuid(),
+      label,
+      uri,
+      createdAt: now,
+    };
 
     setGeneratedSetSymbols((current) =>
       normalizeGeneratedSetSymbolEntries([
-        {
-          id: `set-symbol-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          label,
-          uri,
-          createdAt: now,
-        },
+        entry,
         ...current,
       ]),
     );
+
+    return entry;
   };
 
   const addCustomCardBackEntry = ({
@@ -6933,6 +7723,19 @@ export default function App() {
     }
   };
 
+  // Stable wrapper for the memoized CardPreview. `selectPreviewSection` closes
+  // over `card`/`faceCard`, so a plain useCallback would either go stale or
+  // change identity every render. The latest-ref indirection keeps a constant
+  // identity while always invoking the current implementation.
+  const selectPreviewSectionRef = useRef(selectPreviewSection);
+  selectPreviewSectionRef.current = selectPreviewSection;
+  const handlePreviewSectionPress = useCallback(
+    (section: CardSection, options?: { openSheet?: boolean }) => {
+      selectPreviewSectionRef.current(section, options);
+    },
+    [],
+  );
+
   const pickArt = async () => {
     setArtSourceOpen(false);
     setArtGeneratorOpen(false);
@@ -6980,7 +7783,7 @@ export default function App() {
   };
 
   const applySetSymbolPatch = (
-    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
+    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
     targetSetId?: string | null,
   ) => {
     if (targetSetId) {
@@ -7015,9 +7818,9 @@ export default function App() {
 
     if (!result.canceled && result.assets[0]?.uri) {
       const setSymbolUri = await normalizePickedSetSymbolImage(result.assets[0]);
+      const symbolEntry = addCustomSetSymbolEntry(faceCard.name || "Uploaded", setSymbolUri);
 
-      applySetSymbolPatch({ setSymbolUri, setSymbolUsesRarityTreatment: true }, targetSetId);
-      addCustomSetSymbolEntry(faceCard.name || "Uploaded", setSymbolUri);
+      applySetSymbolPatch({ setSymbolId: symbolEntry.id, setSymbolUri, setSymbolUsesRarityTreatment: true }, targetSetId);
       recordProgressEvent("upload-set-icon");
       if (!targetSetId) {
         setActiveSection("printing");
@@ -7164,12 +7967,12 @@ export default function App() {
         prompt: buildSetSymbolGeneratorPrompt(card, request),
       });
       const setSymbolUri = await normalizeGeneratedSetSymbolImageUri(generatedSymbolUri, "generated-set-symbol");
+      const symbolEntry = addCustomSetSymbolEntry(request, setSymbolUri);
 
       applySetSymbolPatch(
-        { setSymbolUri, setSymbolUsesRarityTreatment: true },
+        { setSymbolId: symbolEntry.id, setSymbolUri, setSymbolUsesRarityTreatment: true },
         setSymbolGeneratorTargetSetId,
       );
-      addCustomSetSymbolEntry(request, setSymbolUri);
       if (!setSymbolGeneratorTargetSetId) {
         setActiveSection("printing");
         setSheetSection("printing");
@@ -7264,6 +8067,32 @@ export default function App() {
     return saveCardToSet(selectedSetId, options);
   };
 
+  const confirmDuplicateCardSave = (targetSetId: string, onConfirm: () => void) => {
+    const targetSet = cardSets.find((set) => set.id === targetSetId) ?? cardSets[0];
+    const activeSnapshotId = targetSetId === selectedSetId ? activeSetCardId : null;
+    const duplicateSnapshot = findDuplicateSetCardSnapshot(targetSet, card, activeSnapshotId);
+
+    if (!targetSet || !duplicateSnapshot) {
+      onConfirm();
+      return;
+    }
+
+    const cardName = duplicateSnapshot.card.name || card.name || "Untitled Card";
+    const message = `${cardName} already exists in ${targetSet.name}. Save another copy anyway?`;
+
+    if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+      if (window.confirm(message)) {
+        onConfirm();
+      }
+      return;
+    }
+
+    Alert.alert("Save duplicate card?", message, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Save copy", onPress: onConfirm },
+    ]);
+  };
+
   const autosaveCurrentCardIfEdited = () => {
     if (!cardHasUnsavedEdits) {
       return null;
@@ -7328,17 +8157,61 @@ export default function App() {
   };
 
   const saveCardToSetThenRandomize = (targetSetId: string) => {
-    saveCardToSet(targetSetId, { updateCurrentCard: false });
-    performRandomizeCard();
+    confirmDuplicateCardSave(targetSetId, () => {
+      saveCardToSet(targetSetId, { updateCurrentCard: false });
+      performRandomizeCard();
+    });
   };
 
   const saveCurrentCardToSelectedSet = (options?: { notify?: boolean }) => {
     setShareMenuOpen(false);
 
-    const result = saveCardToSelectedSet({ notify: false });
+    confirmDuplicateCardSave(selectedSetId, () => {
+      const result = saveCardToSelectedSet({ notify: false });
 
-    if (result && options?.notify) {
-      confirmSavedCard(result);
+      if (result && options?.notify) {
+        confirmSavedCard(result);
+      }
+    });
+  };
+
+  const startNewCardWithoutSaving = () => {
+    resetCard({ autosave: false });
+  };
+
+  const shareCurrentCardToCommunity = async () => {
+    setCardActionMenuOpen(false);
+    setEditMenuOpen(false);
+    setShareMenuOpen(false);
+    setPhysicalBackMenuOpen(false);
+
+    if (!accountUser) {
+      Alert.alert("Sign in required", "Sign in before sharing a card to the community feed.");
+      openAccount();
+      return;
+    }
+
+    const communityCardId = activeSetCardId
+      ? `community-${accountUser.id}-${activeSetCardId}`
+      : `community-${accountUser.id}-${createUuid()}`;
+
+    try {
+      await publishCommunityCard({
+        id: communityCardId,
+        userId: accountUser.id,
+        localSnapshotId: activeSetCardId ? `community-${activeSetCardId}` : undefined,
+        card: cloneCardDraft(previewCard),
+      });
+
+      setAuthToast({
+        id: `community-share-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        message: "Card shared to community",
+      });
+    } catch (error) {
+      Alert.alert(
+        "Community share unavailable",
+        error instanceof Error ? error.message : "CardMagic could not share this card to the community feed.",
+      );
     }
   };
 
@@ -7371,6 +8244,8 @@ export default function App() {
       return;
     }
 
+    const exportCard = cloneCardDraft(previewCard);
+    const artImageAspectRatio = showingPhysicalBack ? null : await getCardExportArtImageAspectRatio(exportCard);
     const exportTarget: FlatCardExportTarget = showingPhysicalBack
       ? {
           kind: "back",
@@ -7378,7 +8253,10 @@ export default function App() {
         }
       : {
           kind: "card",
-          card: cloneCardDraft(previewCard),
+          card: exportCard,
+          footerOwnerName: accountFooterOwnerName,
+          artImageAspectRatio,
+          flattenMasksExport: Platform.OS === "web",
         };
 
     try {
@@ -7389,6 +8267,10 @@ export default function App() {
         timeoutMs: 8000,
         errorMessage: "CardMagic could not find the rendered card preview.",
       });
+      if (Platform.OS === "web") {
+        // Wait for the offscreen-canvas composites to produce their <img>s.
+        await waitForFlattenedFrameComposites();
+      }
       await waitForExportPreviewImages(exportPreview);
 
       if (Platform.OS === "web") {
@@ -7427,6 +8309,61 @@ export default function App() {
       setSingleExportTarget(null);
     }
   };
+
+  const exportCommunityCardPng = useCallback(async (communityCard: CardDraft, cardName: string, footerOwnerName?: string) => {
+    const fileName = getExportFileName(cardName || "community-card", "card").replace(/\.json$/, ".png");
+    const exportCard = cloneCardDraft(communityCard);
+    const exportTarget: FlatCardExportTarget = {
+      kind: "card",
+      card: exportCard,
+      footerOwnerName,
+      artImageAspectRatio: await getCardExportArtImageAspectRatio(exportCard),
+      // Flatten masked layers so the html2canvas capture renders borderless
+      // pinline and rarity set symbols faithfully here too.
+      flattenMasksExport: Platform.OS === "web",
+    };
+
+    try {
+      setWebPhotoExportBusy(Platform.OS === "web");
+      await applyExportRenderTargetUpdate(() => setSingleExportTarget(exportTarget));
+      const exportPreview = await waitForExportPreviewRef(singleExportContainerRef, {
+        nativeID: CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID,
+        timeoutMs: 8000,
+        errorMessage: "CardMagic could not find the rendered card preview.",
+      });
+      if (Platform.OS === "web") {
+        await waitForFlattenedFrameComposites();
+      }
+      await waitForExportPreviewImages(exportPreview);
+
+      if (Platform.OS === "web") {
+        const dataUri = normalizeWebPngExportUri(await captureCardMagicPng(exportPreview));
+        setWebPhotoExport({ fileName, dataUri });
+        recordProgressEvent("export-card");
+        return;
+      }
+
+      await exportCardMagicPng(fileName, exportPreview);
+      recordProgressEvent("export-card");
+    } catch (error) {
+      console.warn("Community card photo export unavailable.", error);
+      const message =
+        Platform.OS === "web"
+          ? `CardMagic could not render a downloadable PNG in this browser. ${
+              error instanceof Error ? error.message : ""
+            }`.trim()
+          : "CardMagic could not save the rendered community card photo.";
+
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        window.alert(message);
+      } else {
+        Alert.alert("PNG export unavailable", message);
+      }
+    } finally {
+      setWebPhotoExportBusy(false);
+      setSingleExportTarget(null);
+    }
+  }, [recordProgressEvent]);
 
   const exportSelectedSet = async () => {
     setShareMenuOpen(false);
@@ -7674,6 +8611,11 @@ export default function App() {
   };
 
   const addFlipSideToCard = () => {
+    if ((card.typeFrame ?? "standard") === "planeswalker") {
+      setPhysicalBackMenuOpen(false);
+      return;
+    }
+
     setCardHasUnsavedEdits(true);
     const nextDfcFace = physicalBackVisible ? "back" : "front";
 
@@ -7912,17 +8854,43 @@ export default function App() {
   };
 
   const removeCardFromSet = (setId: string, cardId: string) => {
+    const targetSet = cardSetsRef.current.find((set) => set.id === setId);
+    const targetIndex = targetSet?.cards.findIndex((snapshot) => snapshot.id === cardId) ?? -1;
+    const targetSnapshot = targetSet && targetIndex >= 0 ? targetSet.cards[targetIndex] : null;
+
+    if (!targetSet || !targetSnapshot) {
+      return;
+    }
+
     if (activeSetCardId === cardId) {
       setActiveSetCardId(null);
     }
 
-    setCardSets((current) =>
-      current.map((set) =>
-        set.id === setId
-          ? normalizeCardSet({ ...set, cards: set.cards.filter((setCard) => setCard.id !== cardId) })
-          : set,
-      ),
-    );
+    const nextTombstones = addDeletedCardTombstone(deletionTombstonesRef.current, setId, cardId);
+
+    persistDeletionTombstonesNow(nextTombstones);
+    setDeletionTombstones(nextTombstones);
+
+    setCardSets((current) => {
+      const nextSets = normalizeCardSets(
+        current.map((set) =>
+          set.id === setId
+            ? normalizeCardSet({ ...set, cards: set.cards.filter((setCard) => setCard.id !== cardId) })
+            : set,
+        ),
+      );
+
+      persistAccountSetsNow(nextSets);
+      return nextSets;
+    });
+    setDeleteUndo({
+      id: `delete-card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "card",
+      message: `Removed ${targetSnapshot.card.name || "card"} from ${targetSet.name}`,
+      setId,
+      snapshot: targetSnapshot,
+      index: targetIndex,
+    });
   };
 
   const updateSetCardBack = (setId: string, cardBackId: CardBackId) => {
@@ -7933,10 +8901,11 @@ export default function App() {
 
   const updateSetSymbolDefaults = (
     setId: string,
-    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
+    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
   ) => {
     const defaultPatch: Partial<CardDraft> = {
       setSymbolPreset: patch.setSymbolUri ? undefined : patch.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id,
+      setSymbolId: patch.setSymbolUri ? patch.setSymbolId : undefined,
       setSymbolUri: patch.setSymbolUri,
       setSymbolUsesRarityTreatment: patch.setSymbolUsesRarityTreatment,
     };
@@ -7968,17 +8937,88 @@ export default function App() {
   };
 
   const removeSet = (setId: string) => {
-    const nextSets = cardSets.filter((set) => set.id !== setId);
+    const currentSets = cardSetsRef.current;
+    const removedIndex = currentSets.findIndex((set) => set.id === setId);
+    const removedSet = removedIndex >= 0 ? currentSets[removedIndex] : null;
+
+    if (!removedSet) {
+      return;
+    }
+
+    const nextSets = currentSets.filter((set) => set.id !== setId);
     const fallbackSet = nextSets[0] ?? createDefaultCardSet("Main Set");
     const resolvedSets = normalizeCardSets(nextSets.length > 0 ? nextSets : [fallbackSet]);
+    const nextTombstones = addDeletedSetTombstone(deletionTombstonesRef.current, setId);
 
+    persistDeletionTombstonesNow(nextTombstones);
+    setDeletionTombstones(nextTombstones);
+    persistAccountSetsNow(resolvedSets);
     setCardSets(resolvedSets);
     setActiveSetCardId(null);
+    setDeleteUndo({
+      id: `delete-set-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "set",
+      message: `Deleted ${removedSet.name}`,
+      set: removedSet,
+      index: removedIndex,
+    });
 
     if (selectedSetId === setId || !resolvedSets.some((set) => set.id === selectedSetId)) {
       setSelectedSetId(fallbackSet.id);
     }
   };
+
+  const undoDelete = useCallback((undoState: DeleteUndoState) => {
+    if (undoState.kind === "card") {
+      const nextTombstones = removeDeletedCardTombstone(
+        deletionTombstonesRef.current,
+        undoState.setId,
+        undoState.snapshot.id,
+      );
+
+      persistDeletionTombstonesNow(nextTombstones);
+      setDeletionTombstones(nextTombstones);
+      setCardSets((current) => {
+        const nextSets = normalizeCardSets(
+          current.map((set) => {
+            if (set.id !== undoState.setId || set.cards.some((snapshot) => snapshot.id === undoState.snapshot.id)) {
+              return set;
+            }
+
+            const nextCards = [...set.cards];
+            nextCards.splice(Math.min(undoState.index, nextCards.length), 0, undoState.snapshot);
+
+            return normalizeCardSet({ ...set, cards: nextCards });
+          }),
+        );
+
+        persistAccountSetsNow(nextSets);
+        return nextSets;
+      });
+      setSelectedSetId(undoState.setId);
+      setDeleteUndo(null);
+      return;
+    }
+
+    const nextTombstones = removeDeletedSetTombstone(deletionTombstonesRef.current, undoState.set.id);
+
+    persistDeletionTombstonesNow(nextTombstones);
+    setDeletionTombstones(nextTombstones);
+    setCardSets((current) => {
+      if (current.some((set) => set.id === undoState.set.id)) {
+        return current;
+      }
+
+      const nextSets = [...current];
+      nextSets.splice(Math.min(undoState.index, nextSets.length), 0, undoState.set);
+      const normalizedSets = normalizeCardSets(nextSets);
+
+      persistAccountSetsNow(normalizedSets);
+      return normalizedSets;
+    });
+    setSelectedSetId(undoState.set.id);
+    setDeleteUndo(null);
+  }, [persistAccountSetsNow, persistDeletionTombstonesNow]);
 
   const repairSavedSets = useCallback(() => {
     setCardSets((current) => {
@@ -8001,6 +9041,7 @@ export default function App() {
     setEditMenuOpen(false);
     setCardActionMenuOpen(false);
     setShareMenuOpen(false);
+    setShowReturnToTop(false);
     setInspectorTab(nextTab);
   };
 
@@ -8015,18 +9056,19 @@ export default function App() {
         >
           <ScrollView
             key={inspectorTab}
+            ref={mainScrollRef}
             contentInsetAdjustmentBehavior="automatic"
             keyboardDismissMode="none"
             keyboardShouldPersistTaps="always"
             onPointerDown={deselectWhenTapStartsOutsideCard}
             onStartShouldSetResponderCapture={deselectWhenTapStartsOutsideCard}
             onTouchStart={deselectWhenTapStartsOutsideCard}
-            onScroll={measurePreviewContainer}
+            onScroll={handleMainScroll}
             scrollEventThrottle={16}
             contentContainerStyle={{
               paddingHorizontal: 16,
               paddingTop: 22,
-              paddingBottom: 78,
+              paddingBottom: 78 + (keyboardVisible ? 0 : mobileBrowserBottomInset),
               gap: 18,
               alignItems: "center",
             }}
@@ -8076,7 +9118,20 @@ export default function App() {
                           fontWeight: "700",
                         }}
                       >
-                        {headerSubtitle}
+                        {headerVersionLabel}
+                      </Text>
+                      <Text
+                        selectable
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        style={{
+                          color: "#5f6570",
+                          fontSize: 13,
+                          fontWeight: "700",
+                          marginTop: -1,
+                        }}
+                      >
+                        {headerContextLabel}
                       </Text>
                     </View>
                     <Pressable
@@ -8098,18 +9153,15 @@ export default function App() {
                     </Pressable>
                     <TopShareMenu
                       open={shareMenuOpen}
-                      selectedSet={selectedSet}
                       onToggle={() => {
                         setEditMenuOpen(false);
                         setCardActionMenuOpen(false);
                         setShareMenuOpen((current) => !current);
                       }}
                       onClose={() => setShareMenuOpen(false)}
-                      onSaveToSet={() => saveCurrentCardToSelectedSet({ notify: true })}
-                      onExportCurrentCard={exportCurrentCard}
+                      onStartNewCard={startNewCardWithoutSaving}
+                      onShareToCommunity={() => void shareCurrentCardToCommunity()}
                       onExportCurrentCardImage={exportCurrentCardPng}
-                      onExportSelectedSet={exportSelectedSet}
-                      onExportSelectedSetBatch={exportSelectedSetBatch}
                     />
                     <Pressable
                       accessibilityRole="button"
@@ -8178,24 +9230,42 @@ export default function App() {
                               />
                             </Pressable>
                           ) : (
-                            <CardPreview
-                              card={previewCard}
-                              activeSection={activeSection}
-                              width={previewRenderWidth}
-                              artGenerating={artGeneratorBusy}
-                              onSectionPress={selectPreviewSection}
-                              onChange={updateCard}
-                            />
+                            <View
+                              ref={visibleCardExportRef}
+                              collapsable={false}
+                              id="cardmagic-visible-card-export-source"
+                              nativeID="cardmagic-visible-card-export-source"
+                              testID="cardmagic-visible-card-export-source"
+                              style={{
+                                width: previewRenderWidth,
+                                aspectRatio: previewAspectRatio,
+                                backgroundColor: "transparent",
+                              }}
+                            >
+                              <CardPreview
+                                card={previewCard}
+                                activeSection={visibleCardExportActive ? null : activeSection}
+                                width={previewRenderWidth}
+                                exportCaptureMode={visibleCardExportActive}
+                                exportSetSymbolMode={visibleCardExportActive}
+                                artGenerating={artGeneratorBusy}
+                                footerOwnerName={accountFooterOwnerName}
+                                onSectionPress={handlePreviewSectionPress}
+                                onChange={updateCard}
+                              />
+                            </View>
                           )}
                         </CardTransformSurface>
                         {physicalBackMenuOpen && showingPhysicalBack ? (
                           <PhysicalBackActionsMenu
                             width={Math.min(304, Math.max(236, previewRenderWidth - 32))}
+                            canAddCardBack={canAddCardBack}
                             onChangeBack={openCardBackSettings}
                             onAddCardBack={addFlipSideToCard}
                             onClose={() => setPhysicalBackMenuOpen(false)}
                           />
                         ) : null}
+                        {Platform.OS === "web" && typeof document !== "undefined" && sheetSection === null ? createPortal(
                         <View
                           pointerEvents="box-none"
                           style={{
@@ -8204,7 +9274,9 @@ export default function App() {
                             top: resolvedPreviewToolbarPosition.y,
                             width: previewToolbarWidth,
                             alignItems: "center",
-                            zIndex: editMenuOpen || cardActionMenuOpen ? 50 : 30,
+                            zIndex: editMenuOpen || cardActionMenuOpen
+                              ? PREVIEW_FLOATING_TOOLBAR_MENU_Z_INDEX
+                              : PREVIEW_FLOATING_TOOLBAR_Z_INDEX,
                           }}
                         >
                           {editMenuOpen ? (
@@ -8369,7 +9441,9 @@ export default function App() {
                               ) : null}
                             </Animated.View>
                           </GestureDetector>
-                        </View>
+                        </View>,
+                        document.body,
+                        ) : null}
                       </>
                     ) : (
                       <CardFontLoadingPreview width={previewRenderWidth} aspectRatio={previewAspectRatio} />
@@ -8392,7 +9466,7 @@ export default function App() {
               ) : null}
 
               {inspectorTab === "sets" ? (
-                <TabScreen title="Sets" subtitle="Manage set shells and card membership" fullWidth>
+                <TabScreen title="Sets" subtitle="Manage set shells and card membership" fullWidth framed={false}>
                   <SetsPanel
                     sets={cardSets}
                     selectedSetId={selectedSetId}
@@ -8414,20 +9488,27 @@ export default function App() {
                     onGenerateSetSymbol={(setId) => openSetSymbolGenerator(setId)}
                     customCardBacks={customCardBacks}
                     generatedSetSymbols={generatedSetSymbols}
+                    footerOwnerName={accountFooterOwnerName}
                   />
                 </TabScreen>
               ) : null}
 
               {inspectorTab === "community" ? (
-                <TabScreen title="Community" subtitle="Browse shared cards and sets">
-                  <CommunityPanel sets={cardSets} />
-                </TabScreen>
+                <CommunityPanel
+                  sets={cardSets}
+                  accountUser={accountUser}
+                  onExportCardImage={exportCommunityCardPng}
+                />
               ) : null}
             </TabContentErrorBoundary>
           </ScrollView>
 
           {!keyboardVisible ? (
-            <BottomTabBar activeTab={inspectorTab} onSelectTab={selectInspectorTab} />
+            <BottomTabBar
+              activeTab={inspectorTab}
+              bottomInset={mobileBrowserBottomInset}
+              onSelectTab={selectInspectorTab}
+            />
           ) : null}
           <FlatCardExportRenderHost
             target={singleExportTarget}
@@ -8468,6 +9549,14 @@ export default function App() {
             toast={exportConfirmationToast}
             onDismiss={dismissExportConfirmationToast}
           />
+          <DeleteUndoToast
+            undo={deleteUndo}
+            onUndo={undoDelete}
+            onDismiss={dismissDeleteUndo}
+          />
+          {showReturnToTop && !keyboardVisible ? (
+            <ReturnToTopButton bottomInset={mobileBrowserBottomInset} onPress={scrollMainToTop} />
+          ) : null}
           <AuthToast
             toast={authToast}
             onDismiss={dismissAuthToast}
@@ -8652,10 +9741,9 @@ export default function App() {
         <AccountModal
           visible={accountOpen}
           user={accountUser}
-          syncing={accountSyncBusy}
           onClose={() => setAccountOpen(false)}
-          onSyncProgress={() => void syncRemoteUserProgress()}
           onAuthSuccess={showLoginSuccessToast}
+          onProfileChange={setAccountProfile}
         />
         <AchievementsModal
           visible={achievementsOpen}
@@ -10555,8 +11643,11 @@ function FlatCardExportRenderHost({
             activeSection={null}
             width={renderWidth}
             exportMode
-            onSectionPress={() => undefined}
-            onChange={() => undefined}
+            exportFlattenMasks={target.flattenMasksExport}
+            footerOwnerName={target.footerOwnerName}
+            initialArtImageAspectRatio={target.artImageAspectRatio}
+            onSectionPress={noopCardPreviewHandler}
+            onChange={noopCardPreviewHandler}
           />
         )}
       </View>
@@ -10839,6 +11930,140 @@ function ExportConfirmationToast({
         </Text>
       </View>
     </View>
+  );
+}
+
+function DeleteUndoToast({
+  undo,
+  onUndo,
+  onDismiss,
+}: {
+  undo: DeleteUndoState | null;
+  onUndo: (undo: DeleteUndoState) => void;
+  onDismiss: (id: string) => void;
+}) {
+  useEffect(() => {
+    if (!undo) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => onDismiss(undo.id), 6500);
+
+    return () => clearTimeout(timeoutId);
+  }, [onDismiss, undo]);
+
+  if (!undo) {
+    return null;
+  }
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={{
+        position: "absolute",
+        left: 16,
+        right: 16,
+        bottom: 104,
+        zIndex: 125,
+        alignItems: "center",
+      }}
+    >
+      <View
+        style={{
+          width: "100%",
+          maxWidth: 390,
+          minHeight: 54,
+          borderRadius: 16,
+          borderCurve: "continuous",
+          backgroundColor: "#141821",
+          borderWidth: 1,
+          borderColor: "rgba(255, 255, 255, 0.16)",
+          paddingVertical: 9,
+          paddingHorizontal: 12,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+          shadowColor: "#000000",
+          shadowOpacity: 0.26,
+          shadowRadius: 18,
+          shadowOffset: { width: 0, height: 10 },
+          elevation: 18,
+        }}
+      >
+        <Text
+          selectable={false}
+          numberOfLines={2}
+          style={{
+            flex: 1,
+            color: "#ffffff",
+            fontSize: 13,
+            lineHeight: 17,
+            fontWeight: "900",
+          }}
+        >
+          {undo.message}
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Undo delete"
+          onPress={() => onUndo(undo)}
+          style={{
+            minHeight: 36,
+            borderRadius: 999,
+            borderCurve: "continuous",
+            backgroundColor: "#ffffff",
+            paddingHorizontal: 12,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
+        >
+          <Undo2 size={16} color="#151820" strokeWidth={2.7} />
+          <Text selectable={false} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+            Undo
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function ReturnToTopButton({
+  bottomInset,
+  onPress,
+}: {
+  bottomInset: number;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Return to top"
+      onPress={onPress}
+      style={{
+        position: "absolute",
+        right: 18,
+        bottom: BOTTOM_TAB_BAR_HEIGHT + bottomInset + 22,
+        zIndex: 116,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        borderCurve: "continuous",
+        backgroundColor: "#151820",
+        borderWidth: 1,
+        borderColor: "rgba(255, 255, 255, 0.18)",
+        alignItems: "center",
+        justifyContent: "center",
+        shadowColor: "#000000",
+        shadowOpacity: 0.24,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 9 },
+        elevation: 16,
+      }}
+    >
+      <ArrowUp size={21} color="#ffffff" strokeWidth={2.8} />
+    </Pressable>
   );
 }
 
@@ -11350,6 +12575,7 @@ type SafeCardThumbnailProps = {
   card: CardDraft;
   width: number;
   cornerRadius: number;
+  footerOwnerName?: string;
 };
 
 class SafeCardThumbnail extends Component<SafeCardThumbnailProps, TabContentErrorBoundaryState> {
@@ -11376,6 +12602,7 @@ class SafeCardThumbnail extends Component<SafeCardThumbnailProps, TabContentErro
           card={this.props.card}
           width={this.props.width}
           cornerRadius={this.props.cornerRadius}
+          footerOwnerName={this.props.footerOwnerName}
         />
       );
     }
@@ -11386,8 +12613,9 @@ class SafeCardThumbnail extends Component<SafeCardThumbnailProps, TabContentErro
         activeSection={null}
         width={this.props.width}
         cornerRadius={this.props.cornerRadius}
-        onSectionPress={() => undefined}
-        onChange={() => undefined}
+        footerOwnerName={this.props.footerOwnerName}
+        onSectionPress={noopCardPreviewHandler}
+        onChange={noopCardPreviewHandler}
       />
     );
   }
@@ -11397,10 +12625,12 @@ function CardThumbnailFallback({
   card,
   width,
   cornerRadius,
+  footerOwnerName,
 }: {
   card: CardDraft;
   width: number;
   cornerRadius: number;
+  footerOwnerName?: string;
 }) {
   const height = width / CARD_BACK_PREVIEW_ASPECT_RATIO;
   const face = getEditableCardFace(card);
@@ -11440,11 +12670,13 @@ function TabScreen({
   subtitle,
   children,
   fullWidth = false,
+  framed = true,
 }: {
   title: string;
   subtitle: string;
   children: ReactNode;
   fullWidth?: boolean;
+  framed?: boolean;
 }) {
   return (
     <View style={{ width: "100%", maxWidth: fullWidth ? undefined : 560, gap: 14 }}>
@@ -11461,27 +12693,33 @@ function TabScreen({
           {subtitle}
         </Text>
       </View>
-      <View
-        style={{
-          borderRadius: 14,
-          borderCurve: "continuous",
-          borderWidth: 1,
-          borderColor: "#d8dbe2",
-          backgroundColor: "#ffffff",
-          padding: 14,
-        }}
-      >
-        {children}
-      </View>
+      {framed ? (
+        <View
+          style={{
+            borderRadius: 14,
+            borderCurve: "continuous",
+            borderWidth: 1,
+            borderColor: "#d8dbe2",
+            backgroundColor: "#ffffff",
+            padding: 14,
+          }}
+        >
+          {children}
+        </View>
+      ) : (
+        children
+      )}
     </View>
   );
 }
 
 function BottomTabBar({
   activeTab,
+  bottomInset,
   onSelectTab,
 }: {
   activeTab: InspectorTab;
+  bottomInset: number;
   onSelectTab: (tab: VisibleInspectorTab) => void;
 }) {
   const tabs = [
@@ -11493,7 +12731,7 @@ function BottomTabBar({
   const [tabBarWidth, setTabBarWidth] = useState(0);
   const bubbleX = useSharedValue(0);
   const indicatorX = useSharedValue(0);
-  const tabBarPadding = 4;
+  const tabBarPadding = 3;
   const tabGap = 4;
   const indicatorInset = 12;
   const tabWidth =
@@ -11534,10 +12772,10 @@ function BottomTabBar({
     <View
       accessibilityRole="tablist"
       style={{
-        minHeight: BOTTOM_TAB_BAR_HEIGHT,
+        minHeight: BOTTOM_TAB_BAR_HEIGHT + bottomInset,
         paddingHorizontal: 16,
-        paddingTop: 6,
-        paddingBottom: 8,
+        paddingTop: 4,
+        paddingBottom: 5 + bottomInset,
         borderTopWidth: 1,
         borderTopColor: "rgba(60, 60, 67, 0.18)",
         backgroundColor: "rgba(247, 248, 246, 0.94)",
@@ -11556,7 +12794,7 @@ function BottomTabBar({
           borderWidth: 1,
           borderColor: "rgba(16, 19, 24, 0.08)",
           backgroundColor: "rgba(255, 255, 255, 0.78)",
-          padding: 4,
+          padding: 3,
           gap: 4,
           shadowColor: "#101318",
           shadowOpacity: 0.08,
@@ -11608,7 +12846,7 @@ function BottomTabBar({
             style={[
               {
                 position: "absolute",
-                bottom: 9,
+                bottom: 7,
                 left: 0,
                 width: indicatorWidth,
                 height: 2,
@@ -11681,7 +12919,7 @@ function BottomTabButton({
       }}
       style={{
         flex: 1,
-        minHeight: 48,
+        minHeight: 44,
         borderRadius: 21,
         borderCurve: "continuous",
         overflow: "hidden",
@@ -11791,24 +13029,18 @@ function PreviewToolbarGrabber({ orientation }: { orientation: PreviewToolbarOri
 
 function TopShareMenu({
   open,
-  selectedSet,
   onToggle,
   onClose,
-  onSaveToSet,
-  onExportCurrentCard,
+  onStartNewCard,
+  onShareToCommunity,
   onExportCurrentCardImage,
-  onExportSelectedSet,
-  onExportSelectedSetBatch,
 }: {
   open: boolean;
-  selectedSet?: CardSet;
   onToggle: () => void;
   onClose: () => void;
-  onSaveToSet: () => void;
-  onExportCurrentCard: () => void;
+  onStartNewCard: () => void;
+  onShareToCommunity: () => void;
   onExportCurrentCardImage: () => void;
-  onExportSelectedSet: () => void;
-  onExportSelectedSetBatch: () => void;
 }) {
   const runAndClose = (action: () => void) => {
     onClose();
@@ -11855,34 +13087,20 @@ function TopShareMenu({
           }}
         >
           <CardSettingsAction
-            label={selectedSet ? `Save to ${selectedSet.name}` : "Save to set"}
-            icon={<Save size={18} color="#20242d" strokeWidth={2.4} />}
-            onPress={() => runAndClose(onSaveToSet)}
-          />
-          <CardSettingsAction
-            label="Export card JSON"
-            icon={<Download size={18} color="#20242d" strokeWidth={2.4} />}
-            onPress={() => runAndClose(onExportCurrentCard)}
+            label="Start new card without saving"
+            icon={<Plus size={18} color="#20242d" strokeWidth={2.4} />}
+            onPress={() => runAndClose(onStartNewCard)}
           />
           <CardSettingsAction
             label={Platform.OS === "web" ? "Download card photo" : "Save card photo"}
             icon={<Download size={18} color="#20242d" strokeWidth={2.4} />}
             onPress={() => runAndClose(onExportCurrentCardImage)}
           />
-          {selectedSet ? (
-            <>
-              <CardSettingsAction
-                label={`Export ${selectedSet.name} JSON`}
-                icon={<BookOpen size={18} color="#20242d" strokeWidth={2.4} />}
-                onPress={() => runAndClose(onExportSelectedSet)}
-              />
-              <CardSettingsAction
-                label={`Batch export ${selectedSet.name}`}
-                icon={<Layers size={18} color="#20242d" strokeWidth={2.4} />}
-                onPress={() => runAndClose(onExportSelectedSetBatch)}
-              />
-            </>
-          ) : null}
+          <CardSettingsAction
+            label="Share card to community"
+            icon={<Users size={18} color="#20242d" strokeWidth={2.4} />}
+            onPress={() => runAndClose(onShareToCommunity)}
+          />
         </View>
       ) : null}
     </View>
@@ -11891,11 +13109,13 @@ function TopShareMenu({
 
 function PhysicalBackActionsMenu({
   width,
+  canAddCardBack,
   onChangeBack,
   onAddCardBack,
   onClose,
 }: {
   width: number;
+  canAddCardBack: boolean;
   onChangeBack: () => void;
   onAddCardBack: () => void;
   onClose: () => void;
@@ -11952,11 +13172,13 @@ function PhysicalBackActionsMenu({
           icon={<Palette size={18} color="#20242d" strokeWidth={2.4} />}
           onPress={onChangeBack}
         />
-        <CardSettingsAction
-          label="Add card to back"
-          icon={<Plus size={18} color="#20242d" strokeWidth={2.4} />}
-          onPress={onAddCardBack}
-        />
+        {canAddCardBack ? (
+          <CardSettingsAction
+            label="Add card to back"
+            icon={<Plus size={18} color="#20242d" strokeWidth={2.4} />}
+            onPress={onAddCardBack}
+          />
+        ) : null}
       </View>
     </View>
   );
@@ -12155,7 +13377,7 @@ function FrameTreatmentPreviewGrid({
           .filter((treatment) => treatment !== "showcase")
           .map((treatment) => ({ kind: "treatment" as const, treatment })),
         ...(treatments.includes("showcase")
-          ? SHOWCASE_FRAME_ORDER.map((showcaseFrame) => ({
+          ? VISIBLE_SHOWCASE_FRAME_ORDER.map((showcaseFrame) => ({
               kind: "showcase" as const,
               showcaseFrame,
             }))
@@ -12540,6 +13762,7 @@ function SetsPanel({
   newSetName,
   customCardBacks,
   generatedSetSymbols,
+  footerOwnerName,
   onChangeNewSetName,
   onSelectSet,
   onCreateSet,
@@ -12559,6 +13782,7 @@ function SetsPanel({
   newSetName: string;
   customCardBacks: CustomCardBackEntry[];
   generatedSetSymbols: GeneratedSetSymbolEntry[];
+  footerOwnerName: string;
   onChangeNewSetName: (name: string) => void;
   onSelectSet: (setId: string) => void;
   onCreateSet: () => void;
@@ -12571,7 +13795,7 @@ function SetsPanel({
   onChangeSetCardBack: (setId: string, cardBackId: CardBackId) => void;
   onChangeSetDefaultSymbol: (
     setId: string,
-    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
+    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
   ) => void;
   onPickSetSymbol: (setId: string) => void;
   onGenerateSetSymbol: (setId: string) => void;
@@ -12579,16 +13803,27 @@ function SetsPanel({
   const { width: viewportWidth } = useWindowDimensions();
   const [expandedSetIds, setExpandedSetIds] = useState<Set<string>>(() => new Set([selectedSetId]));
   const [editingSetId, setEditingSetId] = useState<string | null>(null);
-  const [editingSetDefaultsPanel, setEditingSetDefaultsPanel] = useState<"cardBack" | "setSymbol" | "all">("all");
+  const [editingSetDefaultsPanel, setEditingSetDefaultsPanel] = useState<"cardBack" | "setSymbol" | null>(null);
   const [editingSetName, setEditingSetName] = useState("");
   const [editingSetCode, setEditingSetCode] = useState("");
   const [visibleCardLimits, setVisibleCardLimits] = useState<Record<string, number>>({});
-  const gridContentWidth = Math.max(260, viewportWidth - 88);
-  const gridGap = 6;
-  const gridColumns = Math.min(5, Math.max(2, Math.floor((gridContentWidth + gridGap) / 132)));
+  const [measuredGridContentWidth, setMeasuredGridContentWidth] = useState(0);
+  const gridGap = 8;
+  const gridContentWidth = Math.max(220, measuredGridContentWidth || viewportWidth - 52);
+  const forceTwoColumnMobile = gridContentWidth < 430;
+  const minimumGridItemWidth = forceTwoColumnMobile ? 118 : 168;
+  const gridColumns = forceTwoColumnMobile
+    ? 2
+    : Math.max(1, Math.floor((gridContentWidth + gridGap) / (minimumGridItemWidth + gridGap)));
   const gridItemWidth = Math.floor((gridContentWidth - gridGap * (gridColumns - 1)) / gridColumns);
-  const previewWidth = Math.max(98, gridItemWidth);
+  const previewWidth = Math.max(96, gridItemWidth);
   const blankCardHeight = previewWidth / CARD_BACK_PREVIEW_ASPECT_RATIO;
+
+  const handleGridLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = Math.floor(event.nativeEvent.layout.width);
+
+    setMeasuredGridContentWidth((current) => (Math.abs(current - nextWidth) > 1 ? nextWidth : current));
+  }, []);
 
   useEffect(() => {
     setExpandedSetIds((current) => {
@@ -12606,7 +13841,7 @@ function SetsPanel({
     });
   }, []);
 
-  const openSetEditMode = useCallback((set: CardSet, panel: "cardBack" | "setSymbol" | "all" = "all") => {
+  const openSetEditMode = useCallback((set: CardSet, panel: "cardBack" | "setSymbol" | null = null) => {
     onSelectSet(set.id);
     setExpandedSetIds(new Set([set.id]));
     setEditingSetId(set.id);
@@ -12625,7 +13860,7 @@ function SetsPanel({
     onChangeSetCode(setId, editingSetCode);
 
     setEditingSetId(null);
-    setEditingSetDefaultsPanel("all");
+    setEditingSetDefaultsPanel(null);
     setEditingSetName("");
     setEditingSetCode("");
   }, [editingSetCode, editingSetName, onChangeSetCode, onRenameSet]);
@@ -12658,7 +13893,7 @@ function SetsPanel({
   }, []);
 
   return (
-    <View style={{ padding: 14, gap: 14, backgroundColor: "#f4f5f7" }}>
+    <View style={{ gap: 14 }}>
       <View style={{ gap: 10 }}>
         <EditorField
           label="New set name"
@@ -12711,12 +13946,7 @@ function SetsPanel({
             <View
               key={set.id}
               style={{
-                borderRadius: 10,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: selected ? "#151820" : "#d8dbe2",
-                backgroundColor: "#ffffff",
-                overflow: "hidden",
+                gap: 8,
               }}
             >
               <View
@@ -12724,6 +13954,10 @@ function SetsPanel({
                   minHeight: 52,
                   paddingHorizontal: 12,
                   paddingVertical: 9,
+                  borderRadius: 10,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: selected ? "#151820" : "rgba(21,24,32,0.12)",
                   flexDirection: "row",
                   alignItems: "center",
                   gap: 10,
@@ -12874,7 +14108,7 @@ function SetsPanel({
               </View>
 
               {expanded ? (
-                <View style={{ padding: 12, gap: 12, borderTopWidth: 1, borderTopColor: "#eceef2" }}>
+                <View style={{ gap: 10 }}>
                   <View
                     style={{
                       borderRadius: 9,
@@ -12882,10 +14116,10 @@ function SetsPanel({
                       borderWidth: 1,
                       borderColor: "#d8dbe2",
                       backgroundColor: "#f7f8fb",
-                      padding: 10,
+                      padding: 8,
                       flexDirection: "row",
                       alignItems: "center",
-                      gap: 12,
+                      gap: 10,
                     }}
                   >
                     <Pressable
@@ -13074,96 +14308,25 @@ function SetsPanel({
                         }}
                       />
 
-                      {editingSetDefaultsPanel !== "setSymbol" ? (
-                        <>
-                          <View>
-                            <CardBackPicker
-                              value={setCardBackId}
-                              customBacks={customCardBacks}
-                              showSummary={false}
-                              onChange={(cardBackId) => {
-                                onSelectSet(set.id);
-                                setEditingSetId(set.id);
-                                setEditingSetDefaultsPanel("cardBack");
-                                onChangeSetCardBack(set.id, cardBackId ?? DEFAULT_CARD_BACK_ID);
-                              }}
-                            />
-                          </View>
-
-                          {editingSetDefaultsPanel === "all" ? (
-                            <View
-                              style={{
-                                height: 1,
-                                backgroundColor: "#eceef2",
-                              }}
-                            />
-                          ) : null}
-                        </>
-                      ) : null}
-
-                      {editingSetDefaultsPanel !== "cardBack" ? (
-                        <View style={{ gap: 10 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                          <View
-                            style={{
-                              width: 38,
-                              height: 38,
-                              borderRadius: 8,
-                              borderCurve: "continuous",
-                              borderWidth: 1,
-                              borderColor: "#d4d8e0",
-                              backgroundColor: "#ffffff",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                          >
-                            <SetSymbolMark
-                              presetId={set.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id}
-                              imageUri={set.setSymbolUri}
-                              usesRarityTreatment={set.setSymbolUsesRarityTreatment}
-                              rarity="rare"
-                              size={set.setSymbolUri && set.setSymbolUsesRarityTreatment ? 27 : 23}
-                            />
-                          </View>
-                          <View style={{ flex: 1, minWidth: 0 }}>
-                            <Text selectable={false} style={{ color: "#5f6470", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-                              Set default symbol
-                            </Text>
-                            <Text selectable={false} numberOfLines={1} style={{ color: "#1f2530", fontSize: 13, fontWeight: "800" }}>
-                              Changing this updates every card in the set.
-                            </Text>
-                          </View>
-                        </View>
-
-                        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={`Upload default set symbol for ${set.name}`}
-                            onPress={() => {
+                      {editingSetDefaultsPanel === "cardBack" ? (
+                        <View>
+                          <CardBackPicker
+                            value={setCardBackId}
+                            customBacks={customCardBacks}
+                            showSummary={false}
+                            onChange={(cardBackId) => {
                               onSelectSet(set.id);
                               setEditingSetId(set.id);
-                              setEditingSetDefaultsPanel("setSymbol");
-                              onPickSetSymbol(set.id);
+                              setEditingSetDefaultsPanel("cardBack");
+                              onChangeSetCardBack(set.id, cardBackId ?? DEFAULT_CARD_BACK_ID);
                             }}
-                            style={{
-                              flexGrow: 1,
-                              flexBasis: 148,
-                              minHeight: 40,
-                              borderRadius: 8,
-                              borderCurve: "continuous",
-                              backgroundColor: "#151820",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              flexDirection: "row",
-                              gap: 8,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Upload size={16} color="#ffffff" strokeWidth={2.4} />
-                            <Text selectable={false} numberOfLines={1} adjustsFontSizeToFit style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-                              Upload symbol
-                            </Text>
-                          </Pressable>
+                          />
+                        </View>
+                      ) : null}
+
+                      {editingSetDefaultsPanel === "setSymbol" ? (
+                        <View style={{ gap: 10 }}>
+                        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel={`Generate default set symbol for ${set.name}`}
@@ -13192,6 +14355,34 @@ function SetsPanel({
                               Generate
                             </Text>
                           </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Upload default set symbol for ${set.name}`}
+                            onPress={() => {
+                              onSelectSet(set.id);
+                              setEditingSetId(set.id);
+                              setEditingSetDefaultsPanel("setSymbol");
+                              onPickSetSymbol(set.id);
+                            }}
+                            style={{
+                              flexGrow: 1,
+                              flexBasis: 148,
+                              minHeight: 40,
+                              borderRadius: 8,
+                              borderCurve: "continuous",
+                              backgroundColor: "#151820",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexDirection: "row",
+                              gap: 8,
+                              paddingHorizontal: 10,
+                            }}
+                          >
+                            <Upload size={16} color="#ffffff" strokeWidth={2.4} />
+                            <Text selectable={false} numberOfLines={1} adjustsFontSizeToFit style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                              Upload symbol
+                            </Text>
+                          </Pressable>
                         </View>
 
                         {generatedSetSymbols.length > 0 ? (
@@ -13202,7 +14393,8 @@ function SetsPanel({
                             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                               {generatedSetSymbols.map((symbol) => {
                                 const selectedSymbol =
-                                  set.setSymbolUri === symbol.uri && set.setSymbolUsesRarityTreatment;
+                                  (set.setSymbolId && set.setSymbolId === symbol.id) ||
+                                  (!set.setSymbolId && set.setSymbolUri === symbol.uri && set.setSymbolUsesRarityTreatment);
 
                                 return (
                                   <Pressable
@@ -13214,6 +14406,7 @@ function SetsPanel({
                                       setEditingSetId(set.id);
                                       setEditingSetDefaultsPanel("setSymbol");
                                       onChangeSetDefaultSymbol(set.id, {
+                                        setSymbolId: symbol.id,
                                         setSymbolUri: symbol.uri,
                                         setSymbolUsesRarityTreatment: true,
                                       });
@@ -13274,9 +14467,10 @@ function SetsPanel({
                                   onPress={() => {
                                     setEditingSetId(set.id);
                                     setEditingSetDefaultsPanel("setSymbol");
-                                    onChangeSetDefaultSymbol(set.id, {
-                                      setSymbolPreset: preset.id,
-                                      setSymbolUri: undefined,
+                                      onChangeSetDefaultSymbol(set.id, {
+                                        setSymbolPreset: preset.id,
+                                        setSymbolId: undefined,
+                                        setSymbolUri: undefined,
                                       setSymbolUsesRarityTreatment: undefined,
                                     });
                                   }}
@@ -13318,7 +14512,15 @@ function SetsPanel({
                     </View>
                   ) : null}
 
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: gridGap, alignItems: "flex-start" }}>
+                  <View
+                    onLayout={handleGridLayout}
+                    style={{
+                      flexDirection: "row",
+                      flexWrap: "wrap",
+                      gap: gridGap,
+                      alignItems: "flex-start",
+                    }}
+                  >
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Create a new card in ${set.name}`}
@@ -13358,6 +14560,7 @@ function SetsPanel({
                               card={setCard}
                               width={previewWidth}
                               cornerRadius={SET_CARD_THUMBNAIL_RADIUS}
+                              footerOwnerName={footerOwnerName}
                             />
                           </View>
                           {isEditingSet ? (
@@ -13439,13 +14642,38 @@ function SetsPanel({
 }
 
 type CommunityBrowseMode = "cards" | "sets";
+const COMMUNITY_CARD_PAGE_SIZE = 8;
+const COMMUNITY_INITIAL_RENDERED_CARD_COUNT = 3;
 
-function CommunityPanel({ sets }: { sets: CardSet[] }) {
+function CommunityPanel({
+  sets,
+  accountUser,
+  onExportCardImage,
+}: {
+  sets: CardSet[];
+  accountUser: SupabaseUser | null;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
+}) {
   const [browseMode, setBrowseMode] = useState<CommunityBrowseMode>("cards");
   const [searchText, setSearchText] = useState("");
+  const [feedSort, setFeedSort] = useState<CommunityCardFeedSort>("newest");
+  const [hideSeenCards, setHideSeenCards] = useState(false);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [communityCards, setCommunityCards] = useState<CommunityCardPayload[]>([]);
+  const [communitySets, setCommunitySets] = useState<CommunitySetPayload[]>([]);
+  const [featuredCard, setFeaturedCard] = useState<CommunityCardPayload | null>(null);
   const [communityBusy, setCommunityBusy] = useState(false);
+  const [communitySetsLoaded, setCommunitySetsLoaded] = useState(false);
+  const [communityLoadingMore, setCommunityLoadingMore] = useState(false);
+  const [communityHasMoreCards, setCommunityHasMoreCards] = useState(false);
+  const [communityNextOffset, setCommunityNextOffset] = useState(0);
   const [communityError, setCommunityError] = useState<string | null>(null);
+  const [commentPopoverCard, setCommentPopoverCard] = useState<CommunityCardPayload | null>(null);
+  const [pollsPopoverOpen, setPollsPopoverOpen] = useState(false);
+  const [feedbackPopoverOpen, setFeedbackPopoverOpen] = useState(false);
+  const communityCardsRef = useRef<CommunityCardPayload[]>([]);
+  const featuredCardRef = useRef<CommunityCardPayload | null>(null);
+  const canManageCommunityPolls = accountUser?.email?.toLowerCase() === "gtjoe51@gmail.com";
   const localCards = useMemo(
     () =>
       sets.flatMap((set) =>
@@ -13457,8 +14685,6 @@ function CommunityPanel({ sets }: { sets: CardSet[] }) {
       ),
     [sets],
   );
-  const localCardCount = sets.reduce((total, set) => total + set.cards.length, 0);
-  const previewSets = sets.slice(0, 4);
   const normalizedSearchText = searchText.trim().toLowerCase();
   const filteredCommunityCards = useMemo(() => {
     if (!normalizedSearchText) {
@@ -13472,11 +14698,14 @@ function CommunityPanel({ sets }: { sets: CardSet[] }) {
   }, [communityCards, normalizedSearchText]);
   const filteredSets = useMemo(() => {
     if (!normalizedSearchText) {
-      return previewSets;
+      return communitySets;
     }
 
-    return previewSets.filter((set) => set.name.toLowerCase().includes(normalizedSearchText));
-  }, [normalizedSearchText, previewSets]);
+    return communitySets.filter((set) => {
+      const haystack = `${set.name} ${set.code ?? ""} ${set.authorName}`.toLowerCase();
+      return haystack.includes(normalizedSearchText);
+    });
+  }, [communitySets, normalizedSearchText]);
 
   const loadCommunityCards = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -13485,123 +14714,379 @@ function CommunityPanel({ sets }: { sets: CardSet[] }) {
     }
 
     setCommunityBusy(true);
+    setCommunityLoadingMore(false);
     setCommunityError(null);
 
     try {
-      setCommunityCards(await fetchCommunityCards(48));
+      const page = await fetchCommunityCards(COMMUNITY_CARD_PAGE_SIZE, 0, { sort: feedSort, hideSeen: hideSeenCards });
+      setCommunityCards(page.cards);
+      setCommunityHasMoreCards(page.hasMore);
+      setCommunityNextOffset(page.nextOffset);
+      if (!hideSeenCards) {
+        void markCommunityCardsSeen(page.cards.map((entry) => entry.id)).catch((error) => {
+          console.warn("Unable to mark community cards seen.", error);
+        });
+      }
+
+      void fetchCommunityFeaturedCard()
+        .then(setFeaturedCard)
+        .catch((error) => {
+          console.warn("Unable to load weekly featured card.", error);
+        });
     } catch (error) {
       setCommunityError(error instanceof Error ? error.message : "Unable to load community cards.");
     } finally {
       setCommunityBusy(false);
     }
+  }, [feedSort, hideSeenCards]);
+
+  const loadCommunitySets = useCallback(async () => {
+    if (!isSupabaseConfigured || communitySetsLoaded) {
+      return;
+    }
+
+    try {
+      const directory = await fetchCommunitySets(24, 0);
+      setCommunitySets(directory);
+      setCommunitySetsLoaded(true);
+    } catch (error) {
+      console.warn("Unable to load community sets.", error);
+    }
+  }, [communitySetsLoaded]);
+
+  const loadMoreCommunityCards = useCallback(async () => {
+    if (communityBusy || communityLoadingMore || !communityHasMoreCards) {
+      return;
+    }
+
+    setCommunityLoadingMore(true);
+    setCommunityError(null);
+
+    try {
+      const page: CommunityCardPagePayload = await fetchCommunityCards(
+        COMMUNITY_CARD_PAGE_SIZE,
+        communityNextOffset,
+        { sort: feedSort, hideSeen: hideSeenCards },
+      );
+      setCommunityCards((current) => {
+        const existingIds = new Set(current.map((entry) => entry.id));
+        const uniqueCards = page.cards.filter((entry) => !existingIds.has(entry.id));
+        return [...current, ...uniqueCards];
+      });
+      setCommunityHasMoreCards(page.hasMore);
+      setCommunityNextOffset(page.nextOffset);
+      if (!hideSeenCards) {
+        void markCommunityCardsSeen(page.cards.map((entry) => entry.id)).catch((error) => {
+          console.warn("Unable to mark community cards seen.", error);
+        });
+      }
+    } catch (error) {
+      setCommunityError(error instanceof Error ? error.message : "Unable to load more community cards.");
+    } finally {
+      setCommunityLoadingMore(false);
+    }
+  }, [communityBusy, communityHasMoreCards, communityLoadingMore, communityNextOffset, feedSort, hideSeenCards]);
+
+  useEffect(() => {
+    communityCardsRef.current = communityCards;
+  }, [communityCards]);
+
+  useEffect(() => {
+    featuredCardRef.current = featuredCard;
+  }, [featuredCard]);
+
+  const patchCommunityCard = useCallback((cardId: string, patch: Partial<CommunityCardPayload>) => {
+    setCommunityCards((current) => current.map((entry) => entry.id === cardId ? { ...entry, ...patch } : entry));
+    setFeaturedCard((current) => current?.id === cardId ? { ...current, ...patch } : current);
   }, []);
+
+  const handleToggleCommunityLike = useCallback(async (cardId: string, liked: boolean) => {
+    const currentCard =
+      communityCardsRef.current.find((entry) => entry.id === cardId) ??
+      (featuredCardRef.current?.id === cardId ? featuredCardRef.current : null);
+
+    if (!currentCard) {
+      return;
+    }
+
+    const nextLikeCount = Math.max(0, currentCard.likeCount + (liked ? 1 : -1));
+    patchCommunityCard(cardId, { likedByViewer: liked, likeCount: nextLikeCount });
+
+    try {
+      await toggleCommunityCardLike(cardId, liked);
+    } catch (error) {
+      patchCommunityCard(cardId, {
+        likedByViewer: currentCard.likedByViewer,
+        likeCount: currentCard.likeCount,
+      });
+      Alert.alert("Community like unavailable", error instanceof Error ? error.message : "CardMagic could not update the like.");
+    }
+  }, [patchCommunityCard]);
+
+  const handleToggleCommunityFollow = useCallback(async (userId: string, followed: boolean) => {
+    const previousCards = communityCardsRef.current.filter((entry) => entry.userId === userId);
+    const previousFeatured = featuredCardRef.current?.userId === userId ? featuredCardRef.current : null;
+
+    setCommunityCards((current) => current.map((entry) => (
+      entry.userId === userId ? { ...entry, followedByViewer: followed } : entry
+    )));
+    setFeaturedCard((current) => (
+      current?.userId === userId ? { ...current, followedByViewer: followed } : current
+    ));
+
+    try {
+      await toggleCommunityUserFollow(userId, followed);
+    } catch (error) {
+      setCommunityCards((current) => current.map((entry) => {
+        const previous = previousCards.find((card) => card.id === entry.id);
+        return previous ? { ...entry, followedByViewer: previous.followedByViewer } : entry;
+      }));
+      if (previousFeatured) {
+        setFeaturedCard((current) => (
+          current?.id === previousFeatured.id ? { ...current, followedByViewer: previousFeatured.followedByViewer } : current
+        ));
+      }
+      Alert.alert("Follow unavailable", error instanceof Error ? error.message : "CardMagic could not update this follow.");
+    }
+  }, []);
+
+  const openCommunityComments = useCallback((cardId: string) => {
+    const currentCard =
+      communityCardsRef.current.find((entry) => entry.id === cardId) ??
+      (featuredCardRef.current?.id === cardId ? featuredCardRef.current : null);
+
+    if (!currentCard) {
+      return;
+    }
+
+    setCommentPopoverCard(currentCard);
+  }, []);
+  const handleCommunityCommentCountChange = useCallback((cardId: string, commentCount: number) => {
+    patchCommunityCard(cardId, { commentCount });
+  }, [patchCommunityCard]);
 
   useEffect(() => {
     void loadCommunityCards();
   }, [loadCommunityCards]);
 
+  useEffect(() => {
+    if (browseMode === "sets") {
+      void loadCommunitySets();
+    }
+  }, [browseMode, loadCommunitySets]);
+
   return (
-    <View style={{ gap: 14, backgroundColor: "#f4f5f7", padding: 14 }}>
+    <View style={{ width: "100%", maxWidth: 560, gap: 14 }}>
       <View
         style={{
-          borderRadius: 12,
-          borderCurve: "continuous",
-          backgroundColor: "#101820",
-          padding: 14,
-          gap: 12,
-          overflow: "hidden",
+          gap: 10,
+          zIndex: 30,
         }}
       >
-        <LinearGradient
-          pointerEvents="none"
-          colors={["rgba(80,214,255,0.18)", "rgba(255,255,255,0)", "rgba(255,208,98,0.12)"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ position: "absolute", inset: 0 }}
-        />
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <View
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+            <Text
+              selectable
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              style={{ color: "#101318", fontSize: 32, fontWeight: "900" }}
+            >
+              Community
+            </Text>
+            <Text selectable style={{ color: "#606775", fontSize: 14, fontWeight: "700" }}>
+              Browse shared cards and sets
+            </Text>
+          </View>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open community polls"
+            onPress={() => setPollsPopoverOpen(true)}
             style={{
-              width: 42,
-              height: 42,
-              borderRadius: 21,
-              backgroundColor: "rgba(255,255,255,0.12)",
+              width: 44,
+              height: 44,
+              borderRadius: 22,
+              borderWidth: 1,
+              borderColor: pollsPopoverOpen ? "#0b7180" : "#d8dbe2",
+              backgroundColor: pollsPopoverOpen ? "#151820" : "#ffffff",
               alignItems: "center",
               justifyContent: "center",
+              shadowColor: "#000000",
+              shadowOpacity: 0.08,
+              shadowRadius: 10,
+              shadowOffset: { width: 0, height: 5 },
             }}
           >
-            <Users size={22} color="#ffffff" strokeWidth={2.5} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text selectable={false} style={{ color: "#ffffff", fontSize: 18, fontWeight: "900" }}>
-              Community Browser
-            </Text>
-            <Text selectable style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-              Supabase data source · image CDN · public card index
-            </Text>
-          </View>
+            <ListPlus size={18} color={pollsPopoverOpen ? "#ffffff" : "#151820"} strokeWidth={2.6} />
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open community feedback"
+            onPress={() => setFeedbackPopoverOpen(true)}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 22,
+              borderWidth: 1,
+              borderColor: feedbackPopoverOpen ? "#0b7180" : "#d8dbe2",
+              backgroundColor: feedbackPopoverOpen ? "#151820" : "#ffffff",
+              alignItems: "center",
+              justifyContent: "center",
+              shadowColor: "#000000",
+              shadowOpacity: 0.08,
+              shadowRadius: 10,
+              shadowOffset: { width: 0, height: 5 },
+            }}
+          >
+            <MessageCircle size={18} color={feedbackPopoverOpen ? "#ffffff" : "#151820"} strokeWidth={2.6} />
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh community feed"
+            disabled={communityBusy}
+            onPress={() => void loadCommunityCards()}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 22,
+              borderWidth: 1,
+              borderColor: "#d8dbe2",
+              backgroundColor: communityBusy ? "#eef1f5" : "#ffffff",
+              alignItems: "center",
+              justifyContent: "center",
+              shadowColor: "#000000",
+              shadowOpacity: 0.08,
+              shadowRadius: 10,
+              shadowOffset: { width: 0, height: 5 },
+            }}
+          >
+            {communityBusy ? (
+              <ActivityIndicator color="#0b7180" size="small" />
+            ) : (
+              <RefreshCw size={18} color="#151820" strokeWidth={2.6} />
+            )}
+          </Pressable>
         </View>
 
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <CommunityMetric label="Public Cards" value={String(communityCards.length)} />
-          <CommunityMetric label="Local Sets" value={String(sets.length)} />
-          <CommunityMetric label="Local Drafts" value={String(localCardCount)} />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View
+            style={{
+              flex: 1,
+              minHeight: 44,
+              borderRadius: 999,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#d8dbe2",
+              backgroundColor: "#ffffff",
+              paddingHorizontal: 12,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 9,
+            }}
+          >
+            <Search size={17} color="#68707d" strokeWidth={2.4} />
+            <TextInput
+              accessibilityLabel="Search community cards and sets"
+              value={searchText}
+              onChangeText={setSearchText}
+              placeholder="Search community"
+              placeholderTextColor="#68707d"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                flex: 1,
+                minHeight: 42,
+                color: "#151820",
+                fontSize: 14,
+                fontWeight: "800",
+                paddingVertical: 0,
+              }}
+            />
+          </View>
+
+          <View style={{ position: "relative" }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open community filter menu"
+              accessibilityState={{ expanded: filterMenuOpen }}
+              onPress={() => setFilterMenuOpen((current) => !current)}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                borderWidth: 1,
+                borderColor: filterMenuOpen || hideSeenCards || feedSort !== "newest" ? "#0b7180" : "#d8dbe2",
+                backgroundColor: filterMenuOpen || hideSeenCards || feedSort !== "newest" ? "#151820" : "#ffffff",
+                alignItems: "center",
+                justifyContent: "center",
+                shadowColor: "#000000",
+                shadowOpacity: 0.08,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 5 },
+              }}
+            >
+              <SlidersHorizontal
+                size={18}
+                color={filterMenuOpen || hideSeenCards || feedSort !== "newest" ? "#ffffff" : "#151820"}
+                strokeWidth={2.6}
+              />
+            </Pressable>
+
+            {filterMenuOpen ? (
+              <View
+                style={{
+                  position: "absolute",
+                  top: 50,
+                  right: 0,
+                  width: 220,
+                  borderRadius: 14,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: "#d8dbe2",
+                  backgroundColor: "#ffffff",
+                  padding: 8,
+                  gap: 6,
+                  shadowColor: "#000000",
+                  shadowOpacity: 0.16,
+                  shadowRadius: 18,
+                  shadowOffset: { width: 0, height: 12 },
+                  zIndex: 50,
+                }}
+              >
+                <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "900", textTransform: "uppercase", paddingHorizontal: 8, paddingTop: 2 }}>
+                  Feed order
+                </Text>
+                <CommunityMenuOptionButton
+                  label="Newest"
+                  selected={feedSort === "newest"}
+                  onPress={() => {
+                    setFeedSort("newest");
+                    setFilterMenuOpen(false);
+                  }}
+                />
+                <CommunityMenuOptionButton
+                  label="Most liked"
+                  selected={feedSort === "most_liked"}
+                  onPress={() => {
+                    setFeedSort("most_liked");
+                    setFilterMenuOpen(false);
+                  }}
+                />
+                <View style={{ height: 1, backgroundColor: "#eceef2", marginVertical: 2 }} />
+                <CommunityMenuOptionButton
+                  label="Hide seen cards"
+                  selected={hideSeenCards}
+                  onPress={() => setHideSeenCards((current) => !current)}
+                />
+              </View>
+            ) : null}
+          </View>
         </View>
       </View>
 
-      <View
-        style={{
-          minHeight: 46,
-          borderRadius: 10,
-          borderCurve: "continuous",
-          borderWidth: 1,
-          borderColor: "#d8dbe2",
-          backgroundColor: "#ffffff",
-          paddingHorizontal: 12,
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 9,
-        }}
-      >
-        <Search size={18} color="#68707d" strokeWidth={2.4} />
-        <TextInput
-          accessibilityLabel="Search community cards and sets"
-          value={searchText}
-          onChangeText={setSearchText}
-          placeholder="Search community cards and sets"
-          placeholderTextColor="#68707d"
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={{
-            flex: 1,
-            minHeight: 44,
-            color: "#151820",
-            fontSize: 14,
-            fontWeight: "800",
-            paddingVertical: 0,
-          }}
-        />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Refresh community feed"
-          disabled={communityBusy}
-          onPress={() => void loadCommunityCards()}
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 17,
-            backgroundColor: communityBusy ? "#eef1f5" : "#151820",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          {communityBusy ? (
-            <ActivityIndicator color="#0b7180" size="small" />
-          ) : (
-            <RefreshCw size={16} color="#ffffff" strokeWidth={2.6} />
-          )}
-        </Pressable>
-      </View>
+      <WeeklyFeaturedCardPreview card={featuredCard} loading={communityBusy} />
 
       <View style={{ flexDirection: "row", gap: 8 }}>
         <CommunityModeButton
@@ -13653,35 +15138,120 @@ function CommunityPanel({ sets }: { sets: CardSet[] }) {
             detail={communityError}
           />
         ) : browseMode === "cards" ? (
-          <CommunityCardsPreview cards={filteredCommunityCards} localFallbackCards={localCards} />
+          <CommunityCardsPreview
+            cards={filteredCommunityCards}
+            localFallbackCards={localCards}
+            hasMore={Boolean(!normalizedSearchText && communityCards.length > 0 && communityHasMoreCards)}
+            loadingMore={communityLoadingMore}
+            onLoadMore={loadMoreCommunityCards}
+            onToggleLike={handleToggleCommunityLike}
+            onToggleFollow={handleToggleCommunityFollow}
+            onOpenComments={openCommunityComments}
+            onExportCardImage={onExportCardImage}
+          />
         ) : (
           <CommunitySetsPreview sets={filteredSets} />
         )}
       </View>
+      <CommunityCommentsPopover
+        card={commentPopoverCard}
+        onClose={() => setCommentPopoverCard(null)}
+        onCommentCountChange={handleCommunityCommentCountChange}
+      />
+      <CommunityPollsPopover
+        visible={pollsPopoverOpen}
+        canCreatePolls={canManageCommunityPolls}
+        onClose={() => setPollsPopoverOpen(false)}
+      />
+      <CommunityFeedbackPopover
+        visible={feedbackPopoverOpen}
+        accountUser={accountUser}
+        onClose={() => setFeedbackPopoverOpen(false)}
+      />
     </View>
   );
 }
 
-function CommunityMetric({ label, value }: { label: string; value: string }) {
+function WeeklyFeaturedCardPreview({
+  card,
+  loading,
+}: {
+  card: CommunityCardPayload | null;
+  loading: boolean;
+}) {
+  const { width: windowWidth } = useWindowDimensions();
+  const previewWidth =
+    windowWidth >= 900 ? 360 :
+    windowWidth >= 620 ? 320 :
+    Math.min(300, Math.max(232, windowWidth - 96));
+
   return (
     <View
       style={{
-        flex: 1,
-        minHeight: 58,
-        borderRadius: 9,
+        borderRadius: 12,
         borderCurve: "continuous",
-        backgroundColor: "rgba(255,255,255,0.1)",
-        padding: 10,
-        justifyContent: "center",
-        gap: 2,
+        backgroundColor: "#101820",
+        padding: 14,
+        gap: 12,
+        overflow: "hidden",
       }}
     >
-      <Text selectable={false} style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontWeight: "900", textTransform: "uppercase" }}>
-        {label}
-      </Text>
-      <Text selectable={false} style={{ color: "#ffffff", fontSize: 20, fontWeight: "900", fontVariant: ["tabular-nums"] }}>
-        {value}
-      </Text>
+      <LinearGradient
+        pointerEvents="none"
+        colors={["rgba(80,214,255,0.2)", "rgba(255,255,255,0)", "rgba(255,208,98,0.14)"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ position: "absolute", inset: 0 }}
+      />
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <View
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 21,
+            backgroundColor: "rgba(255,255,255,0.12)",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Heart size={21} color="#ffffff" strokeWidth={2.5} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text selectable={false} style={{ color: "#ffffff", fontSize: 18, fontWeight: "900" }}>
+            Weekly Featured Card
+          </Text>
+        </View>
+      </View>
+
+      {loading && !card ? (
+        <View style={{ minHeight: 120, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color="#6ed7e8" />
+        </View>
+      ) : card ? (
+        <View style={{ gap: 12, alignItems: "center" }}>
+          <CardPreview
+            card={card.card}
+            activeSection={null}
+            width={previewWidth}
+            cornerRadius={9}
+            footerOwnerName={card.authorName}
+            onSectionPress={noopCardPreviewHandler}
+            onChange={noopCardPreviewHandler}
+          />
+          <View style={{ width: "100%", gap: 4 }}>
+            <Text selectable={false} numberOfLines={1} style={{ color: "#ffffff", fontSize: 15, fontWeight: "900", textAlign: "center" }}>
+              {card.name || "Untitled Card"}
+            </Text>
+            <Text selectable={false} numberOfLines={1} style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, fontWeight: "800", textAlign: "center" }}>
+              {card.authorName} · Level {card.authorLevel} · {card.likeCount} likes · {card.commentCount} comments
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <Text selectable={false} style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 18, fontWeight: "800" }}>
+          No public cards are available for the weekly feature yet.
+        </Text>
+      )}
     </View>
   );
 }
@@ -13719,18 +15289,1337 @@ function CommunityModeButton({
   );
 }
 
+function CommunityMenuOptionButton({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="menuitem"
+      accessibilityState={{ selected }}
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={{
+        minHeight: 38,
+        borderRadius: 10,
+        borderCurve: "continuous",
+        backgroundColor: selected ? "rgba(11,113,128,0.1)" : "#ffffff",
+        paddingHorizontal: 10,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <View
+        style={{
+          width: 16,
+          height: 16,
+          borderRadius: 8,
+          borderWidth: 2,
+          borderColor: selected ? "#0b7180" : "#c8ced8",
+          backgroundColor: selected ? "#0b7180" : "#ffffff",
+        }}
+      />
+      <Text selectable={false} numberOfLines={1} style={{ flex: 1, color: selected ? "#0b7180" : "#151820", fontSize: 13, fontWeight: "900" }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+type FeedbackScreenshotDraft = {
+  id: string;
+  uri: string;
+};
+
+function CommunityFeedbackPopover({
+  visible,
+  accountUser,
+  onClose,
+}: {
+  visible: boolean;
+  accountUser: SupabaseUser | null;
+  onClose: () => void;
+}) {
+  const { height: windowHeight } = useWindowDimensions();
+  const [feedbackType, setFeedbackType] = useState<CommunityFeedbackType>("feedback");
+  const [feedbackBody, setFeedbackBody] = useState("");
+  const [screenshots, setScreenshots] = useState<FeedbackScreenshotDraft[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      setFeedbackError(null);
+      setFeedbackSuccess(null);
+    }
+  }, [visible]);
+
+  if (!visible) {
+    return null;
+  }
+
+  const pickScreenshot = async () => {
+    if (screenshots.length >= 3) {
+      setFeedbackError("You can attach up to three screenshots.");
+      return;
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      setFeedbackError("Enable photo library access to attach screenshots.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.82,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
+    });
+
+    if (result.canceled || !result.assets[0]?.uri) {
+      return;
+    }
+
+    try {
+      const uri = await normalizePickedImage(result.assets[0], {
+        maxDimension: 1600,
+        compress: 0.82,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+      setScreenshots((current) => [...current, { id: createUuid(), uri }].slice(0, 3));
+      setFeedbackError(null);
+    } catch (error) {
+      setFeedbackError(error instanceof Error ? error.message : "CardMagic could not attach that screenshot.");
+    }
+  };
+
+  const sendFeedback = async () => {
+    if (!accountUser) {
+      setFeedbackError("Sign in before sending feedback.");
+      return;
+    }
+
+    setSubmitting(true);
+    setFeedbackError(null);
+    setFeedbackSuccess(null);
+
+    try {
+      const screenshotPaths: string[] = [];
+
+      for (const [index, screenshot] of screenshots.entries()) {
+        screenshotPaths.push(await uploadCommunityFeedbackScreenshot(accountUser.id, screenshot.uri, index));
+      }
+
+      await submitCommunityFeedback({
+        feedbackType,
+        body: feedbackBody,
+        appVersion: CARDMAGIC_APP_VERSION,
+        deviceInfo: getCommunityFeedbackDeviceInfo(),
+        screenshotPaths,
+      });
+
+      setFeedbackBody("");
+      setScreenshots([]);
+      setFeedbackSuccess("Feedback submitted. Device metadata and screenshots were attached.");
+    } catch (error) {
+      setFeedbackError(error instanceof Error ? error.message : "CardMagic could not send feedback.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const content = (
+    <View
+      pointerEvents="auto"
+      style={{
+        flex: 1,
+        backgroundColor: "rgba(15, 18, 24, 0.48)",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 14,
+      }}
+    >
+      <View
+        style={{
+          width: "100%",
+          maxWidth: 620,
+          maxHeight: Math.max(430, windowHeight - 58),
+          borderRadius: 16,
+          borderCurve: "continuous",
+          backgroundColor: "#ffffff",
+          borderWidth: 1,
+          borderColor: "#d8dbe2",
+          overflow: "hidden",
+          shadowColor: "#000000",
+          shadowOpacity: 0.22,
+          shadowRadius: 24,
+          shadowOffset: { width: 0, height: 14 },
+          elevation: 18,
+        }}
+      >
+        <View
+          style={{
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: "#eceef2",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text selectable={false} style={{ color: "#151820", fontSize: 17, fontWeight: "900" }}>
+              Community feedback
+            </Text>
+            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+              Send a bug report or product note with diagnostic context
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close community feedback"
+            onPress={onClose}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 17,
+              backgroundColor: "#eef0f4",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={18} color="#20242d" strokeWidth={2.6} />
+          </Pressable>
+        </View>
+
+        <ScrollView
+          style={{ maxHeight: Math.max(360, windowHeight - 150) }}
+          contentContainerStyle={{ padding: 14, gap: 14 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {feedbackError ? (
+            <View
+              style={{
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "#f1bcc4",
+                backgroundColor: "#fff5f6",
+                padding: 10,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                {feedbackError}
+              </Text>
+            </View>
+          ) : null}
+
+          {feedbackSuccess ? (
+            <View
+              style={{
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "#b7ecf4",
+                backgroundColor: "#f2fcfd",
+                padding: 10,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, lineHeight: 17, fontWeight: "900" }}>
+                {feedbackSuccess}
+              </Text>
+            </View>
+          ) : null}
+
+          {!accountUser ? (
+            <View
+              style={{
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "#f2d6a7",
+                backgroundColor: "#fff9ed",
+                padding: 10,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#8a5d0a", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                Sign in so CardMagic can associate this report with your account.
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <CommunityModeButton
+              label="Feedback"
+              selected={feedbackType === "feedback"}
+              onPress={() => setFeedbackType("feedback")}
+            />
+            <CommunityModeButton
+              label="Bug report"
+              selected={feedbackType === "bug"}
+              onPress={() => setFeedbackType("bug")}
+            />
+          </View>
+
+          <TextInput
+            accessibilityLabel="Feedback content"
+            value={feedbackBody}
+            onChangeText={setFeedbackBody}
+            placeholder={feedbackType === "bug" ? "What broke, what did you expect, and what did you tap before it happened?" : "What should CardMagic improve or add?"}
+            placeholderTextColor="#68707d"
+            multiline
+            maxLength={4000}
+            style={[communityPollInputStyle, { minHeight: 156, textAlignVertical: "top" }]}
+          />
+
+          <View style={{ gap: 10 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text selectable={false} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                  Screenshots
+                </Text>
+                <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
+                  Optional, up to 3 images
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Attach feedback screenshot"
+                disabled={submitting || screenshots.length >= 3}
+                onPress={() => void pickScreenshot()}
+                style={{
+                  minHeight: 38,
+                  borderRadius: 999,
+                  backgroundColor: screenshots.length >= 3 ? "#d8dbe2" : "#151820",
+                  paddingHorizontal: 14,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                }}
+              >
+                <Upload size={15} color="#ffffff" strokeWidth={2.6} />
+                <Text selectable={false} style={{ color: "#ffffff", fontSize: 12, fontWeight: "900" }}>
+                  Add
+                </Text>
+              </Pressable>
+            </View>
+
+            {screenshots.length > 0 ? (
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+                {screenshots.map((screenshot, index) => (
+                  <View
+                    key={screenshot.id}
+                    style={{
+                      width: 96,
+                      borderRadius: 12,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: "#d8dbe2",
+                      backgroundColor: "#f8f9fb",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <Image source={{ uri: screenshot.uri }} style={{ width: 94, height: 94, backgroundColor: "#eef0f4" }} resizeMode="cover" />
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove screenshot ${index + 1}`}
+                      disabled={submitting}
+                      onPress={() => setScreenshots((current) => current.filter((entry) => entry.id !== screenshot.id))}
+                      style={{ minHeight: 32, alignItems: "center", justifyContent: "center" }}
+                    >
+                      <Text selectable={false} style={{ color: "#a62231", fontSize: 11, fontWeight: "900" }}>
+                        Remove
+                      </Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+
+          <View
+            style={{
+              borderRadius: 12,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#e1e5eb",
+              backgroundColor: "#f8f9fb",
+              padding: 10,
+              gap: 4,
+            }}
+          >
+            <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
+              Diagnostics
+            </Text>
+            <Text selectable={false} style={{ color: "#46505d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+              v{CARDMAGIC_APP_VERSION} · {Platform.OS}
+            </Text>
+          </View>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Submit community feedback"
+            disabled={submitting}
+            onPress={() => void sendFeedback()}
+            style={{
+              minHeight: 46,
+              borderRadius: 999,
+              backgroundColor: submitting ? "#8aa7ad" : "#151820",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            {submitting ? <ActivityIndicator color="#ffffff" size="small" /> : feedbackType === "bug" ? <Bug size={17} color="#ffffff" strokeWidth={2.6} /> : <MessageCircle size={17} color="#ffffff" strokeWidth={2.6} />}
+            <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+              {submitting ? "Submitting" : "Submit"}
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </View>
+    </View>
+  );
+
+  if (Platform.OS === "web" && typeof document !== "undefined") {
+    return createPortal(
+      <View style={{ position: "fixed" as unknown as "absolute", inset: 0, zIndex: 190 }}>
+        {content}
+      </View>,
+      document.body,
+    );
+  }
+
+  return (
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+      {content}
+    </Modal>
+  );
+}
+
+function getCommunityFeedbackDeviceInfo() {
+  const screenInfo = Platform.OS === "web" && typeof window !== "undefined"
+    ? {
+        width: window.screen?.width,
+        height: window.screen?.height,
+        pixelRatio: window.devicePixelRatio,
+      }
+    : undefined;
+
+  return {
+    platform: Platform.OS,
+    os: Platform.OS,
+    userAgent: Platform.OS === "web" && typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+    language: Platform.OS === "web" && typeof navigator !== "undefined" ? navigator.language : undefined,
+    screen: screenInfo,
+  };
+}
+
+function CommunityPollsPopover({
+  visible,
+  canCreatePolls,
+  onClose,
+}: {
+  visible: boolean;
+  canCreatePolls: boolean;
+  onClose: () => void;
+}) {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const [polls, setPolls] = useState<CommunityPollPayload[]>([]);
+  const [pollsLoading, setPollsLoading] = useState(false);
+  const [pollsError, setPollsError] = useState<string | null>(null);
+  const [draftSelections, setDraftSelections] = useState<Record<string, string[]>>({});
+  const [savingPollId, setSavingPollId] = useState<string | null>(null);
+  const [creatingPoll, setCreatingPoll] = useState(false);
+  const [newPollTitle, setNewPollTitle] = useState("");
+  const [newPollDescription, setNewPollDescription] = useState("");
+  const [newPollSelectionType, setNewPollSelectionType] = useState<CommunityPollSelectionType>("single");
+  const [newPollOptionsText, setNewPollOptionsText] = useState("Yes\nNo");
+
+  const reloadPolls = useCallback(async () => {
+    if (!visible) {
+      return;
+    }
+
+    setPollsLoading(true);
+    setPollsError(null);
+
+    try {
+      const nextPolls = await fetchCommunityPolls();
+      setPolls(nextPolls);
+      setDraftSelections(Object.fromEntries(
+        nextPolls.map((poll) => [
+          poll.id,
+          poll.options.filter((option) => option.selectedByViewer).map((option) => option.id),
+        ]),
+      ));
+    } catch (error) {
+      setPollsError(error instanceof Error ? error.message : "CardMagic could not load community polls.");
+    } finally {
+      setPollsLoading(false);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (visible) {
+      void reloadPolls();
+    }
+  }, [reloadPolls, visible]);
+
+  if (!visible) {
+    return null;
+  }
+
+  const submitVote = async (poll: CommunityPollPayload) => {
+    const optionIds = draftSelections[poll.id] ?? [];
+
+    if (optionIds.length === 0) {
+      setPollsError("Choose at least one option before submitting your vote.");
+      return;
+    }
+
+    setSavingPollId(poll.id);
+    setPollsError(null);
+
+    try {
+      await submitCommunityPollVote(poll.id, optionIds);
+      await reloadPolls();
+    } catch (error) {
+      setPollsError(error instanceof Error ? error.message : "CardMagic could not submit this vote.");
+    } finally {
+      setSavingPollId(null);
+    }
+  };
+
+  const togglePollStatus = async (poll: CommunityPollPayload) => {
+    setSavingPollId(poll.id);
+    setPollsError(null);
+
+    try {
+      await setCommunityPollStatus(poll.id, poll.status === "open" ? "closed" : "open");
+      await reloadPolls();
+    } catch (error) {
+      setPollsError(error instanceof Error ? error.message : "CardMagic could not update this poll.");
+    } finally {
+      setSavingPollId(null);
+    }
+  };
+
+  const createPoll = async () => {
+    const options = newPollOptionsText
+      .split(/\r?\n/)
+      .map((option) => option.trim())
+      .filter(Boolean);
+
+    setCreatingPoll(true);
+    setPollsError(null);
+
+    try {
+      await createCommunityPoll({
+        title: newPollTitle,
+        description: newPollDescription,
+        selectionType: newPollSelectionType,
+        options,
+      });
+      setNewPollTitle("");
+      setNewPollDescription("");
+      setNewPollSelectionType("single");
+      setNewPollOptionsText("Yes\nNo");
+      await reloadPolls();
+    } catch (error) {
+      setPollsError(error instanceof Error ? error.message : "CardMagic could not create this poll.");
+    } finally {
+      setCreatingPoll(false);
+    }
+  };
+
+  const content = (
+    <View
+      pointerEvents="auto"
+      style={{
+        flex: 1,
+        backgroundColor: "rgba(15, 18, 24, 0.48)",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 14,
+      }}
+    >
+      <View
+        style={{
+          width: "100%",
+          maxWidth: 720,
+          maxHeight: Math.max(430, windowHeight - 58),
+          borderRadius: 16,
+          borderCurve: "continuous",
+          backgroundColor: "#ffffff",
+          borderWidth: 1,
+          borderColor: "#d8dbe2",
+          overflow: "hidden",
+          shadowColor: "#000000",
+          shadowOpacity: 0.22,
+          shadowRadius: 24,
+          shadowOffset: { width: 0, height: 14 },
+          elevation: 18,
+        }}
+      >
+        <View
+          style={{
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: "#eceef2",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text selectable={false} style={{ color: "#151820", fontSize: 17, fontWeight: "900" }}>
+              Community polls
+            </Text>
+            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+              Vote on feature direction and app priorities
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh community polls"
+            disabled={pollsLoading}
+            onPress={() => void reloadPolls()}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 17,
+              backgroundColor: "#eef0f4",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {pollsLoading ? <ActivityIndicator color="#0b7180" size="small" /> : <RefreshCw size={17} color="#20242d" strokeWidth={2.6} />}
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close community polls"
+            onPress={onClose}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 17,
+              backgroundColor: "#eef0f4",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={18} color="#20242d" strokeWidth={2.6} />
+          </Pressable>
+        </View>
+
+        <ScrollView
+          style={{ maxHeight: Math.max(360, windowHeight - 150) }}
+          contentContainerStyle={{ padding: 14, gap: 14 }}
+        >
+          {pollsError ? (
+            <View
+              style={{
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "#f1bcc4",
+                backgroundColor: "#fff5f6",
+                padding: 10,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                {pollsError}
+              </Text>
+            </View>
+          ) : null}
+
+          {canCreatePolls ? (
+            <View
+              style={{
+                borderRadius: 14,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#b7ecf4",
+                backgroundColor: "#f2fcfd",
+                padding: 12,
+                gap: 10,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900", textTransform: "uppercase" }}>
+                Create poll
+              </Text>
+              <TextInput
+                accessibilityLabel="Poll title"
+                value={newPollTitle}
+                onChangeText={setNewPollTitle}
+                placeholder="Feature poll title"
+                placeholderTextColor="#68707d"
+                maxLength={120}
+                style={communityPollInputStyle}
+              />
+              <TextInput
+                accessibilityLabel="Poll description"
+                value={newPollDescription}
+                onChangeText={setNewPollDescription}
+                placeholder="Optional context"
+                placeholderTextColor="#68707d"
+                maxLength={500}
+                multiline
+                style={[communityPollInputStyle, { minHeight: 72, textAlignVertical: "top" }]}
+              />
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <CommunityModeButton
+                  label="Single choice"
+                  selected={newPollSelectionType === "single"}
+                  onPress={() => setNewPollSelectionType("single")}
+                />
+                <CommunityModeButton
+                  label="Multi choice"
+                  selected={newPollSelectionType === "multiple"}
+                  onPress={() => setNewPollSelectionType("multiple")}
+                />
+              </View>
+              <TextInput
+                accessibilityLabel="Poll options"
+                value={newPollOptionsText}
+                onChangeText={setNewPollOptionsText}
+                placeholder="One option per line"
+                placeholderTextColor="#68707d"
+                multiline
+                style={[communityPollInputStyle, { minHeight: 96, textAlignVertical: "top" }]}
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Create community poll"
+                disabled={creatingPoll}
+                onPress={() => void createPoll()}
+                style={{
+                  minHeight: 44,
+                  borderRadius: 999,
+                  backgroundColor: creatingPoll ? "#8aa7ad" : "#151820",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 8,
+                }}
+              >
+                {creatingPoll ? <ActivityIndicator color="#ffffff" size="small" /> : <ListPlus size={17} color="#ffffff" strokeWidth={2.6} />}
+                <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                  {creatingPoll ? "Creating poll" : "Create poll"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {pollsLoading && polls.length === 0 ? (
+            <View style={{ minHeight: 180, alignItems: "center", justifyContent: "center" }}>
+              <ActivityIndicator color="#0b7180" />
+            </View>
+          ) : polls.length > 0 ? (
+            polls.map((poll) => {
+              const selectedOptionIds = draftSelections[poll.id] ?? [];
+              const totalVotes = poll.options.reduce((total, option) => total + option.voteCount, 0);
+              const isSaving = savingPollId === poll.id;
+              const isClosed = poll.status === "closed";
+
+              return (
+                <View
+                  key={poll.id}
+                  style={{
+                    borderRadius: 14,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: isClosed ? "#d8dbe2" : "#b7ecf4",
+                    backgroundColor: isClosed ? "#f8f9fb" : "#ffffff",
+                    padding: 12,
+                    gap: 10,
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
+                    <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                      <Text selectable={false} style={{ color: "#151820", fontSize: 16, lineHeight: 21, fontWeight: "900" }}>
+                        {poll.title}
+                      </Text>
+                      {poll.description ? (
+                        <Text selectable style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                          {poll.description}
+                        </Text>
+                      ) : null}
+                      <Text selectable={false} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
+                        {poll.selectionType === "multiple" ? "Multi choice" : "Single choice"} · {poll.status} · {totalVotes} {totalVotes === 1 ? "vote" : "votes"}
+                      </Text>
+                    </View>
+                    {canCreatePolls ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={isClosed ? "Reopen poll" : "Close poll"}
+                        disabled={isSaving}
+                        onPress={() => void togglePollStatus(poll)}
+                        style={{
+                          minHeight: 32,
+                          borderRadius: 999,
+                          borderWidth: 1,
+                          borderColor: "#d8dbe2",
+                          backgroundColor: "#ffffff",
+                          paddingHorizontal: 10,
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <Text selectable={false} style={{ color: "#46505d", fontSize: 11, fontWeight: "900" }}>
+                          {isClosed ? "Reopen" : "Close"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+
+                  <View style={{ gap: 8 }}>
+                    {poll.options.map((option) => {
+                      const selected = selectedOptionIds.includes(option.id);
+                      const percent = totalVotes > 0 ? Math.round((option.voteCount / totalVotes) * 100) : 0;
+
+                      return (
+                        <Pressable
+                          key={option.id}
+                          accessibilityRole={poll.selectionType === "multiple" ? "checkbox" : "radio"}
+                          accessibilityState={{ checked: selected, disabled: isClosed }}
+                          accessibilityLabel={`${option.label}, ${option.voteCount} votes`}
+                          disabled={isClosed || isSaving}
+                          onPress={() => {
+                            setDraftSelections((current) => {
+                              const currentSelection = current[poll.id] ?? [];
+                              const nextSelection = poll.selectionType === "single"
+                                ? [option.id]
+                                : currentSelection.includes(option.id)
+                                  ? currentSelection.filter((id) => id !== option.id)
+                                  : [...currentSelection, option.id];
+
+                              return { ...current, [poll.id]: nextSelection };
+                            });
+                          }}
+                          style={{
+                            minHeight: 44,
+                            borderRadius: 12,
+                            borderCurve: "continuous",
+                            borderWidth: 1,
+                            borderColor: selected ? "#0b7180" : "#d8dbe2",
+                            backgroundColor: selected ? "rgba(11,113,128,0.08)" : "#ffffff",
+                            padding: 10,
+                            gap: 7,
+                          }}
+                        >
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
+                            <View
+                              style={{
+                                width: 18,
+                                height: 18,
+                                borderRadius: poll.selectionType === "multiple" ? 5 : 9,
+                                borderWidth: 2,
+                                borderColor: selected ? "#0b7180" : "#c8ced8",
+                                backgroundColor: selected ? "#0b7180" : "#ffffff",
+                              }}
+                            />
+                            <Text selectable={false} style={{ flex: 1, color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                              {option.label}
+                            </Text>
+                            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "900" }}>
+                              {percent}%
+                            </Text>
+                          </View>
+                          <View style={{ height: 6, borderRadius: 999, backgroundColor: "#eceef2", overflow: "hidden" }}>
+                            <View style={{ width: `${percent}%`, height: "100%", backgroundColor: selected ? "#0b7180" : "#b8c0cc" }} />
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Submit vote for ${poll.title}`}
+                    disabled={isClosed || isSaving || selectedOptionIds.length === 0}
+                    onPress={() => void submitVote(poll)}
+                    style={{
+                      minHeight: 42,
+                      borderRadius: 999,
+                      backgroundColor: isClosed || selectedOptionIds.length === 0 ? "#d8dbe2" : "#151820",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexDirection: "row",
+                      gap: 8,
+                    }}
+                  >
+                    {isSaving ? <ActivityIndicator color="#ffffff" size="small" /> : <ListPlus size={16} color="#ffffff" strokeWidth={2.6} />}
+                    <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                      {isClosed ? "Poll closed" : isSaving ? "Saving vote" : "Submit vote"}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            })
+          ) : (
+            <CommunityEmptyState
+              icon={<ListPlus size={24} color="#68707d" strokeWidth={2.4} />}
+              title="No polls yet"
+              detail="Open polls will appear here for feature requests, release priorities, and community feedback."
+            />
+          )}
+        </ScrollView>
+      </View>
+    </View>
+  );
+
+  if (Platform.OS === "web" && typeof document !== "undefined") {
+    return createPortal(
+      <View style={{ position: "fixed" as unknown as "absolute", inset: 0, zIndex: 180 }}>
+        {content}
+      </View>,
+      document.body,
+    );
+  }
+
+  return (
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+      {content}
+    </Modal>
+  );
+}
+
+const communityPollInputStyle = {
+  minHeight: 44,
+  borderRadius: 12,
+  borderCurve: "continuous" as const,
+  borderWidth: 1,
+  borderColor: "#d8dbe2",
+  backgroundColor: "#ffffff",
+  color: "#151820",
+  fontSize: 14,
+  lineHeight: 19,
+  fontWeight: "800" as const,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+};
+
+function CommunityCommentsPopover({
+  card,
+  onClose,
+  onCommentCountChange,
+}: {
+  card: CommunityCardPayload | null;
+  onClose: () => void;
+  onCommentCountChange: (cardId: string, commentCount: number) => void;
+}) {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const [comments, setComments] = useState<CommunityCardCommentPayload[]>([]);
+  const [draftBody, setDraftBody] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [savingComment, setSavingComment] = useState(false);
+  const [commentError, setCommentError] = useState<string | null>(null);
+  const previewWidth =
+    windowWidth >= 900 ? 260 :
+    windowWidth >= 620 ? 230 :
+    Math.min(210, Math.max(160, windowWidth - 190));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!card) {
+      setComments([]);
+      setDraftBody("");
+      setEditingCommentId(null);
+      setCommentError(null);
+      return;
+    }
+
+    setLoadingComments(true);
+    setCommentError(null);
+    setDraftBody("");
+    setEditingCommentId(null);
+
+    fetchCommunityCardComments(card.id)
+      .then((nextComments) => {
+        if (cancelled) {
+          return;
+        }
+
+        setComments(nextComments);
+        onCommentCountChange(card.id, nextComments.length);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setCommentError(error instanceof Error ? error.message : "CardMagic could not load comments.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingComments(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [card, onCommentCountChange]);
+
+  if (!card) {
+    return null;
+  }
+
+  const editingComment = editingCommentId ? comments.find((comment) => comment.id === editingCommentId) : null;
+  const saveLabel = editingComment ? "Update comment" : "Post comment";
+  const canSaveComment = draftBody.trim().length > 0 && !savingComment;
+  const saveComment = async () => {
+    if (!canSaveComment) {
+      return;
+    }
+
+    setSavingComment(true);
+    setCommentError(null);
+
+    try {
+      const savedComment = await saveCommunityCardComment(card.id, draftBody, editingCommentId ?? undefined);
+      setComments((current) => {
+        const nextComments = editingCommentId
+          ? current.map((comment) => comment.id === savedComment.id ? savedComment : comment)
+          : [...current, savedComment];
+
+        onCommentCountChange(card.id, nextComments.length);
+        return nextComments;
+      });
+      setDraftBody("");
+      setEditingCommentId(null);
+    } catch (error) {
+      setCommentError(error instanceof Error ? error.message : "CardMagic could not save this comment.");
+    } finally {
+      setSavingComment(false);
+    }
+  };
+  const content = (
+    <View
+      pointerEvents="auto"
+      style={{
+        flex: 1,
+        backgroundColor: "rgba(15, 18, 24, 0.48)",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 14,
+      }}
+    >
+      <View
+        style={{
+          width: "100%",
+          maxWidth: 720,
+          maxHeight: Math.max(420, windowHeight - 58),
+          borderRadius: 16,
+          borderCurve: "continuous",
+          backgroundColor: "#ffffff",
+          borderWidth: 1,
+          borderColor: "#d8dbe2",
+          overflow: "hidden",
+          shadowColor: "#000000",
+          shadowOpacity: 0.22,
+          shadowRadius: 24,
+          shadowOffset: { width: 0, height: 14 },
+          elevation: 18,
+        }}
+      >
+        <View
+          style={{
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: "#eceef2",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 16, fontWeight: "900" }}>
+              {card.name || "Untitled Card"}
+            </Text>
+            <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+              {card.authorName} · Level {card.authorLevel}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close comments"
+            onPress={onClose}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 17,
+              backgroundColor: "#eef0f4",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={18} color="#20242d" strokeWidth={2.6} />
+          </Pressable>
+        </View>
+
+        <View
+          style={{
+            padding: 14,
+            gap: 14,
+            flexDirection: windowWidth >= 640 ? "row" : "column",
+          }}
+        >
+          <View style={{ alignItems: "center", gap: 8 }}>
+            <CardPreview
+              card={card.card}
+              activeSection={null}
+              width={previewWidth}
+              cornerRadius={9}
+              footerOwnerName={card.authorName}
+              onSectionPress={noopCardPreviewHandler}
+              onChange={noopCardPreviewHandler}
+            />
+            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+              {comments.length} {comments.length === 1 ? "comment" : "comments"}
+            </Text>
+          </View>
+
+          <View style={{ flex: 1, minWidth: 0, gap: 12 }}>
+            <ScrollView
+              style={{ maxHeight: windowWidth >= 640 ? Math.max(230, windowHeight - 360) : 210 }}
+              contentContainerStyle={{ gap: 10, paddingRight: 2 }}
+            >
+              {loadingComments ? (
+                <View style={{ minHeight: 120, alignItems: "center", justifyContent: "center" }}>
+                  <ActivityIndicator color="#0b7180" />
+                </View>
+              ) : comments.length > 0 ? (
+                comments.map((comment) => (
+                  <View
+                    key={comment.id}
+                    style={{
+                      borderRadius: 12,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: comment.editableByViewer ? "#b7ecf4" : "#eceef2",
+                      backgroundColor: comment.editableByViewer ? "#f2fcfd" : "#f8f9fb",
+                      padding: 10,
+                      gap: 6,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <Text selectable={false} style={{ flex: 1, color: "#151820", fontSize: 12, fontWeight: "900" }}>
+                        {comment.authorName}
+                      </Text>
+                      <Text selectable={false} style={{ color: "#8a93a3", fontSize: 10, fontWeight: "800" }}>
+                        {formatCompactCommentDate(comment.updatedAt)}
+                      </Text>
+                    </View>
+                    <Text selectable style={{ color: "#2a303a", fontSize: 13, lineHeight: 18, fontWeight: "700" }}>
+                      {comment.body}
+                    </Text>
+                    {comment.editableByViewer ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Edit your comment"
+                        onPress={() => {
+                          setEditingCommentId(comment.id);
+                          setDraftBody(comment.body);
+                        }}
+                        style={{ alignSelf: "flex-start", paddingVertical: 4 }}
+                      >
+                        <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900" }}>
+                          Edit
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))
+              ) : (
+                <View
+                  style={{
+                    minHeight: 120,
+                    borderRadius: 12,
+                    backgroundColor: "#f4f5f7",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: 16,
+                  }}
+                >
+                  <Text selectable={false} style={{ color: "#68707d", fontSize: 13, fontWeight: "900", textAlign: "center" }}>
+                    No comments yet
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+
+            <View style={{ gap: 8 }}>
+              <TextInput
+                accessibilityLabel={editingComment ? "Edit your comment" : "Add a comment"}
+                value={draftBody}
+                onChangeText={setDraftBody}
+                placeholder={editingComment ? "Edit your comment" : "Add a comment"}
+                placeholderTextColor="#8a93a3"
+                multiline
+                maxLength={500}
+                style={{
+                  minHeight: 82,
+                  borderRadius: 12,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: "#d8dbe2",
+                  backgroundColor: "#ffffff",
+                  color: "#151820",
+                  fontSize: 14,
+                  lineHeight: 19,
+                  fontWeight: "700",
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  textAlignVertical: "top",
+                }}
+              />
+              {commentError ? (
+                <Text selectable={false} style={{ color: "#a52735", fontSize: 12, fontWeight: "800" }}>
+                  {commentError}
+                </Text>
+              ) : null}
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {editingComment ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel comment edit"
+                    onPress={() => {
+                      setEditingCommentId(null);
+                      setDraftBody("");
+                    }}
+                    style={{
+                      minHeight: 42,
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: "#d8dbe2",
+                      paddingHorizontal: 14,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text selectable={false} style={{ color: "#46505d", fontSize: 13, fontWeight: "900" }}>
+                      Cancel
+                    </Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={saveLabel}
+                  disabled={!canSaveComment}
+                  onPress={() => void saveComment()}
+                  style={{
+                    flex: 1,
+                    minHeight: 42,
+                    borderRadius: 999,
+                    backgroundColor: canSaveComment ? "#151820" : "#d8dbe2",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexDirection: "row",
+                    gap: 8,
+                  }}
+                >
+                  {savingComment ? <ActivityIndicator color="#ffffff" size="small" /> : <MessageCircle size={16} color="#ffffff" strokeWidth={2.5} />}
+                  <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                    {savingComment ? "Saving" : saveLabel}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+
+  if (Platform.OS === "web" && typeof document !== "undefined") {
+    return createPortal(
+      <View style={{ position: "fixed" as unknown as "absolute", inset: 0, zIndex: 180 }}>
+        {content}
+      </View>,
+      document.body,
+    );
+  }
+
+  return (
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+      {content}
+    </Modal>
+  );
+}
+
+function formatCompactCommentDate(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function CommunityCardsPreview({
   cards,
   localFallbackCards,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+  onToggleLike,
+  onToggleFollow,
+  onOpenComments,
+  onExportCardImage,
 }: {
   cards: CommunityCardPayload[];
   localFallbackCards: Array<{ id: string; setName: string; card: CardDraft }>;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+  onToggleLike: (cardId: string, liked: boolean) => void;
+  onToggleFollow: (userId: string, followed: boolean) => void;
+  onOpenComments: (cardId: string) => void;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
-  const [likedCardIds, setLikedCardIds] = useState<Record<string, boolean>>({});
-  const cardPreviewWidth = Math.min(340, Math.max(258, windowWidth - 76));
+  const [renderedCardCount, setRenderedCardCount] = useState(COMMUNITY_INITIAL_RENDERED_CARD_COUNT);
+  const cardPreviewWidth =
+    windowWidth >= 900 ? 420 :
+    windowWidth >= 620 ? 380 :
+    Math.min(360, Math.max(286, windowWidth - 28));
+  const usingCommunityCards = cards.length > 0;
+  const feedItemCount = usingCommunityCards ? cards.length : localFallbackCards.length;
+  const visibleCommunityCards = cards.slice(0, renderedCardCount);
+  const visibleFallbackCards = localFallbackCards.slice(0, renderedCardCount);
 
-  if (cards.length === 0 && localFallbackCards.length === 0) {
+  useEffect(() => {
+    setRenderedCardCount(
+      Math.min(COMMUNITY_INITIAL_RENDERED_CARD_COUNT, Math.max(feedItemCount, COMMUNITY_INITIAL_RENDERED_CARD_COUNT)),
+    );
+  }, [cards, localFallbackCards]);
+
+  useEffect(() => {
+    if (renderedCardCount >= feedItemCount) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setRenderedCardCount((current) => Math.min(feedItemCount, current + 2));
+    }, 60);
+
+    return () => clearTimeout(timeout);
+  }, [feedItemCount, renderedCardCount]);
+
+  if (feedItemCount === 0) {
     return (
       <CommunityEmptyState
         icon={<Tags size={24} color="#68707d" strokeWidth={2.4} />}
@@ -13740,129 +16629,248 @@ function CommunityCardsPreview({
     );
   }
 
-  const feedCards = cards.length > 0
-    ? cards.map((entry) => ({
-        id: entry.id,
-        label: entry.typeLine || "Community card",
-        sourceLabel: "Community",
-        card: entry.card,
-      }))
-    : localFallbackCards.map((entry) => ({
-        id: entry.id,
-        label: `${entry.setName} · Local preview`,
-        sourceLabel: entry.setName,
-        card: entry.card,
-      }));
-
   return (
-    <ScrollView
-      nestedScrollEnabled
-      showsVerticalScrollIndicator
-      style={{ maxHeight: 760 }}
-      contentContainerStyle={{ padding: 12, gap: 16 }}
-    >
-      {feedCards.map(({ id, label, sourceLabel, card }, index) => {
-        const face = getEditableCardFace(card);
-        const cardName = face.name || "Untitled Card";
-        const liked = Boolean(likedCardIds[id]);
-        const likeCount = 12 + ((index * 7 + cardName.length) % 38) + (liked ? 1 : 0);
-        const commentCount = 2 + ((index * 3 + label.length) % 14);
-
-        return (
-        <View
-          key={id}
+    <View style={{ padding: 12, gap: 16 }}>
+      {usingCommunityCards
+        ? visibleCommunityCards.map((entry) => (
+            <CommunityFeedCardItem
+              key={entry.id}
+              entry={entry}
+              cardPreviewWidth={cardPreviewWidth}
+              onToggleLike={onToggleLike}
+              onToggleFollow={onToggleFollow}
+              onOpenComments={onOpenComments}
+              onExportCardImage={onExportCardImage}
+            />
+          ))
+        : visibleFallbackCards.map((entry) => (
+            <CommunityFallbackCardItem
+              key={entry.id}
+              entry={entry}
+              cardPreviewWidth={cardPreviewWidth}
+              onExportCardImage={onExportCardImage}
+            />
+          ))}
+      {cards.length > 0 && hasMore ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Load more community cards"
+          disabled={loadingMore}
+          onPress={onLoadMore}
           style={{
-            borderRadius: 12,
-            borderCurve: "continuous",
+            minHeight: 46,
+            borderRadius: 999,
             borderWidth: 1,
-            borderColor: "#eceef2",
-            backgroundColor: "#ffffff",
-            padding: 12,
-            gap: 12,
+            borderColor: loadingMore ? "#d8dbe2" : "#151820",
+            backgroundColor: loadingMore ? "#f4f5f7" : "#151820",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 8,
           }}
         >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <View
-              style={{
-                width: 38,
-                height: 38,
-                borderRadius: 19,
-                backgroundColor: "#151820",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Users size={18} color="#ffffff" strokeWidth={2.5} />
-            </View>
-            <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-              <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
-                {cardName}
-              </Text>
-              <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-                {sourceLabel} · {label}
-              </Text>
-            </View>
-          </View>
-
-          <View
-            style={{
-              alignItems: "center",
-              borderRadius: 10,
-              borderCurve: "continuous",
-              backgroundColor: "#f4f5f7",
-              paddingVertical: 14,
-              paddingHorizontal: 8,
-            }}
-          >
-            <CardPreview
-              card={card}
-              activeSection={null}
-              width={cardPreviewWidth}
-              cornerRadius={9}
-              onSectionPress={() => undefined}
-              onChange={() => undefined}
-            />
-          </View>
-
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <CommunityFeedActionButton
-              label={`${liked ? "Unlike" : "Like"} ${cardName}`}
-              icon={<Heart size={18} color={liked ? "#d93a4a" : "#46505d"} fill={liked ? "#d93a4a" : "transparent"} strokeWidth={2.5} />}
-              text={`${likeCount}`}
-              selected={liked}
-              onPress={() =>
-                setLikedCardIds((current) => ({
-                  ...current,
-                  [id]: !current[id],
-                }))
-              }
-            />
-            <CommunityFeedActionButton
-              label={`Comment on ${cardName}`}
-              icon={<MessageCircle size={18} color="#46505d" strokeWidth={2.5} />}
-              text={`${commentCount}`}
-              onPress={() => {
-                Alert.alert("Comments", "Comment persistence is not wired to the community database yet.");
-              }}
-            />
-            <CommunityFeedActionButton
-              label={`Share ${cardName}`}
-              icon={<Share2 size={18} color="#46505d" strokeWidth={2.5} />}
-              text="Share"
-              onPress={() => {
-                void Share.share({
-                  title: cardName,
-                  message: `${cardName}\n${label}\nShared from CardMagic.`,
-                });
-              }}
-            />
-          </View>
-        </View>
-        );
-      })}
-    </ScrollView>
+          {loadingMore ? <ActivityIndicator color="#0b7180" size="small" /> : <Plus size={17} color="#ffffff" strokeWidth={2.6} />}
+          <Text selectable={false} style={{ color: loadingMore ? "#68707d" : "#ffffff", fontSize: 13, fontWeight: "900" }}>
+            {loadingMore ? "Loading cards" : "Load more cards"}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
+
+const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
+  entry,
+  cardPreviewWidth,
+  onToggleLike,
+  onToggleFollow,
+  onOpenComments,
+  onExportCardImage,
+}: {
+  entry: CommunityCardPayload;
+  cardPreviewWidth: number;
+  onToggleLike: (cardId: string, liked: boolean) => void;
+  onToggleFollow: (userId: string, followed: boolean) => void;
+  onOpenComments: (cardId: string) => void;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
+}) {
+  const face = getEditableCardFace(entry.card);
+  const cardName = face.name || "Untitled Card";
+  const label = entry.typeLine || "Community card";
+
+  return (
+    <View
+      style={{
+        borderBottomWidth: 1,
+        borderBottomColor: "#eceef2",
+        paddingVertical: 14,
+        gap: 12,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <View
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 19,
+            backgroundColor: "#151820",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Users size={18} color="#ffffff" strokeWidth={2.5} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+            {cardName}
+          </Text>
+          <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+            {entry.authorName} · Level {entry.authorLevel} · {label}
+          </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ selected: entry.followedByViewer }}
+          accessibilityLabel={`${entry.followedByViewer ? "Unfollow" : "Follow"} ${entry.authorName}`}
+          onPress={() => onToggleFollow(entry.userId, !entry.followedByViewer)}
+          style={{
+            minHeight: 34,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: entry.followedByViewer ? "#0b7180" : "#d8dbe2",
+            backgroundColor: entry.followedByViewer ? "rgba(11,113,128,0.1)" : "#ffffff",
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 10,
+          }}
+        >
+          <Text selectable={false} style={{ color: entry.followedByViewer ? "#0b7180" : "#46505d", fontSize: 11, fontWeight: "900" }}>
+            {entry.followedByViewer ? "Following" : "Follow"}
+          </Text>
+        </Pressable>
+      </View>
+
+      <View
+        style={{
+          alignItems: "center",
+          backgroundColor: "#f4f5f7",
+          paddingVertical: 12,
+        }}
+      >
+        <CardPreview
+          card={entry.card}
+          activeSection={null}
+          width={cardPreviewWidth}
+          cornerRadius={9}
+          footerOwnerName={entry.authorName}
+          onSectionPress={noopCardPreviewHandler}
+          onChange={noopCardPreviewHandler}
+        />
+      </View>
+
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <CommunityFeedActionButton
+          label={`${entry.likedByViewer ? "Unlike" : "Like"} ${cardName}`}
+          icon={
+            <Heart
+              size={18}
+              color={entry.likedByViewer ? "#d93a4a" : "#46505d"}
+              fill={entry.likedByViewer ? "#d93a4a" : "transparent"}
+              strokeWidth={2.5}
+            />
+          }
+          text={`${entry.likeCount}`}
+          selected={entry.likedByViewer}
+          onPress={() => onToggleLike(entry.id, !entry.likedByViewer)}
+        />
+        <CommunityFeedActionButton
+          label={`Comment on ${cardName}`}
+          icon={<MessageCircle size={18} color="#46505d" strokeWidth={2.5} />}
+          text={`${entry.commentCount}`}
+          onPress={() => onOpenComments(entry.id)}
+        />
+        <CommunityFeedActionButton
+          label={`Save rendered image for ${cardName}`}
+          icon={<Download size={18} color="#46505d" strokeWidth={2.5} />}
+          onPress={() => void onExportCardImage(entry.card, cardName, entry.authorName)}
+        />
+      </View>
+    </View>
+  );
+});
+
+const CommunityFallbackCardItem = memo(function CommunityFallbackCardItem({
+  entry,
+  cardPreviewWidth,
+  onExportCardImage,
+}: {
+  entry: { id: string; setName: string; card: CardDraft };
+  cardPreviewWidth: number;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
+}) {
+  const face = getEditableCardFace(entry.card);
+  const cardName = face.name || "Untitled Card";
+
+  return (
+    <View
+      style={{
+        borderBottomWidth: 1,
+        borderBottomColor: "#eceef2",
+        paddingVertical: 14,
+        gap: 12,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <View
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 19,
+            backgroundColor: "#151820",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Users size={18} color="#ffffff" strokeWidth={2.5} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+            {cardName}
+          </Text>
+          <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+            {entry.setName} · Local preview
+          </Text>
+        </View>
+      </View>
+
+      <View
+        style={{
+          alignItems: "center",
+          backgroundColor: "#f4f5f7",
+          paddingVertical: 12,
+        }}
+      >
+        <CardPreview
+          card={entry.card}
+          activeSection={null}
+          width={cardPreviewWidth}
+          cornerRadius={9}
+          footerOwnerName={entry.setName}
+          onSectionPress={noopCardPreviewHandler}
+          onChange={noopCardPreviewHandler}
+        />
+      </View>
+
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <CommunityFeedActionButton
+          label={`Save rendered image for ${cardName}`}
+          icon={<Download size={18} color="#46505d" strokeWidth={2.5} />}
+          onPress={() => void onExportCardImage(entry.card, cardName, entry.setName)}
+        />
+      </View>
+    </View>
+  );
+});
 
 function CommunityFeedActionButton({
   label,
@@ -13873,7 +16881,7 @@ function CommunityFeedActionButton({
 }: {
   label: string;
   icon: ReactNode;
-  text: string;
+  text?: string;
   selected?: boolean;
   onPress: () => void;
 }) {
@@ -13898,14 +16906,16 @@ function CommunityFeedActionButton({
       }}
     >
       {icon}
-      <Text selectable={false} numberOfLines={1} style={{ color: selected ? "#a62231" : "#46505d", fontSize: 12, fontWeight: "900" }}>
-        {text}
-      </Text>
+      {typeof text === "string" ? (
+        <Text selectable={false} numberOfLines={1} style={{ color: selected ? "#a62231" : "#46505d", fontSize: 12, fontWeight: "900" }}>
+          {text}
+        </Text>
+      ) : null}
     </Pressable>
   );
 }
 
-function CommunitySetsPreview({ sets }: { sets: CardSet[] }) {
+function CommunitySetsPreview({ sets }: { sets: CommunitySetPayload[] }) {
   if (sets.length === 0) {
     return (
       <CommunityEmptyState
@@ -13951,7 +16961,10 @@ function CommunitySetsPreview({ sets }: { sets: CardSet[] }) {
               {set.name}
             </Text>
             <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-              {set.cards.length} {set.cards.length === 1 ? "card" : "cards"} · Local preview
+              {set.authorName} · Level {set.authorLevel} · {set.cardCount} {set.cardCount === 1 ? "card" : "cards"}
+            </Text>
+            <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
+              {set.code ?? "SET"}
             </Text>
           </View>
         </View>

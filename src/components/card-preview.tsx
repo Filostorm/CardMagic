@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { Pencil } from "lucide-react-native";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -106,6 +106,10 @@ import {
   shouldShowDfcFaceManaCost,
   toDfcFacePatch,
 } from "@/lib/dfc";
+import {
+  adjustFlattenPending,
+  compositeFlattenedMaskedFrame,
+} from "@/lib/export-flatten";
 import { getDisplayRulesText, getKeywordRulesText } from "@/lib/keyword-text";
 import { getLoyaltyAbilities, getStartingLoyalty } from "@/lib/planeswalker";
 import { resolveRulesTextCardNameToken } from "@/lib/rules-text";
@@ -157,7 +161,15 @@ type CardPreviewProps = {
   width: number;
   cornerRadius?: number;
   exportMode?: boolean;
+  exportCaptureMode?: boolean;
+  exportSetSymbolMode?: boolean;
+  // Pre-flatten masked layers (borderless pinline, rarity set symbol) into plain
+  // raster <img> via offscreen-canvas compositing, so the html2canvas export can
+  // capture them faithfully. Web-only; the editor uses its live mask paths.
+  exportFlattenMasks?: boolean;
   artGenerating?: boolean;
+  footerOwnerName?: string;
+  initialArtImageAspectRatio?: number | null;
   onSectionPress: SectionPressHandler;
   onChange: (patch: Partial<CardDraft>) => void;
 };
@@ -304,26 +316,26 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     ...DEFAULT_FRAME_TREATMENT_LAYOUT,
     art: FRAME_TREATMENT_ART_RECTS.borderless,
     name: { x: 32, y: 30, width: 226, height: 23 },
-    manaCost: { x: 263, y: 29, width: 83, height: 23 },
+    manaCost: { x: 263, y: 28, width: 83, height: 23 },
     typeLine: { x: 28, y: 296, width: 274, height: 20 },
     setSymbol: { x: 304, y: 297, width: 40, height: 22 },
     textArea: { x: 35, y: 327, width: 304, height: 154 },
     rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
     ptBox: { x: 273, y: 466, width: 81, height: 42 },
-    powerToughness: { x: 286, y: 469, width: 60, height: 28 },
+    powerToughness: { x: 286, y: 471, width: 60, height: 28 },
     footer: { x: 24, y: 488, width: 326, height: 20 },
   },
   transparentBorderless: {
     ...DEFAULT_FRAME_TREATMENT_LAYOUT,
     art: FRAME_TREATMENT_ART_RECTS.transparentBorderless,
     name: { x: 32, y: 30, width: 226, height: 23 },
-    manaCost: { x: 263, y: 29, width: 83, height: 23 },
+    manaCost: { x: 263, y: 28, width: 83, height: 23 },
     typeLine: { x: 28, y: 296, width: 274, height: 20 },
     setSymbol: { x: 304, y: 297, width: 40, height: 22 },
     textArea: { x: 35, y: 327, width: 304, height: 154 },
     rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
     ptBox: { x: 273, y: 466, width: 81, height: 42 },
-    powerToughness: { x: 286, y: 469, width: 60, height: 28 },
+    powerToughness: { x: 286, y: 471, width: 60, height: 28 },
     footer: { x: 24, y: 488, width: 326, height: 20 },
   },
   promo: {
@@ -1269,16 +1281,28 @@ function getFrameIdentityForManaColor(color: ManaColor): FrameIdentity {
   }
 }
 
+function getCardMagicFooterCopyrightLine(card: CardDraft, footerOwnerName?: string) {
+  const ownerName = footerOwnerName?.trim();
+
+  if (!ownerName) {
+    return getModernCopyrightLine(card);
+  }
+
+  return `${ownerName} & ${new Date().getFullYear()} CardMagic`;
+}
+
 function ModernPrintingFooter({
   card,
   scale,
   hasPowerToughness = false,
   variant = "card",
+  footerOwnerName,
 }: {
   card: CardDraft;
   scale: number;
   hasPowerToughness?: boolean;
   variant?: "card" | "battle" | "token" | "futureshifted";
+  footerOwnerName?: string;
 }) {
   const isBattle = variant === "battle";
   const isToken = variant === "token";
@@ -1296,6 +1320,7 @@ function ModernPrintingFooter({
   const collectorFontFamily = FULL_MAGIC_PACK.fontFamilies.footerCollector;
   const artistFontFamily = FULL_MAGIC_PACK.fontFamilies.footerArtist;
   const legalFontFamily = FULL_MAGIC_PACK.fontFamilies.footerLegal;
+  const copyrightLine = getCardMagicFooterCopyrightLine(card, footerOwnerName);
 
   if (isFutureshifted) {
     const futureFrameIdentity = inferFrameIdentity(card);
@@ -1400,7 +1425,7 @@ function ModernPrintingFooter({
             textAlign: "right",
           }}
         >
-          {getModernCopyrightLine(card)}
+          {copyrightLine}
         </Text>
       </View>
     );
@@ -1503,7 +1528,7 @@ function ModernPrintingFooter({
             textAlign: "right",
           }}
         >
-          {getModernCopyrightLine(card)}
+          {copyrightLine}
         </Text>
       </View>
     );
@@ -1599,15 +1624,15 @@ function ModernPrintingFooter({
           textAlign: "right",
         }}
       >
-        {getModernCopyrightLine(card)}
+        {copyrightLine}
       </Text>
     </View>
   );
 }
 
-function RetroPrintingFooter({ card, scale }: { card: CardDraft; scale: number }) {
+function RetroPrintingFooter({ card, scale, footerOwnerName }: { card: CardDraft; scale: number; footerOwnerName?: string }) {
   const artist = card.artist?.trim() || "Local Artist";
-  const legalLine = `${getModernCopyrightLine(card)}  ${getModernCollectorLine(card)}`;
+  const legalLine = `${getCardMagicFooterCopyrightLine(card, footerOwnerName)}  ${getModernCollectorLine(card)}`;
 
   return (
     <View
@@ -1656,13 +1681,24 @@ function RetroPrintingFooter({ card, scale }: { card: CardDraft; scale: number }
   );
 }
 
-export function CardPreview({
+// Memoized so it skips re-rendering whenever its props are shallow-equal. The
+// editor host (App) re-renders on every transient UI state change (menus, popups,
+// account sync, etc.); without this boundary that re-renders the entire card
+// canvas. Callers must pass stable `onSectionPress`/`onChange` for memo to hold.
+export const CardPreview = memo(CardPreviewComponent);
+
+function CardPreviewComponent({
   card,
   activeSection,
   width,
   cornerRadius = 18,
   exportMode = false,
+  exportCaptureMode = false,
+  exportSetSymbolMode = false,
+  exportFlattenMasks = false,
   artGenerating = false,
+  footerOwnerName,
+  initialArtImageAspectRatio,
   onSectionPress,
   onChange,
 }: CardPreviewProps) {
@@ -1729,8 +1765,10 @@ export function CardPreview({
     frameColors.length > 0
       ? getMseM15StandardArtifactColorMainframeSource(frameColors, mseAccentColorBlend)
       : null;
-  const stampBackingColorBlend = getSecurityStampBackingColorBlend(frameColors, mseAccentColorBlend);
-  const stampBackingFrameIdentity = getSecurityStampBackingFrameIdentity(regularFrameIdentity, frameColors);
+  const stampBackingColorBlend =
+    typeFrame === "saga" ? null : getSecurityStampBackingColorBlend(frameColors, mseAccentColorBlend);
+  const stampBackingFrameIdentity =
+    typeFrame === "saga" ? "black" : getSecurityStampBackingFrameIdentity(regularFrameIdentity, frameColors);
   const artifactStampBackingSource =
     typeFrame === "standard" &&
     (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "transparentBorderless") &&
@@ -1740,8 +1778,10 @@ export function CardPreview({
       ? getMseM15StandardColorSecurityStampBackingSource(frameColors, stampBackingColorBlend)
       : null;
   const standardStampBackingSource =
-    artifactStampBackingSource ??
-    getMseM15SecurityStampBackingSource(stampBackingFrameIdentity, stampBackingColorBlend);
+    typeFrame === "saga"
+      ? getMseM15SecurityStampBackingSource("black", null)
+      : artifactStampBackingSource ??
+        getMseM15SecurityStampBackingSource(stampBackingFrameIdentity, stampBackingColorBlend);
   const mainframeColorCacheKey = artifactMainframeColorSource
     ? `artifact-${mseAccentColorBlend?.mode ?? "single"}-${mseAccentColorBlend?.key ?? frameColors.join("")}`
     : `${mseColorBlend?.mode ?? "plain"}-${mseColorBlend?.key ?? "none"}`;
@@ -1777,7 +1817,7 @@ export function CardPreview({
   const artRect = isBattleFrontFace ? BATTLE_COORDINATES.art : getArtRect(typeFrame, frameTreatment, showcaseSpec);
   const artInteractionScale = isBattleFrontFace ? battleScale : scale;
   const showArtGenerating = artGenerating && !exportMode;
-  const [imageAspectRatio, setImageAspectRatio] = useState<number | null>(null);
+  const [imageAspectRatio, setImageAspectRatio] = useState<number | null>(initialArtImageAspectRatio ?? null);
   const hasShowcaseArtTreatment = Boolean(showcaseSpec?.artMask || showcaseSpec?.artFilter || showcaseSpec?.artOverlay);
   const suppressSecurityStamp = showcaseSpec?.id === "dndRulebook";
   const securityStamped = !suppressSecurityStamp && shouldShowSecurityStamp(card, faceCard, typeFrame);
@@ -1796,8 +1836,13 @@ export function CardPreview({
     typeFrame === "standard" && frameTreatment === "borderless"
       ? getMseM15TransparentBorderlessDarkTextboxFillSource()
       : null;
+  // Editor always renders the pinline-restore layer. In export it is rendered
+  // only when a mask-aware (foreignObject) capture backend is in use, since the
+  // layer relies on an SVG mask that html2canvas cannot rasterize.
   const borderlessPinlineOnlyRestoreMaskSource =
-    typeFrame === "standard" && frameTreatment === "borderless"
+    typeFrame === "standard" &&
+    frameTreatment === "borderless" &&
+    (exportFlattenMasks || (!exportMode && !exportCaptureMode))
       ? getMseM15BorderlessPinlineOnlyRestoreMaskSource()
       : null;
   const transparentBorderlessTextboxBlendSources =
@@ -1888,8 +1933,17 @@ export function CardPreview({
       ? treatmentLayout.setSymbol
       : typeFrame === "token" ? getTokenSetSymbolRect(tokenFrameVariant) : getSetSymbolRect(typeFrame);
   const ptBoxRect = treatmentLayout?.ptBox ?? getPtBoxRect(typeFrame);
-  const powerToughnessRect =
+  const rawPowerToughnessRect =
     showcasePowerToughnessTextRect ?? treatmentLayout?.powerToughness ?? getPowerToughnessRect(typeFrame);
+  const shouldCalibrateBorderlessExportText =
+    typeFrame === "standard" && (frameTreatment === "borderless" || frameTreatment === "transparentBorderless");
+  const powerToughnessRect =
+    shouldCalibrateBorderlessExportText && !showcasePowerToughnessTextRect
+      ? {
+          ...rawPowerToughnessRect,
+          y: rawPowerToughnessRect.y + (exportCaptureMode ? 1 : -1),
+        }
+      : rawPowerToughnessRect;
   const manaLayout = getManaCostLayout(
     manaSymbols.length,
     treatmentLayout?.manaCost,
@@ -1964,10 +2018,8 @@ export function CardPreview({
     ? displayedRulesLineCount * rulesLayout.rulesLineHeight
     : 0;
   const displayedRulesContentHeightScaled = displayedRulesContentHeight * scale;
-  const displayedRulesVerticalInset = Math.max(
-    0,
-    (rulesLayout.rulesRect.height - displayedRulesContentHeight) / 2,
-  ) * scale;
+  const displayedRulesVerticalInset =
+    Math.max(0, (rulesLayout.rulesRect.height - displayedRulesContentHeight) / 2) * scale;
   const displayedFlavorLineCount = rulesLayout.showFlavor
     ? estimateWrappedLineCount(
         displayedFlavorText,
@@ -1984,11 +2036,18 @@ export function CardPreview({
   ) * scale;
   useEffect(() => {
     let cancelled = false;
-    setImageAspectRatio(null);
 
     if (!faceCard.artUri) {
+      setImageAspectRatio(null);
       return;
     }
+
+    if (typeof initialArtImageAspectRatio === "number" && initialArtImageAspectRatio > 0) {
+      setImageAspectRatio(initialArtImageAspectRatio);
+      return;
+    }
+
+    setImageAspectRatio(null);
 
     Image.getSize(
       faceCard.artUri,
@@ -2007,7 +2066,7 @@ export function CardPreview({
     return () => {
       cancelled = true;
     };
-  }, [faceCard.artUri]);
+  }, [faceCard.artUri, initialArtImageAspectRatio]);
 
   const artTransform = normalizeArtTransform(
     faceCard.artTransform ?? DEFAULT_ART_TRANSFORM,
@@ -2062,8 +2121,8 @@ export function CardPreview({
       ? "#f8f2df"
       : showcaseSpec?.textIsLight
       ? "#f8f2df"
-      : frameTreatment === "borderless" || frameTreatment === "transparentBorderless"
-      ? "#f8f2df"
+    : frameTreatment === "borderless" || frameTreatment === "transparentBorderless"
+      ? "#171512"
       : frameTreatment === "etchedFoil"
       ? "#f8f2df"
       : isRetroTreatment
@@ -2118,12 +2177,19 @@ export function CardPreview({
   const startArtTransform = useRef(artTransform);
   const initialPinchDistance = useRef<number | null>(null);
   const manaCostInputRef = useRef<TextInput>(null);
-  const manaCostRenderRect =
+  const rawManaCostRenderRect =
     isFutureshiftedShowcase && !isManaCostFocused
       ? FUTURESHIFTED_MANA_COST_RECT
       : isManaCostFocused
       ? CARD_COORDINATES.manaCost
       : manaLayout.rect;
+  const manaCostRenderRect =
+    shouldCalibrateBorderlessExportText && !isManaCostFocused && !isFutureshiftedShowcase
+      ? {
+          ...rawManaCostRenderRect,
+          y: rawManaCostRenderRect.y + (exportCaptureMode ? -2 : 0),
+        }
+      : rawManaCostRenderRect;
   const [typeLineCursorIndex, setTypeLineCursorIndex] = useState(faceCard.typeLine.length);
   const typeLineAutocompleteSuggestions = getTypeLineAutocompleteSuggestions(
     faceCard.typeLine,
@@ -2235,6 +2301,7 @@ export function CardPreview({
         artPanHandlers={artPanResponder.panHandlers}
         artTransform={artTransform}
         artGenerating={showArtGenerating}
+        footerOwnerName={footerOwnerName}
         zone={zone}
       />
     );
@@ -2264,6 +2331,7 @@ export function CardPreview({
         artPanHandlers={artPanResponder.panHandlers}
         artTransform={artTransform}
         artGenerating={showArtGenerating}
+        footerOwnerName={footerOwnerName}
         zone={zone}
       />
     );
@@ -2278,6 +2346,7 @@ export function CardPreview({
         scale={width / SPLIT_CARD_COORDINATES.width}
         exportMode={exportMode}
         artGenerating={showArtGenerating}
+        footerOwnerName={footerOwnerName}
         onSectionPress={onSectionPress}
         zone={zone}
       />
@@ -2599,6 +2668,7 @@ export function CardPreview({
               cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? frameColors.join("")}-${securityStamped ? "stamped" : "unstamped"}`}
               sources={treatmentFrameBlendSources}
               mirrorX={Boolean(regularMseColorBlend?.mirrorX ?? resolvedMseColorBlend?.mirrorX)}
+              exportMode={exportMode}
             />
           ) : (
             <MseFrameImage
@@ -2615,6 +2685,7 @@ export function CardPreview({
                       ? Boolean(mseAccentColorBlend?.mirrorX)
                       : Boolean(regularMseColorBlend?.mirrorX)))
                 }
+                exportMode={exportMode}
               />
           )
         )
@@ -2622,24 +2693,41 @@ export function CardPreview({
 
       {borderlessDarkTextboxFillSource ? (
         <>
-          <StableFrameImage
-            cacheKey={`mainframe-standard-${frameTreatment}-dark-textbox-fill`}
-            source={borderlessDarkTextboxFillSource}
-            resizeMode="stretch"
-          />
-          {borderlessPinlineOnlyRestoreMaskSource ? (
-            <MsePinlineOnlyRestoreLayer
-              cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}-pinline-only`}
-              source={
-                treatmentFrameSource ??
-                artifactMainframeColorSource ??
-                getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
-              }
-              splitSources={borderlessTreatmentFrameBlendSources}
-              maskSource={borderlessPinlineOnlyRestoreMaskSource}
-              mirrorX={Boolean(treatmentFrameMirrorX)}
-              exportMode={exportMode}
+          {exportMode ? (
+            <DirectFrameImage source={borderlessDarkTextboxFillSource} resizeMode="stretch" />
+          ) : (
+            <StableFrameImage
+              cacheKey={`mainframe-standard-${frameTreatment}-dark-textbox-fill`}
+              source={borderlessDarkTextboxFillSource}
+              resizeMode="stretch"
             />
+          )}
+          {borderlessPinlineOnlyRestoreMaskSource ? (
+            exportFlattenMasks ? (
+              <FlattenedMaskedFrameLayer
+                source={
+                  treatmentFrameSource ??
+                  artifactMainframeColorSource ??
+                  getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
+                }
+                splitSources={borderlessTreatmentFrameBlendSources}
+                maskSource={borderlessPinlineOnlyRestoreMaskSource}
+                mirrorX={Boolean(treatmentFrameMirrorX)}
+              />
+            ) : (
+              <MsePinlineOnlyRestoreLayer
+                cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}-pinline-only`}
+                source={
+                  treatmentFrameSource ??
+                  artifactMainframeColorSource ??
+                  getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
+                }
+                splitSources={borderlessTreatmentFrameBlendSources}
+                maskSource={borderlessPinlineOnlyRestoreMaskSource}
+                mirrorX={Boolean(treatmentFrameMirrorX)}
+                exportMode={exportMode}
+              />
+            )
           ) : null}
         </>
       ) : null}
@@ -2668,6 +2756,7 @@ export function CardPreview({
             cacheKey="typeframe-saga"
             source={getTypeFrameFrameSource(typeFrame, frameIdentity, mseColorBlend, card)}
             mirrorX={mseColorBlend?.mirrorX}
+            exportMode={exportMode}
           />
           <SagaArtSlot
             artRect={artRect}
@@ -2777,7 +2866,6 @@ export function CardPreview({
 		          artTransform={artTransform}
 		          imageAspectRatio={imageAspectRatio}
 		          overlayBottomY={(treatmentLayout?.textArea.y ?? CARD_COORDINATES.textArea.y) - 4}
-		          exportMode={exportMode}
 		          cacheKey={`subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
 		        />
 		      ) : null}
@@ -3363,7 +3451,7 @@ export function CardPreview({
           onPress={() => onSectionPress("rules")}
           style={{
             ...rectStyle(rulesLayout.rulesRect),
-            justifyContent: activeSection === "rules" && !rulesLayout.centerRulesContent ? "flex-start" : "center",
+            justifyContent: "center",
             ...showcaseEditableHitPriority,
             ...zone("rules", 3),
           }}
@@ -3388,19 +3476,17 @@ export function CardPreview({
                   rulesLayout.rulesLineHeight * scale,
                 ),
                 width: "100%",
-                height: rulesLayout.centerRulesContent ? Math.max(rulesLayout.rulesLineHeight * scale, compactRulesContentHeightScaled) : "100%",
-                ...(rulesLayout.centerRulesContent
-                  ? {
-                      position: "absolute",
-                      top: compactRulesVerticalInset,
-                      left: 0,
-                    }
-                  : null),
-                padding: 0,
+                height: "100%",
+                position: "absolute",
+                top: 0,
+                left: 0,
+                paddingTop: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+                paddingBottom: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+                paddingHorizontal: 0,
                 overflow: "hidden",
                 backgroundColor: "transparent",
                 textAlign: rulesLayout.centerRulesContent ? "center" : "left",
-                textAlignVertical: rulesLayout.centerRulesContent ? "center" : "top",
+                textAlignVertical: "top",
               }}
             />
           ) : (
@@ -3571,7 +3657,8 @@ export function CardPreview({
             usesRarityTreatment={card.setSymbolUsesRarityTreatment}
             rarity={card.rarity}
             size={getSetSymbolMarkSize(20 * scale, card)}
-            exportMode={exportMode}
+            exportMode={exportMode || exportSetSymbolMode}
+            exportFlattenMasks={exportFlattenMasks}
           />
         </Pressable>
       ) : null}
@@ -3591,13 +3678,14 @@ export function CardPreview({
         }}
       >
         {isRetroTreatment ? (
-          <RetroPrintingFooter card={card} scale={scale} />
+          <RetroPrintingFooter card={card} scale={scale} footerOwnerName={footerOwnerName} />
         ) : (
           <ModernPrintingFooter
             card={card}
             scale={scale}
             hasPowerToughness={showPowerToughness}
             variant={isFutureshiftedShowcase ? "futureshifted" : typeFrame === "token" ? "token" : "card"}
+            footerOwnerName={footerOwnerName}
           />
         )}
       </Pressable>
@@ -3737,6 +3825,7 @@ function SplitCardPreview({
   scale,
   exportMode,
   artGenerating,
+  footerOwnerName,
   onSectionPress,
   zone,
 }: {
@@ -3746,6 +3835,7 @@ function SplitCardPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -3787,6 +3877,7 @@ function SplitCardPreview({
           scale={scale}
           exportMode={exportMode}
           artGenerating={artGenerating}
+          footerOwnerName={footerOwnerName}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -3798,6 +3889,7 @@ function SplitCardPreview({
           scale={scale}
           exportMode={exportMode}
           artGenerating={artGenerating}
+          footerOwnerName={footerOwnerName}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -3813,6 +3905,7 @@ function ClassicSplitPreview({
   scale,
   exportMode,
   artGenerating,
+  footerOwnerName,
   onSectionPress,
   zone,
 }: {
@@ -3822,6 +3915,7 @@ function ClassicSplitPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -3869,6 +3963,7 @@ function ClassicSplitPreview({
       <SplitPrintingFooter
         card={card}
         scale={scale}
+        footerOwnerName={footerOwnerName}
         onSectionPress={onSectionPress}
         zone={zone}
       />
@@ -3894,6 +3989,7 @@ function ClassicSplitHalfSlot({
   scale,
   exportMode,
   artGenerating,
+  footerOwnerName,
   onSectionPress,
   zone,
 }: {
@@ -3905,6 +4001,7 @@ function ClassicSplitHalfSlot({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4281,11 +4378,13 @@ function SplitFuseBridge({
 function SplitPrintingFooter({
   card,
   scale,
+  footerOwnerName,
   onSectionPress,
   zone,
 }: {
   card: CardDraft;
   scale: number;
+  footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4313,7 +4412,7 @@ function SplitPrintingFooter({
       <RotatedSplitText
         rect={{ x: 32, y: 214, width: 140, height: 7 }}
         scale={scale}
-        text={getModernCopyrightLine(card)}
+        text={getCardMagicFooterCopyrightLine(card, footerOwnerName)}
         fontSize={7.25 * scale}
         fontFamily={FULL_MAGIC_PACK.fontFamilies.footerLegal}
         align="flex-end"
@@ -4400,6 +4499,7 @@ function AftermathSplitPreview({
   scale,
   exportMode,
   artGenerating,
+  footerOwnerName,
   onSectionPress,
   zone,
 }: {
@@ -4409,6 +4509,7 @@ function AftermathSplitPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -5236,6 +5337,7 @@ function PlaneswalkerPreview({
   artPanHandlers,
   artTransform,
   artGenerating,
+  footerOwnerName,
   zone,
 }: {
   card: CardDraft;
@@ -5259,6 +5361,7 @@ function PlaneswalkerPreview({
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
   artTransform: ArtTransform;
   artGenerating: boolean;
+  footerOwnerName?: string;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
   const abilities = getLoyaltyAbilities(faceCard);
@@ -5749,7 +5852,7 @@ function PlaneswalkerPreview({
           ...zone("printing", 3),
         }}
       >
-        <ModernPrintingFooter card={card} scale={scale * 2} />
+        <ModernPrintingFooter card={card} scale={scale * 2} footerOwnerName={footerOwnerName} />
       </Pressable>
       <SecurityStampLayer
         card={card}
@@ -5927,6 +6030,7 @@ function BattleFrontPreview({
   artPanHandlers,
   artTransform,
   artGenerating,
+  footerOwnerName,
   zone,
 }: {
   card: CardDraft;
@@ -5950,6 +6054,7 @@ function BattleFrontPreview({
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
   artTransform: ArtTransform;
   artGenerating: boolean;
+  footerOwnerName?: string;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
   const defenseValue = card.defense?.trim() || "3";
@@ -6406,7 +6511,7 @@ function BattleFrontPreview({
           ...zone("printing", 3),
         }}
       >
-        <ModernPrintingFooter card={card} scale={scale} variant="battle" />
+        <ModernPrintingFooter card={card} scale={scale} variant="battle" footerOwnerName={footerOwnerName} />
       </Pressable>
       <SecurityStampLayer
         card={card}
@@ -7576,6 +7681,31 @@ function StableFrameImage({
   );
 }
 
+function DirectFrameImage({
+  source,
+  resizeMode = "stretch",
+}: {
+  source: ImageSourcePropType;
+  resizeMode?: StableFrameImageResizeMode;
+}) {
+  return (
+    <Image
+      accessibilityIgnoresInvertColors
+      source={source}
+      resizeMode={resizeMode}
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+      }}
+    />
+  );
+}
+
 function ShowcaseMaskedArt({
   artUri,
   artRect,
@@ -8301,11 +8431,35 @@ function MseFrameImage({
   source,
   cacheKey,
   mirrorX = false,
+  exportMode = false,
 }: {
   source: ImageSourcePropType;
   cacheKey: string;
   mirrorX?: boolean;
+  exportMode?: boolean;
 }) {
+  if (Platform.OS === "web" && exportMode) {
+    return (
+      <View
+        pointerEvents="none"
+        style={[
+          {
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+          },
+          optionalTransformStyle(mirrorX ? [{ scaleX: -1 }] : null),
+        ]}
+      >
+        <DirectFrameImage source={source} resizeMode="stretch" />
+      </View>
+    );
+  }
+
   return <StableFrameImage cacheKey={cacheKey} source={source} mirrorX={mirrorX} resizeMode="stretch" />;
 }
 
@@ -8501,7 +8655,7 @@ function CssMaskedFrameImage({
       style={containerStyle}
     >
       {splitSources ? (
-        <MseSplitFrameImage cacheKey={`${cacheKey}-split`} sources={splitSources} />
+        <MseSplitFrameImage cacheKey={`${cacheKey}-split`} sources={splitSources} exportMode />
       ) : (
         <StableFrameImage cacheKey={cacheKey} source={source} resizeMode="stretch" />
       )}
@@ -8521,6 +8675,66 @@ function getImageSourceUri(source: ImageSourcePropType): string | null {
   return resolveAssetSource?.(source)?.uri ?? null;
 }
 
+function FlattenedMaskedFrameLayer({
+  source,
+  splitSources,
+  maskSource,
+  mirrorX,
+}: {
+  source: ImageSourcePropType;
+  splitSources?: SplitFrameSources | null;
+  maskSource: ImageSourcePropType;
+  mirrorX: boolean;
+}) {
+  const [uri, setUri] = useState<string | null>(null);
+  const sourceUri = getImageSourceUri(source);
+  const leftUri = splitSources ? getImageSourceUri(splitSources.left) : null;
+  const rightUri = splitSources ? getImageSourceUri(splitSources.right) : null;
+  const maskUri = getImageSourceUri(maskSource);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !maskUri || typeof document === "undefined") {
+      return;
+    }
+    let cancelled = false;
+    let settled = false;
+    adjustFlattenPending(1);
+    const release = () => {
+      if (!settled) {
+        settled = true;
+        adjustFlattenPending(-1);
+      }
+    };
+    compositeFlattenedMaskedFrame({ sourceUri, leftUri, rightUri, maskUri, mirrorX })
+      .then((result) => {
+        if (!cancelled) {
+          setUri(result);
+        }
+      })
+      .catch((error) => {
+        console.warn("[CardMagic export] flatten composite failed.", error);
+      })
+      .finally(release);
+    return () => {
+      cancelled = true;
+      release();
+    };
+  }, [sourceUri, leftUri, rightUri, maskUri, mirrorX]);
+
+  if (!uri) {
+    return null;
+  }
+
+  return (
+    <Image
+      accessibilityIgnoresInvertColors
+      source={{ uri }}
+      resizeMode="stretch"
+      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%" }}
+    />
+  );
+}
+
 function MsePinlineOnlyRestoreLayer({
   source,
   splitSources,
@@ -8536,12 +8750,9 @@ function MsePinlineOnlyRestoreLayer({
   mirrorX?: boolean;
   exportMode: boolean;
 }) {
-  if (Platform.OS === "web" && exportMode) {
-    return (
-      <CssMaskedFrameImage cacheKey={cacheKey} source={source} splitSources={splitSources} maskSource={maskSource} />
-    );
-  }
-
+  // SVG mask path, used by the editor and by native export (react-native-view-shot
+  // rasterizes react-native-svg fine). Web export instead pre-flattens via
+  // FlattenedMaskedFrameLayer, since html2canvas cannot rasterize masks.
   const maskId = `${cacheKey}-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const gradientId = `${cacheKey}-split-gradient`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const rightMaskId = `${cacheKey}-right-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -8656,11 +8867,49 @@ function MseSplitFrameImage({
   sources,
   cacheKey,
   mirrorX = false,
+  exportMode = false,
 }: {
   sources: SplitFrameSources;
   cacheKey: string;
   mirrorX?: boolean;
+  exportMode?: boolean;
 }) {
+  if (Platform.OS === "web" && exportMode) {
+    return (
+      <>
+        <MseFrameImage
+          cacheKey={`${cacheKey}-left-export`}
+          source={sources.left}
+          mirrorX={mirrorX}
+          exportMode
+        />
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            overflow: "hidden",
+            opacity: 0.96,
+            WebkitMaskImage: "linear-gradient(90deg, transparent 0%, transparent 34%, #000 66%, #000 100%)",
+            maskImage: "linear-gradient(90deg, transparent 0%, transparent 34%, #000 66%, #000 100%)",
+          } as unknown as ViewStyle}
+        >
+          <MseFrameImage
+            cacheKey={`${cacheKey}-right-export`}
+            source={sources.right}
+            mirrorX={mirrorX}
+            exportMode
+          />
+        </View>
+      </>
+    );
+  }
+
   const maskId = `${cacheKey}-right-frame-blend-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const gradientId = `${cacheKey}-right-frame-blend-gradient`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const imageTransform = mirrorX ? `translate(${CARD_COORDINATES.width} 0) scale(-1 1)` : undefined;
@@ -9225,7 +9474,6 @@ function SubjectMaskArtOverlay({
   artTransform,
   imageAspectRatio,
   overlayBottomY,
-  exportMode,
   cacheKey,
 }: {
   faceCard: CardDraft;
@@ -9233,7 +9481,6 @@ function SubjectMaskArtOverlay({
   artTransform: ArtTransform;
   imageAspectRatio?: number | null;
   overlayBottomY: number;
-  exportMode: boolean;
   cacheKey: string;
 }) {
   if (!faceCard.artUri || !faceCard.artSubjectMaskUri) {
@@ -9249,17 +9496,6 @@ function SubjectMaskArtOverlay({
     { x: artX, y: artY, width: fittedLayout.width, height: fittedLayout.height },
     artTransform,
   );
-
-  if (Platform.OS === "web" && exportMode) {
-    return (
-      <CssSubjectMaskArtOverlay
-        artUri={faceCard.artUri}
-        maskUri={faceCard.artSubjectMaskUri}
-        transformedArtRect={transformedArtRect}
-        overlayBottomY={overlayBottomY}
-      />
-    );
-  }
 
   return (
     <Svg
@@ -9319,59 +9555,6 @@ function SubjectMaskArtOverlay({
         </G>
       </G>
     </Svg>
-  );
-}
-
-function CssSubjectMaskArtOverlay({
-  artUri,
-  maskUri,
-  transformedArtRect,
-  overlayBottomY,
-}: {
-  artUri: string;
-  maskUri: string;
-  transformedArtRect: CoordinateRect;
-  overlayBottomY: number;
-}) {
-  const clipHeightPercent = `${Math.max(0, Math.min(1, overlayBottomY / CARD_COORDINATES.height)) * 100}%`;
-  const clipStyle = {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: "100%",
-    height: clipHeightPercent,
-    overflow: "hidden",
-  } as unknown as ViewStyle;
-  const maskedImageStyle = {
-    position: "absolute",
-    left: `${(transformedArtRect.x / CARD_COORDINATES.width) * 100}%`,
-    top: `${(transformedArtRect.y / CARD_COORDINATES.height) * 100}%`,
-    width: `${(transformedArtRect.width / CARD_COORDINATES.width) * 100}%`,
-    height: `${(transformedArtRect.height / CARD_COORDINATES.height) * 100}%`,
-    overflow: "hidden",
-    WebkitMaskImage: `url("${maskUri}")`,
-    maskImage: `url("${maskUri}")`,
-    WebkitMaskPosition: "center",
-    maskPosition: "center",
-    WebkitMaskRepeat: "no-repeat",
-    maskRepeat: "no-repeat",
-    WebkitMaskSize: "100% 100%",
-    maskSize: "100% 100%",
-  } as unknown as ViewStyle;
-
-  return (
-    <View
-      pointerEvents="none"
-      style={clipStyle}
-    >
-      <View pointerEvents="none" style={maskedImageStyle}>
-        <Image
-          source={{ uri: artUri }}
-          resizeMode="stretch"
-          style={{ width: "100%", height: "100%" }}
-        />
-      </View>
-    </View>
   );
 }
 
@@ -10473,7 +10656,7 @@ function getRulesFlavorLayout(
   const showFlavor = hasFlavor && !hasRules;
   const showRules = hasRules || !showFlavor;
   const shouldCenterCompactRulesBlock =
-    showRules && hasRules && !hasFlavor && (rulesLineCount <= 3 || isKeywordOnlyRulesText);
+    showRules && hasRules && !hasFlavor && (rulesLineCount <= 1 || isKeywordOnlyRulesText);
   const singleHeight = areaHeight;
   const singleY = areaRect.y;
   const singleScale = getTextScale(neededHeight, singleHeight);
@@ -10844,7 +11027,11 @@ const GENERATING_SMOKE_COLORS: Record<ManaColor | "C", string> = {
   C: "#cfd5cf",
 };
 
-const GENERATING_SMOKE_ORIGIN_INPUT_RANGE = [0, 0.09, 0.19, 0.31, 0.43, 0.56, 0.69, 0.82, 0.93, 1];
+const GENERATING_SMOKE_ORIGIN_SEGMENT_COUNT = 14;
+const GENERATING_SMOKE_ORIGIN_INPUT_RANGE = Array.from(
+  { length: GENERATING_SMOKE_ORIGIN_SEGMENT_COUNT + 1 },
+  (_, index) => index / GENERATING_SMOKE_ORIGIN_SEGMENT_COUNT,
+);
 
 type GeneratingPixelSmokeParticle = {
   x: number;
@@ -10866,8 +11053,8 @@ function createGeneratingPixelSmokeTrail(
 ): GeneratingPixelSmokeParticle[] {
   const random = createSeededRandom(seedKey);
 
-  return Array.from({ length: 96 }, (_, index) => {
-    const emissionProgress = (index / 96) * 0.82;
+  return Array.from({ length: 128 }, (_, index) => {
+    const emissionProgress = (index / 128) * 0.9;
     const densityBand = (index % 4) / 3;
     const sourceOffset = sampleGeneratingSmokeOriginPath(originPath, emissionProgress);
     const sourceX = 50 + sourceOffset.x / 3.75;
@@ -10897,15 +11084,24 @@ function createGeneratingSmokeOriginPath(seedKey: string): { x: number[]; y: num
   const random = createSeededRandom(seedKey);
   const x: number[] = [];
   const y: number[] = [];
+  const startAngle = random() * Math.PI * 2;
 
   GENERATING_SMOKE_ORIGIN_INPUT_RANGE.forEach((_, index) => {
-    const angle = random() * Math.PI * 2;
-    const radiusX = 58 + random() * 102;
-    const radiusY = 34 + random() * 86;
+    const isClosingPoint = index === GENERATING_SMOKE_ORIGIN_INPUT_RANGE.length - 1;
+    const pathIndex = isClosingPoint ? 0 : index;
+    const angle =
+      startAngle +
+      (pathIndex / GENERATING_SMOKE_ORIGIN_SEGMENT_COUNT) * Math.PI * 2 +
+      (isClosingPoint ? 0 : (random() - 0.5) * 0.22);
+    const radiusX = 108 + random() * 42;
+    const radiusY = 58 + random() * 34;
 
-    x.push(index === 0 || index === GENERATING_SMOKE_ORIGIN_INPUT_RANGE.length - 1 ? 0 : Math.round(Math.cos(angle) * radiusX));
-    y.push(index === 0 || index === GENERATING_SMOKE_ORIGIN_INPUT_RANGE.length - 1 ? 0 : Math.round(Math.sin(angle) * radiusY));
+    x.push(Math.round(Math.cos(angle) * radiusX));
+    y.push(Math.round(Math.sin(angle) * radiusY));
   });
+
+  x[x.length - 1] = x[0] ?? 0;
+  y[y.length - 1] = y[0] ?? 0;
 
   return { x, y };
 }

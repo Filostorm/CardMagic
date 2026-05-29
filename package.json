@@ -1,17 +1,19 @@
 {
   "name": "cardmagic",
-  "version": "3.9.3",
+  "version": "3.18.2",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --port 8082",
     "android": "expo run:android",
     "ios": "expo run:ios --port 8082",
     "web": "expo start --web --port 8082",
-    "export:web": "expo export --platform web",
-    "export:cloudflare": "npm run export:web && node scripts/prepare-cloudflare-pages.mjs",
+    "clean:duplicates": "node scripts/clean-duplicate-artifacts.mjs",
+    "export:web": "EXPO_USE_FAST_RESOLVER=0 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear",
+    "export:cloudflare": "npm run clean:duplicates && npm run export:web && node scripts/prepare-cloudflare-pages.mjs",
     "predeploy:web": "npm run export:web",
-    "deploy:web": "npx --yes eas-cli deploy --prod --export-dir dist",
-    "deploy:cloudflare": "npm run export:cloudflare && npx --yes wrangler pages deploy dist --project-name cardmagic --branch main --commit-dirty=true",
+    "deploy:cloudflare": "npm run deploy:cloudflare:beta",
+    "deploy:cloudflare:beta": "npm run export:cloudflare && npx --yes wrangler pages deploy dist --project-name cardmagic --branch beta --commit-dirty=true",
+    "deploy:cloudflare:production": "npm run export:cloudflare && npx --yes wrangler pages deploy dist --project-name cardmagic --branch main --commit-dirty=true",
     "update:cards": "node scripts/update-card-database.mjs"
   },
   "dependencies": {

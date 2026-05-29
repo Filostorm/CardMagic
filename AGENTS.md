@@ -4,9 +4,10 @@
 - If you notice unrelated errors, fix them when the fix is low-risk and does not require a breaking upgrade or destructive action.
 - Never generate frame textures unless the user explicitly asks for generated textures.
 - Use existing MSE/source-pack assets as the authoritative source for frame textures, pinlines, masks, and blend assets.
-- After every code patch, update the production Cloudflare Pages deployment when credentials and environment allow it. Cloudflare Pages is the production hosting target for this repo; use `npm run deploy:cloudflare`.
+- After every code patch, update the beta Cloudflare Pages deployment when credentials and environment allow it. The automatic agent deployment target is the `beta` Pages branch; use `npm run deploy:cloudflare`.
+- Do not update the production Cloudflare Pages deployment automatically. Production is a manual promotion target; use `npm run deploy:cloudflare:production` only when the user explicitly asks to update the normal production page.
 - Do not use Expo or EAS as a deployment target for this project. Do not run `eas deploy`, `eas build`, `expo publish`, or Expo Hosting workflows unless the user explicitly asks for native/mobile packaging work. If a local web bundle is needed, run it only through the repo's Cloudflare deployment/export scripts, not as an Expo-hosted deployment.
-- Before production deployment, increment the app version in both `package.json` and `app.json` using semantic-versioning scale:
+- Before beta or production deployment, increment the app version in both `package.json` and `app.json` using semantic-versioning scale:
   - Large feature: increment the major version by `1.0.0`.
   - Small feature: increment the minor version by `0.1.0`.
   - Bug fix or visual tweak: increment the patch version by `0.0.1`.

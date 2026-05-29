@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import { Image, Platform, View } from "react-native";
 import Svg, { Defs, G, LinearGradient, Path, Stop } from "react-native-svg";
 
 import { getMseWatermarkPreset } from "@/data/mse-watermarks";
 import { RARITY_ACCENTS } from "@/lib/card-style";
+import { adjustFlattenPending, compositeRaritySetSymbol } from "@/lib/export-flatten";
 import { CardRarity } from "@/types/card";
 
 export type SetSymbolPreset = {
@@ -207,6 +209,7 @@ export function SetSymbolMark({
   rarity,
   size,
   exportMode = false,
+  exportFlattenMasks = false,
 }: {
   presetId?: string;
   imageUri?: string;
@@ -214,11 +217,18 @@ export function SetSymbolMark({
   rarity: CardRarity;
   size: number;
   exportMode?: boolean;
+  // Pre-flatten the masked metallic symbol into a plain raster image so the
+  // html2canvas export renders it faithfully. Web-only.
+  exportFlattenMasks?: boolean;
 }) {
   if (imageUri) {
     if (usesRarityTreatment) {
       const treatment = RARITY_TREATMENTS[rarity];
       const fill = rarity === "common" ? treatment.fill : treatment.high;
+
+      if (Platform.OS === "web" && exportFlattenMasks) {
+        return <FlattenedRaritySetSymbol symbolUri={imageUri} treatment={treatment} size={size} />;
+      }
 
       if (Platform.OS === "web" && !exportMode) {
         const createMaskStyle = (background: string) => ({
@@ -341,6 +351,69 @@ export function SetSymbolMark({
       }}
     >
       <PresetSetSymbol preset={preset} rarity={rarity} size={size} />
+    </View>
+  );
+}
+
+// Option B: composite the editor's three masked metallic layers (shadow,
+// outline, gradient fill) into one flat PNG so html2canvas can capture it.
+function FlattenedRaritySetSymbol({
+  symbolUri,
+  treatment,
+  size,
+}: {
+  symbolUri: string;
+  treatment: { fill: string; high: string; low: string; outline: string; shadow: string };
+  size: number;
+}) {
+  const [uri, setUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") {
+      return;
+    }
+    let cancelled = false;
+    let settled = false;
+    adjustFlattenPending(1);
+    const release = () => {
+      if (!settled) {
+        settled = true;
+        adjustFlattenPending(-1);
+      }
+    };
+    compositeRaritySetSymbol({
+      symbolUri,
+      shadow: treatment.shadow,
+      outline: treatment.outline,
+      high: treatment.high,
+      fill: treatment.fill,
+      low: treatment.low,
+    })
+      .then((result) => {
+        if (!cancelled) {
+          setUri(result);
+        }
+      })
+      .catch((error) => {
+        console.warn("[CardMagic export] set-symbol flatten failed.", error);
+      })
+      .finally(release);
+    return () => {
+      cancelled = true;
+      release();
+    };
+  }, [symbolUri, treatment.shadow, treatment.outline, treatment.high, treatment.fill, treatment.low]);
+
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      {uri ? (
+        <Image
+          accessibilityIgnoresInvertColors
+          source={{ uri }}
+          resizeMode="contain"
+          style={{ width: size, height: size }}
+        />
+      ) : null}
     </View>
   );
 }

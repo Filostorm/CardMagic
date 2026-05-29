@@ -1172,9 +1172,8 @@ function buildRandomCardPrompt(card: CardDraft): string {
     "",
     "Design constraints:",
     `- Preferred color identity: ${colorInstruction}.`,
-    `- Current frame identity: ${frameIdentity}.`,
-    `- Use the current set code if useful: ${card.setCode || "none"}.`,
     "- Prefer clean, printable rules text and current templating language.",
+    "- In rules text, use the literal token NAME whenever the card refers to itself. Do not write the generated card name in its own rules text.",
     "- Avoid silver-border joke mechanics unless requested.",
     "- Do not copy any existing card, character, faction logo, or official set concept.",
     "",
@@ -1293,6 +1292,7 @@ function buildCardKeywordContext(keywords: CardKeyword[]): string {
 function buildCardJsonOutputInstructions(): string {
   return [
     "Return only valid JSON with this shape:",
+    "Important rules-text templating: when the card refers to itself, write NAME exactly. Example: \"Whenever NAME attacks, draw a card.\"",
     "{",
     '  "name": "Card Name",',
     '  "manaCost": "{2}{G}",',

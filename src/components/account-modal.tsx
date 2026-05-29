@@ -1,26 +1,62 @@
 import { User, X } from "lucide-react-native";
-import { useMemo, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, Text, TextInput, useWindowDimensions, View } from "react-native";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
+import {
+  type AccountProfile,
+  changeAccountPassword,
+  deleteAccount,
+  fetchAccountProfile,
+  updateAccountUsername,
+} from "@/lib/account-profile";
 import { authRedirectUrl, isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type AccountModalProps = {
   visible: boolean;
   user: SupabaseUser | null;
-  syncing: boolean;
   onClose: () => void;
-  onSyncProgress: () => void;
   onAuthSuccess: () => void;
+  onProfileChange?: (profile: AccountProfile) => void;
 };
 
-export function AccountModal({ visible, user, syncing, onClose, onSyncProgress, onAuthSuccess }: AccountModalProps) {
+export function AccountModal({ visible, user, onClose, onAuthSuccess, onProfileChange }: AccountModalProps) {
   const { width } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const accountLabel = useMemo(() => user?.email ?? "Not signed in", [user?.email]);
+
+  useEffect(() => {
+    let active = true;
+
+    if (!visible || !user) {
+      setUsername("");
+      setNewPassword("");
+      return () => {
+        active = false;
+      };
+    }
+
+    void fetchAccountProfile(user.id)
+      .then((profile) => {
+        if (active) {
+          setUsername(profile.username ?? profile.displayName ?? user.email?.split("@")[0] ?? "");
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setMessage(error instanceof Error ? error.message : "Unable to load account profile.");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [user, visible]);
 
   if (!visible) {
     return null;
@@ -80,6 +116,72 @@ export function AccountModal({ visible, user, syncing, onClose, onSyncProgress, 
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveUsername = async () => {
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      const profile = await updateAccountUsername(username);
+      setUsername(profile.username ?? "");
+      setMessage("Username updated.");
+      onProfileChange?.(profile);
+      onAuthSuccess();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update username.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const savePassword = async () => {
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      await changeAccountPassword(newPassword);
+      setNewPassword("");
+      setMessage("Password updated.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update password.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmDeleteAccount = () => {
+    const runDelete = async () => {
+      setBusy(true);
+      setMessage(null);
+
+      try {
+        await deleteAccount();
+        setMessage("Account deleted.");
+        onAuthSuccess();
+        onClose();
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Unable to delete account.");
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      if (window.confirm("Delete this account and all account-owned CardMagic data? This cannot be undone.")) {
+        void runDelete();
+      }
+      return;
+    }
+
+    Alert.alert(
+      "Delete account?",
+      "This deletes your CardMagic account and account-owned Supabase data. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => void runDelete() },
+      ],
+    );
   };
 
   return (
@@ -148,9 +250,52 @@ export function AccountModal({ visible, user, syncing, onClose, onSyncProgress, 
 
             {user ? (
               <>
-                <AccountNotice text="Purchases, credit balances, and saved sets sync through Supabase." />
-                <PrimaryButton label={syncing ? "Syncing..." : "Sync account"} disabled={syncing} onPress={onSyncProgress} />
-                <SecondaryButton label="Sign out" disabled={busy} onPress={signOut} />
+                <AccountNotice text="Purchases, credit balances, saved sets, and community profile data are stored in Supabase." />
+                <View style={{ gap: 8 }}>
+                  <TextInput
+                    accessibilityLabel="Username"
+                    value={username}
+                    onChangeText={(value) =>
+                      setUsername(
+                        value
+                          .normalize("NFKD")
+                          .replace(/[\u0300-\u036f]/g, "")
+                          .replace(/[^A-Za-z0-9_]/g, "")
+                          .slice(0, 24),
+                      )
+                    }
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    importantForAutofill="no"
+                    placeholder="Username"
+                    placeholderTextColor="#9aa1ad"
+                    textContentType="nickname"
+                    style={inputStyle}
+                  />
+                  <PrimaryButton label="Save username" disabled={busy || username.trim().length < 3} onPress={() => void saveUsername()} />
+                </View>
+                <View style={{ gap: 8 }}>
+                  <TextInput
+                    accessibilityLabel="New password"
+                    value={newPassword}
+                    onChangeText={setNewPassword}
+                    autoComplete="new-password"
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    importantForAutofill="yes"
+                    placeholder="New password"
+                    placeholderTextColor="#9aa1ad"
+                    textContentType="newPassword"
+                    style={inputStyle}
+                  />
+                  <PrimaryButton label="Change password" disabled={busy || newPassword.length < 6} onPress={() => void savePassword()} />
+                </View>
+                <View style={{ flexDirection: width < 380 ? "column" : "row", gap: 9 }}>
+                  <SecondaryButton label="Sign out" disabled={busy} onPress={signOut} />
+                  <DangerButton label="Delete account" disabled={busy} onPress={confirmDeleteAccount} />
+                </View>
               </>
             ) : (
               <>
@@ -274,6 +419,32 @@ function SecondaryButton({ label, disabled, onPress }: { label: string; disabled
       }}
     >
       <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function DangerButton({ label, disabled, onPress }: { label: string; disabled?: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled}
+      onPress={onPress}
+      style={{
+        flex: 1,
+        minHeight: 46,
+        borderRadius: 23,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: disabled ? "#e1c6c6" : "#b4232d",
+        backgroundColor: disabled ? "#f4eeee" : "#fff1f1",
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 16,
+      }}
+    >
+      <Text selectable={false} numberOfLines={1} style={{ color: disabled ? "#9f7777" : "#8e1d1d", fontSize: 13, fontWeight: "900" }}>
         {label}
       </Text>
     </Pressable>

@@ -69,10 +69,10 @@ export type ProgressMutationResult = {
 };
 
 export const CREDIT_SPEND_COSTS: Record<CreditSpendCategory, number> = {
-  artImage: 12,
-  artImageHigh: 20,
+  artImage: 10,
+  artImageHigh: 12,
   subjectMask: 4,
-  setIcon: 6,
+  setIcon: 4,
   rulesText: 0,
 };
 
@@ -126,7 +126,7 @@ export const MONTHLY_SUBSCRIPTION_PRODUCT = {
   bonusXp: 220,
 };
 
-const DEFAULT_STARTING_CREDITS = 40;
+const DEFAULT_STARTING_CREDITS = 100;
 const XP_PER_SPENT_CREDIT = 2;
 const CREDITS_PER_LEVEL_REWARD = 10;
 

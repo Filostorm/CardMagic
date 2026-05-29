@@ -328,7 +328,7 @@ export function createRandomCard(previous?: CardDraft): CardDraft {
     manaCost: tokenFields?.manaCost ?? battleFields?.manaCost ?? buildManaCost(kind, colors, manaValue),
     typeLine: tokenFields?.typeLine ?? battleFields?.typeLine ?? typeLine,
     rarity,
-    rulesText: interpolateCardName(tokenFields?.rulesText ?? battleFields?.rulesText ?? rulesText, tokenFields?.name ?? frontName),
+    rulesText: useCardNameToken(tokenFields?.rulesText ?? battleFields?.rulesText ?? rulesText),
     flavorText: tokenFields || battleFields ? "" : shouldHaveFlavorText(rarity, rulesText) ? pick(FLAVOR_TEXTS) : "",
     ...adventureFields,
     ...dfcFields,
@@ -638,7 +638,7 @@ function buildAdventureFields(
   const spellKind: "instant" | "sorcery" = chance(0.42) ? "instant" : "sorcery";
   const manaValue = rarity === "common" ? randomInt(1, 2) : randomInt(1, 3);
   const adventureName = pick(ADVENTURE_NAMES_BY_COLOR[color]);
-  const effect = interpolateCardName(pickSpellEffect(color, spellKind), adventureName);
+  const effect = useCardNameToken(pickSpellEffect(color, spellKind));
 
   return {
     adventureName,
@@ -674,7 +674,7 @@ function buildBattleFields(
     name,
     manaCost: buildManaCost("sorcery", colors.length > 0 ? colors : [color], manaValue),
     typeLine: "Battle — Siege",
-    rulesText: `${DEFAULT_BATTLE_SIEGE_REMINDER}\nWhen ${name} enters the battlefield, ${effect}`,
+    rulesText: `${DEFAULT_BATTLE_SIEGE_REMINDER}\nWhen NAME enters the battlefield, ${effect}`,
     defense: String(clamp(manaValue + randomInt(0, 2), 3, 7)),
   };
 }
@@ -741,9 +741,9 @@ function buildDfcBackFields(
   const rulesText = unique([
     keyword,
     pick([
-      `Whenever ${name} attacks, ${pickSpellEffect(color, "sorcery").replace(/^Target /, "target ")}`,
-      `At the beginning of your end step, if ${name} transformed this turn, draw a card.`,
-      `When ${name} enters, return up to one target card from your graveyard to your hand.`,
+      `Whenever NAME attacks, ${pickSpellEffect(color, "sorcery").replace(/^Target /, "target ")}`,
+      "At the beginning of your end step, if NAME transformed this turn, draw a card.",
+      "When NAME enters, return up to one target card from your graveyard to your hand.",
     ]),
   ].filter(Boolean)).join("\n");
 
@@ -751,7 +751,7 @@ function buildDfcBackFields(
     backName: name,
     backManaCost: buildManaCost("creature", [color], manaValue),
     backTypeLine: `Creature — ${pickCreatureType(color)}`,
-    backRulesText: interpolateCardName(rulesText, name),
+    backRulesText: useCardNameToken(rulesText),
     backFlavorText: "",
     backPower: String(power),
     backToughness: String(toughness),
@@ -1219,8 +1219,8 @@ function conditionalizeEffect(effect: string): string {
   return lowercaseFirst(effect);
 }
 
-function interpolateCardName(text: string, cardName: string): string {
-  return text.replaceAll("CARDNAME", cardName);
+function useCardNameToken(text: string): string {
+  return text.replaceAll("CARDNAME", "NAME");
 }
 
 function lowercaseFirst(value: string): string {

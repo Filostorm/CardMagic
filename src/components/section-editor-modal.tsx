@@ -27,6 +27,16 @@ import {
   TYPE_FRAMES,
   getDfcFaceSymbolSource,
 } from "@/data/full-magic-pack";
+import {
+  DEFAULT_SHOWCASE_FRAME,
+  SHOWCASE_FRAME_ORDER,
+  SHOWCASE_FRAMES,
+  VISIBLE_SHOWCASE_FRAME_ORDER,
+} from "@/data/showcase-frames";
+import {
+  getMseM15FrameTreatmentSource,
+  getMseM15MainframeSource,
+} from "@/data/mse-frame-renderer";
 import type { CardDatabaseEntry, CardDatabaseMetadata } from "@/data/card-database";
 import {
   KEYWORD_CATEGORY_LABELS,
@@ -47,6 +57,7 @@ import {
   FRAME_SELECTIONS,
   FRAME_COLOR_LABELS,
   FRAME_MANA_COLORS,
+  FRAME_TREATMENT_LABELS,
   getManualFrameColors,
   inferFrameIdentity,
   normalizeManaInput,
@@ -110,6 +121,15 @@ import {
 } from "@/types/card";
 import { formatKeywordLine } from "@/lib/keyword-text";
 
+const VISIBLE_TYPE_FRAMES: readonly TypeFrame[] = TYPE_FRAMES.filter(
+  (typeFrame) =>
+    typeFrame !== "split" &&
+    typeFrame !== "fuse" &&
+    typeFrame !== "adventure" &&
+    typeFrame !== "battle" &&
+    typeFrame !== "aftermath",
+);
+
 const SECTION_TITLES: Record<CardSection, string> = {
   frame: "Frame",
   identity: "Name and Cost",
@@ -130,6 +150,15 @@ function loadCardDatabaseModule(): Promise<CardDatabaseModule> {
 }
 
 const RARITIES: CardRarity[] = ["common", "uncommon", "rare", "mythic"];
+const STANDARD_FRAME_TREATMENTS: FrameTreatment[] = [
+  "standard",
+  "borderless",
+  "showcase",
+  "textless",
+  "retro",
+  "etchedFoil",
+];
+const BORDERLESS_TREATMENT_PREVIEW_SOURCE = require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless/mask-frame.png");
 const STANDARD_RULES_TEXT_SYMBOLS = [
   "T",
   "Q",
@@ -221,7 +250,7 @@ type SectionEditorModalProps = {
   section: CardSection | null;
   setCardBackId?: CardBackId;
   cardBackOverrideId?: CardBackId;
-  setSymbolDefaults?: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">;
+  setSymbolDefaults?: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">;
   customCardBacks?: CustomCardBackEntry[];
   generatedSetSymbols?: GeneratedSetSymbolEntry[];
   customKeywordDefinitions?: KeywordDefinition[];
@@ -236,7 +265,7 @@ type SectionEditorModalProps = {
   onPickCustomCardBack?: () => void;
   onChangeSetDefaultCardBack?: (cardBackId: CardBackId) => void;
   onChangeSetDefaultSymbol?: (
-    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
+    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
   ) => void;
   onPickWatermark: () => void;
 };
@@ -720,15 +749,6 @@ export function SectionEditorModal({
                 onPickCustomCardBack={onPickCustomCardBack}
                 onChange={(cardBackId) => onChange({ cardBackId })}
               />
-              <SetSymbolEditor
-                card={card}
-                setSymbolDefaults={setSymbolDefaults}
-                generatedSetSymbols={generatedSetSymbols}
-                onChange={onChange}
-                onChangeSetDefaultSymbol={onChangeSetDefaultSymbol}
-                onPickSetSymbol={onPickSetSymbol}
-                onGenerateSetSymbol={onGenerateSetSymbol}
-              />
               <View style={{ gap: 8 }}>
                 <Text
                   selectable
@@ -777,6 +797,15 @@ export function SectionEditorModal({
                   })}
                 </View>
               </View>
+              <SetSymbolEditor
+                card={card}
+                setSymbolDefaults={setSymbolDefaults}
+                generatedSetSymbols={generatedSetSymbols}
+                onChange={onChange}
+                onChangeSetDefaultSymbol={onChangeSetDefaultSymbol}
+                onPickSetSymbol={onPickSetSymbol}
+                onGenerateSetSymbol={onGenerateSetSymbol}
+              />
               <View style={{ flexDirection: "row", gap: 12 }}>
                 <EditorField
                   compact
@@ -1573,17 +1602,16 @@ function SetSymbolEditor({
   onGenerateSetSymbol,
 }: {
   card: CardDraft;
-  setSymbolDefaults?: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">;
+  setSymbolDefaults?: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">;
   generatedSetSymbols: GeneratedSetSymbolEntry[];
   onChange: (patch: Partial<CardDraft>) => void;
   onChangeSetDefaultSymbol?: (
-    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
+    patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
   ) => void;
   onPickSetSymbol: () => void;
   onGenerateSetSymbol: () => void;
 }) {
   const activePreset = card.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id;
-  const setDefaultPreset = setSymbolDefaults?.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id;
   const activeCustomSymbol = generatedSetSymbols.find((symbol) => symbol.uri === card.setSymbolUri);
   const applySymbolPatch = onChangeSetDefaultSymbol ?? onChange;
   const customSymbolLabel = card.setSymbolUsesRarityTreatment
@@ -1644,81 +1672,7 @@ function SetSymbolEditor({
         </View>
       </View>
 
-      {onChangeSetDefaultSymbol ? (
-        <View
-          style={{
-            borderRadius: 9,
-            borderCurve: "continuous",
-            borderWidth: 1,
-            borderColor: "#d8dbe2",
-            backgroundColor: "#f7f8fb",
-            padding: 10,
-            gap: 10,
-          }}
-        >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <View
-              style={{
-                width: 38,
-                height: 38,
-                borderRadius: 8,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: "#d4d8e0",
-                backgroundColor: "#ffffff",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <SetSymbolMark
-                presetId={setDefaultPreset}
-                imageUri={setSymbolDefaults?.setSymbolUri}
-                usesRarityTreatment={setSymbolDefaults?.setSymbolUsesRarityTreatment}
-                rarity={card.rarity}
-                size={setSymbolDefaults?.setSymbolUri && setSymbolDefaults.setSymbolUsesRarityTreatment ? 27 : 23}
-              />
-            </View>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text selectable={false} style={{ color: "#5f6470", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-                Set default symbol
-              </Text>
-              <Text selectable={false} numberOfLines={1} style={{ color: "#1f2530", fontSize: 13, fontWeight: "800" }}>
-                Changing this updates every card in the set.
-              </Text>
-            </View>
-          </View>
-        </View>
-      ) : null}
-
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Upload custom set symbol"
-          onPress={onPickSetSymbol}
-          style={{
-            flexGrow: 1,
-            flexBasis: 168,
-            minHeight: 46,
-            borderRadius: 8,
-            borderCurve: "continuous",
-            backgroundColor: "#151820",
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "row",
-            gap: 9,
-            paddingHorizontal: 12,
-          }}
-        >
-          <ImagePlus size={18} color="#ffffff" strokeWidth={2.3} />
-          <Text
-            selectable={false}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}
-          >
-            Upload symbol
-          </Text>
-        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Generate set symbol"
@@ -1745,6 +1699,34 @@ function SetSymbolEditor({
             style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}
           >
             Generate symbol
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Upload custom set symbol"
+          onPress={onPickSetSymbol}
+          style={{
+            flexGrow: 1,
+            flexBasis: 168,
+            minHeight: 46,
+            borderRadius: 8,
+            borderCurve: "continuous",
+            backgroundColor: "#151820",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 9,
+            paddingHorizontal: 12,
+          }}
+        >
+          <ImagePlus size={18} color="#ffffff" strokeWidth={2.3} />
+          <Text
+            selectable={false}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}
+          >
+            Upload symbol
           </Text>
         </Pressable>
       </View>
@@ -1786,7 +1768,9 @@ function SetSymbolEditor({
           </Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {generatedSetSymbols.map((symbol) => {
-              const selected = card.setSymbolUri === symbol.uri && card.setSymbolUsesRarityTreatment;
+              const selected =
+                (card.setSymbolId && card.setSymbolId === symbol.id) ||
+                (!card.setSymbolId && card.setSymbolUri === symbol.uri && card.setSymbolUsesRarityTreatment);
 
               return (
                 <Pressable
@@ -1796,6 +1780,7 @@ function SetSymbolEditor({
                   onPress={() =>
                     applySymbolPatch({
                       setSymbolUri: symbol.uri,
+                      setSymbolId: symbol.id,
                       setSymbolUsesRarityTreatment: true,
                     })
                   }
@@ -1868,6 +1853,7 @@ function SetSymbolEditor({
                     onPress={() =>
                       applySymbolPatch({
                         setSymbolPreset: preset.id,
+                        setSymbolId: undefined,
                         setSymbolUri: undefined,
                         setSymbolUsesRarityTreatment: undefined,
                       })
@@ -4626,6 +4612,12 @@ function FrameEditor({
 }) {
   const faceCard = getEditableCardFace(card);
   const selection = faceCard.frameSelection ?? "auto";
+  const frameTreatment = faceCard.frameTreatment ?? "standard";
+  const frameIdentity = inferFrameIdentity(faceCard);
+  const selectedShowcaseFrame = faceCard.showcaseFrame ?? DEFAULT_SHOWCASE_FRAME;
+  const compatibleFrameTreatments = (card.typeFrame ?? "standard") === "standard"
+    ? STANDARD_FRAME_TREATMENTS
+    : (["standard"] as FrameTreatment[]);
   const manualFrameSelections = FRAME_SELECTIONS.filter((frameSelection) => frameSelection !== "auto");
   const manualFrameColors = getManualFrameColors(faceCard);
   const frameSelectionColors: Partial<Record<FrameSelection, ManaColor>> = {
@@ -4682,6 +4674,45 @@ function FrameEditor({
 
   return (
     <View style={{ gap: 18 }}>
+      <View style={{ gap: 8 }}>
+        <Text
+          selectable
+          style={{
+            color: "#5f6470",
+            fontSize: 12,
+            fontWeight: "800",
+            textTransform: "uppercase",
+          }}
+        >
+          Frame type
+        </Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+          {compatibleFrameTreatments
+            .filter((treatment) => treatment !== "showcase")
+            .map((treatment) => (
+              <FrameTreatmentPreviewTile
+                key={treatment}
+                frameIdentity={frameIdentity}
+                treatment={treatment}
+                selected={frameTreatment === treatment}
+                onPress={() => onChange(toDfcFacePatch(card, { frameTreatment: treatment }))}
+              />
+            ))}
+          {compatibleFrameTreatments.includes("showcase")
+            ? VISIBLE_SHOWCASE_FRAME_ORDER.map((showcaseFrame) => (
+                <ShowcaseFramePreviewTile
+                  key={showcaseFrame}
+                  showcaseFrame={showcaseFrame}
+                  selected={frameTreatment === "showcase" && selectedShowcaseFrame === showcaseFrame}
+                  onPress={() =>
+                    onChange(toDfcFacePatch(card, { frameTreatment: "showcase", showcaseFrame }))
+                  }
+                />
+              ))
+            : null}
+        </View>
+      </View>
+
       <View style={{ gap: 8 }}>
         <Text
           selectable
@@ -4753,6 +4784,187 @@ function FrameEditor({
         </View>
       </View>
     </View>
+  );
+}
+
+function getFrameTreatmentPreviewSource(treatment: FrameTreatment, frameIdentity: ReturnType<typeof inferFrameIdentity>) {
+  if (treatment === "standard") {
+    return getMseM15MainframeSource(frameIdentity);
+  }
+
+  return getMseM15FrameTreatmentSource(treatment, frameIdentity) ?? getMseM15MainframeSource(frameIdentity);
+}
+
+function FrameTreatmentPreviewTile({
+  frameIdentity,
+  treatment,
+  selected,
+  onPress,
+}: {
+  frameIdentity: ReturnType<typeof inferFrameIdentity>;
+  treatment: FrameTreatment;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`Choose ${FRAME_TREATMENT_LABELS[treatment]} frame type`}
+      onPress={onPress}
+      style={{
+        width: 76,
+        borderRadius: 8,
+        borderCurve: "continuous",
+        borderWidth: selected ? 2 : 1,
+        borderColor: selected ? "#151820" : "#d8dbe2",
+        backgroundColor: selected ? "#151820" : "#ffffff",
+        padding: 4,
+      }}
+    >
+      <View
+        style={{
+          aspectRatio: 375 / 523,
+          borderRadius: 5,
+          borderCurve: "continuous",
+          overflow: "hidden",
+          backgroundColor: "#151820",
+        }}
+      >
+        {treatment === "borderless" ? (
+          <>
+            <View
+              style={{
+                position: "absolute",
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                backgroundColor: "#5f7355",
+              }}
+            />
+            <Image
+              accessibilityIgnoresInvertColors
+              source={BORDERLESS_TREATMENT_PREVIEW_SOURCE}
+              resizeMode="stretch"
+              style={{
+                position: "absolute",
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+              }}
+            />
+          </>
+        ) : (
+          <Image
+            accessibilityIgnoresInvertColors
+            source={getFrameTreatmentPreviewSource(treatment, frameIdentity)}
+            resizeMode="stretch"
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+              width: "100%",
+              height: "100%",
+            }}
+          />
+        )}
+      </View>
+      <Text
+        selectable={false}
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+        style={{
+          color: selected ? "#ffffff" : "#2a2f38",
+          fontSize: 10.5,
+          fontWeight: "900",
+          lineHeight: 12,
+          marginTop: 4,
+          minHeight: 24,
+          textAlign: "center",
+        }}
+      >
+        {FRAME_TREATMENT_LABELS[treatment]}
+      </Text>
+    </Pressable>
+  );
+}
+
+function ShowcaseFramePreviewTile({
+  showcaseFrame,
+  selected,
+  onPress,
+}: {
+  showcaseFrame: (typeof SHOWCASE_FRAME_ORDER)[number];
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const spec = SHOWCASE_FRAMES[showcaseFrame];
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`Choose ${spec.label} showcase frame`}
+      onPress={onPress}
+      style={{
+        width: 76,
+        borderRadius: 8,
+        borderCurve: "continuous",
+        borderWidth: selected ? 2 : 1,
+        borderColor: selected ? "#151820" : "#d8dbe2",
+        backgroundColor: selected ? "#151820" : "#ffffff",
+        padding: 4,
+      }}
+    >
+      <View
+        style={{
+          aspectRatio: 375 / 523,
+          borderRadius: 5,
+          borderCurve: "continuous",
+          overflow: "hidden",
+          backgroundColor: "#151820",
+        }}
+      >
+        <Image
+          accessibilityIgnoresInvertColors
+          source={spec.previewSource}
+          resizeMode="stretch"
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+          }}
+        />
+      </View>
+      <Text
+        selectable={false}
+        numberOfLines={3}
+        adjustsFontSizeToFit
+        minimumFontScale={0.68}
+        style={{
+          color: selected ? "#ffffff" : "#2a2f38",
+          fontSize: 10.5,
+          fontWeight: "900",
+          lineHeight: 12,
+          marginTop: 4,
+          minHeight: 36,
+          textAlign: "center",
+        }}
+      >
+        {spec.label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -4882,7 +5094,7 @@ function TypeLineComposer({
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ gap: 10, paddingRight: 6 }}
         >
-          {TYPE_FRAMES.map((option) => {
+          {VISIBLE_TYPE_FRAMES.map((option) => {
             const selected = typeFrame === option;
             const spec = TYPE_FRAME_SPECS[option];
 

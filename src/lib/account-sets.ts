@@ -228,6 +228,96 @@ type CardSetMembershipRow = {
   }> | null;
 };
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const candidate = error as {
+      message?: unknown;
+      error?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+    };
+    const messageParts = [candidate.message, candidate.error, candidate.details, candidate.hint]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim());
+
+    if (messageParts.length > 0) {
+      return messageParts.join(" ");
+    }
+
+    if (typeof candidate.code === "string" && candidate.code.trim().length > 0) {
+      return candidate.code.trim();
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "Unknown error";
+    }
+  }
+
+  return String(error);
+}
+
+function getSupabaseErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
+
+function isBrowserNetworkError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+
+  return (
+    message === "load failed" ||
+    message === "failed to fetch" ||
+    message === "network request failed" ||
+    message.includes("networkerror") ||
+    message.includes("fetch failed")
+  );
+}
+
+function createCommunityRequestError({
+  action,
+  rpc,
+  params,
+  error,
+}: {
+  action: string;
+  rpc: string;
+  params?: Record<string, unknown>;
+  error: unknown;
+}) {
+  const message = getErrorMessage(error);
+  const code = getSupabaseErrorCode(error);
+  const networkFailure = isBrowserNetworkError(error);
+  const detail = {
+    action,
+    rpc,
+    supabaseUrl,
+    params,
+    code,
+    networkFailure,
+    error,
+  };
+
+  console.warn(`[CardMagic community] ${action} failed.`, detail);
+
+  if (networkFailure) {
+    return new Error(
+      `${action} could not reach Supabase at ${supabaseUrl ?? "the configured project URL"}. ` +
+      `The browser reported "${message}", which usually means the request failed before Supabase returned an RPC response. ` +
+      `Check connectivity, CORS/preflight blocking, content blockers, or Supabase project availability.`,
+    );
+  }
+
+  return new Error(code ? `${action} failed (${code}): ${message}` : `${action} failed: ${message}`);
+}
+
 export async function fetchRemoteCardSets(userId: string): Promise<AccountCardSetPayload[]> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
@@ -327,6 +417,31 @@ export async function replaceRemoteCardSets(userId: string, sets: AccountCardSet
   await deleteStaleRemoteSets(userId, sets);
 }
 
+// Inline base64 art/mask data URIs can be multiple MB each; storing them in the
+// `cards.card` JSON bloats every feed query. The published rendered image is
+// uploaded separately (image_url), so strip the heavy data: blobs before saving.
+const COMPACTABLE_DATA_URI_KEYS = [
+  "artUri",
+  "artSubjectMaskUri",
+  "backArtUri",
+  "backArtSubjectMaskUri",
+  "setSymbolUri",
+  "watermarkUri",
+] as const;
+
+function compactCardForPublish(card: CardDraft): CardDraft {
+  const next = { ...(card as Record<string, unknown>) };
+
+  for (const key of COMPACTABLE_DATA_URI_KEYS) {
+    const value = next[key];
+    if (typeof value === "string" && value.startsWith("data:")) {
+      delete next[key];
+    }
+  }
+
+  return next as CardDraft;
+}
+
 export async function publishCommunityCard({
   id,
   userId,
@@ -350,7 +465,7 @@ export async function publishCommunityCard({
     colors: card.frameColors ?? [],
     frame_treatment: card.frameTreatment ?? null,
     image_url: imageUrl ?? null,
-    card,
+    card: compactCardForPublish(card),
     visibility: "public",
   }, {
     onConflict: "id",
@@ -615,17 +730,36 @@ export async function fetchCommunityCards(
 
   const pageSize = Math.max(1, Math.floor(limit));
   const start = Math.max(0, Math.floor(offset));
+  const params = {
+    p_limit: pageSize + 1,
+    p_offset: start,
+    p_sort: options.sort ?? "newest",
+    p_hide_seen: Boolean(options.hideSeen),
+  };
 
-  const { data, error } = await supabase
-    .rpc("community_card_feed", {
-      p_limit: pageSize + 1,
-      p_offset: start,
-      p_sort: options.sort ?? "newest",
-      p_hide_seen: Boolean(options.hideSeen),
+  let data: unknown;
+  let error: unknown;
+
+  try {
+    const response = await supabase.rpc("community_card_feed", params);
+    data = response.data;
+    error = response.error;
+  } catch (requestError) {
+    throw createCommunityRequestError({
+      action: "Community card feed",
+      rpc: "community_card_feed",
+      params,
+      error: requestError,
     });
+  }
 
   if (error) {
-    throw new Error(error.message);
+    throw createCommunityRequestError({
+      action: "Community card feed",
+      rpc: "community_card_feed",
+      params,
+      error,
+    });
   }
 
   const rows = (data ?? []) as CommunityCardRow[];
@@ -658,11 +792,27 @@ export async function fetchCommunityFeaturedCard(): Promise<CommunityCardPayload
     throw new Error("Supabase is not configured.");
   }
 
-  const { data, error } = await supabase
-    .rpc("community_weekly_featured_card");
+  let data: unknown;
+  let error: unknown;
+
+  try {
+    const response = await supabase.rpc("community_weekly_featured_card");
+    data = response.data;
+    error = response.error;
+  } catch (requestError) {
+    throw createCommunityRequestError({
+      action: "Weekly featured card",
+      rpc: "community_weekly_featured_card",
+      error: requestError,
+    });
+  }
 
   if (error) {
-    throw new Error(error.message);
+    throw createCommunityRequestError({
+      action: "Weekly featured card",
+      rpc: "community_weekly_featured_card",
+      error,
+    });
   }
 
   return ((data ?? []) as CommunityCardRow[]).flatMap(mapCommunityCardRow)[0] ?? null;
@@ -673,14 +823,33 @@ export async function fetchCommunitySets(limit = 24, offset = 0): Promise<Commun
     throw new Error("Supabase is not configured.");
   }
 
-  const { data, error } = await supabase
-    .rpc("community_set_directory", {
-      p_limit: Math.max(1, Math.floor(limit)),
-      p_offset: Math.max(0, Math.floor(offset)),
+  const params = {
+    p_limit: Math.max(1, Math.floor(limit)),
+    p_offset: Math.max(0, Math.floor(offset)),
+  };
+  let data: unknown;
+  let error: unknown;
+
+  try {
+    const response = await supabase.rpc("community_set_directory", params);
+    data = response.data;
+    error = response.error;
+  } catch (requestError) {
+    throw createCommunityRequestError({
+      action: "Community set directory",
+      rpc: "community_set_directory",
+      params,
+      error: requestError,
     });
+  }
 
   if (error) {
-    throw new Error(error.message);
+    throw createCommunityRequestError({
+      action: "Community set directory",
+      rpc: "community_set_directory",
+      params,
+      error,
+    });
   }
 
   return ((data ?? []) as CommunitySetRow[]).map((row) => ({

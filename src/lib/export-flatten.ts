@@ -41,7 +41,23 @@ export function loadHtmlImage(uri: string): Promise<HTMLImageElement> {
     const img = new window.Image();
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
-    img.onerror = (event) => reject(event);
+    img.onerror = () => {
+      let source = "image URI";
+
+      if (uri.startsWith("data:")) {
+        source = `data URI (${uri.length} chars)`;
+      } else if (uri.startsWith("blob:")) {
+        source = "browser blob URI";
+      } else {
+        try {
+          source = new URL(uri).origin;
+        } catch {
+          source = uri.slice(0, 80);
+        }
+      }
+
+      reject(new Error(`Image failed to load from ${source}. The URL may be expired, blocked by CORS, or unreachable.`));
+    };
     img.src = uri;
   });
 }
@@ -115,6 +131,124 @@ export async function compositeFlattenedMaskedFrame({
 
   ctx.globalCompositeOperation = "destination-in";
   ctx.drawImage(mask, 0, 0, width, height);
+  return canvas.toDataURL("image/png");
+}
+
+function drawLuminanceMask(
+  ctx: CanvasRenderingContext2D,
+  mask: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = FALLBACK_CARD_WIDTH;
+  maskCanvas.height = FALLBACK_CARD_HEIGHT;
+  const maskCtx = maskCanvas.getContext("2d");
+  if (!maskCtx) {
+    throw new Error("CardMagic could not acquire a mask canvas context.");
+  }
+
+  maskCtx.drawImage(mask, x, y, width, height);
+  const imageData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+  const { data } = imageData;
+
+  for (let index = 0; index < data.length; index += 4) {
+    const luminance = Math.round((data[index] * 0.2126) + (data[index + 1] * 0.7152) + (data[index + 2] * 0.0722));
+    data[index + 3] = Math.round((luminance * data[index + 3]) / 255);
+    data[index] = 0;
+    data[index + 1] = 0;
+    data[index + 2] = 0;
+  }
+
+  maskCtx.putImageData(imageData, 0, 0);
+  ctx.drawImage(maskCanvas, 0, 0);
+}
+
+export async function compositeFlattenedMaskedArt({
+  artUri,
+  maskUri,
+  overlayUri,
+  overlayOpacity,
+  artRect,
+  maskRect,
+  artTransform,
+  imageAspectRatio,
+  grayscale,
+}: {
+  artUri: string | null;
+  maskUri: string;
+  overlayUri: string | null;
+  overlayOpacity: number;
+  artRect: { x: number; y: number; width: number; height: number };
+  maskRect: { x: number; y: number; width: number; height: number };
+  artTransform: { offsetX: number; offsetY: number; scale: number };
+  imageAspectRatio?: number | null;
+  grayscale: boolean;
+}): Promise<string> {
+  const [mask, art, overlay] = await Promise.all([
+    loadHtmlImage(maskUri),
+    artUri ? loadHtmlImage(artUri) : Promise.resolve(null),
+    overlayUri ? loadHtmlImage(overlayUri) : Promise.resolve(null),
+  ]);
+  const canvas = document.createElement("canvas");
+  canvas.width = FALLBACK_CARD_WIDTH;
+  canvas.height = FALLBACK_CARD_HEIGHT;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("CardMagic could not acquire a 2D canvas context.");
+  }
+
+  const layer = document.createElement("canvas");
+  layer.width = FALLBACK_CARD_WIDTH;
+  layer.height = FALLBACK_CARD_HEIGHT;
+  const layerCtx = layer.getContext("2d");
+  if (!layerCtx) {
+    throw new Error("CardMagic could not acquire an art canvas context.");
+  }
+
+  layerCtx.save();
+  if (grayscale) {
+    layerCtx.filter = "grayscale(1)";
+  }
+
+  if (art) {
+    const viewportAspectRatio = artRect.width / artRect.height;
+    const resolvedAspectRatio = imageAspectRatio || ((art.naturalWidth || artRect.width) / (art.naturalHeight || artRect.height));
+    const drawWidth = resolvedAspectRatio > viewportAspectRatio ? artRect.height * resolvedAspectRatio : artRect.width;
+    const drawHeight = resolvedAspectRatio < viewportAspectRatio ? artRect.width / resolvedAspectRatio : artRect.height;
+    const drawX = artRect.x + (artRect.width - drawWidth) / 2;
+    const drawY = artRect.y + (artRect.height - drawHeight) / 2;
+    const centerX = artRect.x + artRect.width / 2;
+    const centerY = artRect.y + artRect.height / 2;
+
+    layerCtx.translate(artTransform.offsetX, artTransform.offsetY);
+    layerCtx.translate(centerX, centerY);
+    layerCtx.scale(artTransform.scale, artTransform.scale);
+    layerCtx.translate(-centerX, -centerY);
+    layerCtx.drawImage(art, drawX, drawY, drawWidth, drawHeight);
+  } else {
+    const gradient = layerCtx.createLinearGradient(0, artRect.y, 0, artRect.y + artRect.height);
+    gradient.addColorStop(0, "#24332f");
+    gradient.addColorStop(0.55, "#78915e");
+    gradient.addColorStop(1, "#d4bf86");
+    layerCtx.fillStyle = gradient;
+    layerCtx.fillRect(artRect.x, artRect.y, artRect.width, artRect.height);
+  }
+  layerCtx.restore();
+
+  if (overlay) {
+    layerCtx.save();
+    layerCtx.globalAlpha = overlayOpacity;
+    layerCtx.drawImage(overlay, 0, 0, FALLBACK_CARD_WIDTH, FALLBACK_CARD_HEIGHT);
+    layerCtx.restore();
+  }
+
+  ctx.drawImage(layer, 0, 0);
+  ctx.globalCompositeOperation = "destination-in";
+  drawLuminanceMask(ctx, mask, maskRect.x, maskRect.y, maskRect.width, maskRect.height);
+
   return canvas.toDataURL("image/png");
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "cardmagic",
-  "version": "3.21.0",
+  "version": "3.24.10",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --port 8082",
@@ -23,6 +23,7 @@
     "expo": "~54.0.33",
     "expo-file-system": "~19.0.22",
     "expo-font": "~14.0.11",
+    "expo-image": "~3.0.11",
     "expo-image-manipulator": "~14.0.8",
     "expo-image-picker": "~17.0.11",
     "expo-linear-gradient": "~15.0.8",

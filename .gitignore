@@ -39,6 +39,7 @@ supabase/.temp/
 
 # local tooling and generated artifacts
 .claude/
+.codex/
 deploy.tar.gz
 texture-contact-sheet.html
 

@@ -143,6 +143,7 @@ begin
         cards.colors,
         cards.frame_treatment,
         cards.image_url,
+        cards.card,
         cards.like_count,
         cards.comment_count,
         cards.created_at,
@@ -152,7 +153,6 @@ begin
         on viewer_views.card_id = cards.id
         and viewer_views.user_id = v_viewer
       where cards.visibility = 'public'
-        and cards.image_url is not null
         and (
           not coalesce(p_hide_seen, false)
           or v_viewer is null
@@ -173,13 +173,10 @@ begin
       page.colors,
       page.frame_treatment,
       page.image_url,
-      public.cardmagic_community_card_feed_json(
-        page.name,
-        page.type_line,
-        page.rarity,
-        page.colors,
-        page.frame_treatment
-      ) as card,
+      case
+        when page.image_url is null then page.card
+        else public.cardmagic_compact_community_card_json(page.card)
+      end as card,
       page.like_count::bigint,
       page.comment_count::bigint,
       viewer_likes.user_id is not null as liked_by_viewer,
@@ -214,6 +211,7 @@ begin
       cards.colors,
       cards.frame_treatment,
       cards.image_url,
+      cards.card,
       cards.like_count,
       cards.comment_count,
       cards.created_at,
@@ -223,7 +221,6 @@ begin
       on viewer_views.card_id = cards.id
       and viewer_views.user_id = v_viewer
     where cards.visibility = 'public'
-      and cards.image_url is not null
       and (
         not coalesce(p_hide_seen, false)
         or v_viewer is null
@@ -244,13 +241,10 @@ begin
     page.colors,
     page.frame_treatment,
     page.image_url,
-    public.cardmagic_community_card_feed_json(
-      page.name,
-      page.type_line,
-      page.rarity,
-      page.colors,
-      page.frame_treatment
-    ) as card,
+    case
+      when page.image_url is null then page.card
+      else public.cardmagic_compact_community_card_json(page.card)
+    end as card,
     page.like_count::bigint,
     page.comment_count::bigint,
     viewer_likes.user_id is not null as liked_by_viewer,
@@ -309,7 +303,6 @@ begin
     join public.cards on cards.id = selected.card_id
     where selected.week_start = v_week_start
       and cards.visibility = 'public'
-      and cards.image_url is not null
   ) then
     insert into public.community_weekly_featured_cards (week_start, card_id)
     with weekly_winner as (
@@ -321,7 +314,6 @@ begin
       where weekly_likes.created_at >= v_week_start::timestamptz
         and weekly_likes.created_at < v_week_end::timestamptz
         and cards.visibility = 'public'
-        and cards.image_url is not null
       group by cards.id, cards.updated_at
       order by count(weekly_likes.user_id) desc, cards.updated_at desc, cards.id asc
       limit 1
@@ -330,7 +322,6 @@ begin
       select cards.id
       from public.cards
       where cards.visibility = 'public'
-        and cards.image_url is not null
         and not exists (select 1 from weekly_winner)
       order by cards.updated_at desc, cards.id asc
       limit 1
@@ -356,13 +347,10 @@ begin
     cards.colors,
     cards.frame_treatment,
     cards.image_url,
-    public.cardmagic_community_card_feed_json(
-      cards.name,
-      cards.type_line,
-      cards.rarity,
-      cards.colors,
-      cards.frame_treatment
-    ) as card,
+    case
+      when cards.image_url is null then cards.card
+      else public.cardmagic_compact_community_card_json(cards.card)
+    end as card,
     cards.like_count::bigint,
     cards.comment_count::bigint,
     viewer_likes.user_id is not null as liked_by_viewer,
@@ -384,7 +372,7 @@ begin
     and viewer_views.user_id = v_viewer
   where selected.week_start = v_week_start
     and cards.visibility = 'public'
-    and cards.image_url is not null;
+    and cards.card is not null;
 end;
 $$;
 

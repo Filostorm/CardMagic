@@ -5178,11 +5178,11 @@ function TypeLineComposer({
 
       {!splitFrame ? (
         <>
-          <EditorField
+          <TypeLineSubtypeAutocompleteField
             label="Subtypes"
+            typeWords={selectedTypeWords}
             value={subtypeText}
             onChangeText={(subtypes) => updateTypeLine(buildTypeLine(selectedTypeWords, subtypes))}
-            autoCapitalize="words"
           />
           <TypeLineAutocompleteField
             label="Manual type line"
@@ -5192,6 +5192,94 @@ function TypeLineComposer({
           />
         </>
       ) : null}
+    </View>
+  );
+}
+
+function TypeLineSubtypeAutocompleteField({
+  label,
+  typeWords,
+  value,
+  onChangeText,
+}: {
+  label: string;
+  typeWords: readonly string[];
+  value: string;
+  onChangeText: (value: string) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [cursorIndex, setCursorIndex] = useState(value.length);
+  const typePrefix = typeWords.length > 0 ? typeWords.join(" ") : "Creature";
+  const composedPrefix = `${typePrefix} — `;
+  const composedTypeLine = `${composedPrefix}${value}`;
+  const suggestions = focused
+    ? getTypeLineAutocompleteSuggestions(composedTypeLine, composedPrefix.length + cursorIndex).map((suggestion) => ({
+        ...suggestion,
+        replacement: getSubtypeText(suggestion.replacement),
+      }))
+    : [];
+  const updateCursorIndex = (event: unknown) => {
+    const selectionStart = getTextInputSelectionStart(event);
+
+    if (selectionStart !== null) {
+      setCursorIndex(selectionStart);
+    }
+  };
+
+  return (
+    <View
+      style={{
+        gap: 6,
+        position: "relative",
+        zIndex: suggestions.length > 0 ? 100 : 1,
+        elevation: suggestions.length > 0 ? 100 : 0,
+      }}
+    >
+      <Text
+        selectable
+        style={{
+          color: "#5f6470",
+          fontSize: 12,
+          fontWeight: "800",
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </Text>
+      <View style={{ position: "relative", zIndex: suggestions.length > 0 ? 100 : undefined }}>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          autoCapitalize="words"
+          onChange={updateCursorIndex}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setTimeout(() => setFocused(false), 120)}
+          onSelectionChange={updateCursorIndex}
+          numberOfLines={1}
+          style={{
+            minHeight: 44,
+            borderRadius: 8,
+            borderCurve: "continuous",
+            borderWidth: 1,
+            borderColor: "#d8dbe2",
+            backgroundColor: "#ffffff",
+            color: "#151820",
+            fontSize: 16,
+            overflow: "visible",
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+          }}
+        />
+        {suggestions.length > 0 ? (
+          <TypeLineAutocompleteMenu
+            suggestions={suggestions}
+            onSelect={(suggestion) => {
+              onChangeText(suggestion.replacement);
+              setFocused(false);
+            }}
+          />
+        ) : null}
+      </View>
     </View>
   );
 }

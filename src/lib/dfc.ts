@@ -16,6 +16,7 @@ type FacePatch = Pick<
   | "toughness"
   | "artUri"
   | "artSubjectMaskUri"
+  | "artSubjectMaskComponents"
   | "artTransform"
   | "frameSelection"
   | "frameColors"
@@ -65,6 +66,7 @@ export function getEditableCardFace(card: CardDraft): CardDraft {
     toughness: card.backToughness ?? backDefaults.backToughness ?? "",
     artUri: card.backArtUri,
     artSubjectMaskUri: card.backArtSubjectMaskUri,
+    artSubjectMaskComponents: card.backArtSubjectMaskComponents,
     artTransform: card.backArtTransform,
     frameSelection:
       card.backFrameSelection ?? backDefaults.backFrameSelection ?? card.frameSelection,
@@ -93,6 +95,7 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
     toughness,
     artUri,
     artSubjectMaskUri,
+    artSubjectMaskComponents,
     artTransform,
     frameSelection,
     frameColors,
@@ -152,6 +155,10 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
 
   if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskUri")) {
     nextPatch.backArtSubjectMaskUri = artSubjectMaskUri;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskComponents")) {
+    nextPatch.backArtSubjectMaskComponents = artSubjectMaskComponents;
   }
 
   if (artTransform !== undefined) {

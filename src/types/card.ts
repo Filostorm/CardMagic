@@ -147,6 +147,12 @@ export type SplitCardHalf = {
   frameColors?: ManaColor[];
 };
 
+export type SubjectMaskComponent = {
+  concept: string;
+  cutoutUrl: string;
+  enabled: boolean;
+};
+
 export type CardDraft = {
   name: string;
   baseCardName?: string;
@@ -191,9 +197,11 @@ export type CardDraft = {
   cardBackId?: CardBackId;
   artUri?: string;
   artSubjectMaskUri?: string;
+  artSubjectMaskComponents?: SubjectMaskComponent[];
   artTransform?: ArtTransform;
   backArtUri?: string;
   backArtSubjectMaskUri?: string;
+  backArtSubjectMaskComponents?: SubjectMaskComponent[];
   backArtTransform?: ArtTransform;
   setSymbolPreset?: string;
   setSymbolId?: string;

@@ -42,6 +42,13 @@ class FalNoMaskUrlError extends Error {
   }
 }
 
+class FalRequestTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FalRequestTimeoutError";
+  }
+}
+
 type FalSamAttemptFailure = {
   endpointId: string;
   applyMask: boolean;
@@ -74,6 +81,8 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+const FAL_SAM_FETCH_TIMEOUT_MS = 18000;
 
 serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -140,24 +149,15 @@ serve(async (request) => {
 });
 
 async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string, key: string) {
+  const startedAt = Date.now();
   // Mirror the background-removal path: a synchronous fal.run call that returns a
   // prompted-subject cutout (apply_mask) — same shape as normal masking.
   //
-  // SAM-3 concept segmentation matches a SINGLE concept per call, so a comma/
-  // semicolon-separated prompt like "arch, bow" matched nothing. Split it and try
-  // each concept; return the first that yields a mask.
+  // SAM-3 concept segmentation matches a SINGLE concept per call, so compound
+  // prompts like "bow and arrow" are less reliable than separate "bow" and
+  // "arrow" calls. Split simple conjunctions and let the client union cutouts.
   const endpointId = "fal-ai/sam-3-1/image";
-  // SAM-3 grounds ONE concept per call, so split a comma/semicolon-separated
-  // prompt and segment each concept separately, then let the client union the
-  // cutouts. Sequential calls at max_masks:1 keep memory/time within the edge
-  // function's limit (the earlier 546 came from many large sync masks at once).
-  // Cap the concept count so a long prompt can't blow the budget.
-  const MAX_CONCEPTS = 4;
-  const concepts = targetPrompt
-    .split(/[,;]+/)
-    .map((concept) => concept.trim())
-    .filter(Boolean)
-    .slice(0, MAX_CONCEPTS);
+  const concepts = getTargetConcepts(targetPrompt);
   const conceptList = concepts.length > 0 ? concepts : [targetPrompt.trim()];
   const attempts: FalSamDiagnosticAttempt[] = [];
   const subjectMasks: { concept: string; url: string }[] = [];
@@ -184,15 +184,45 @@ async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string
   });
 
   if (subjectMasks.length > 0) {
+    console.log("[subject-matte] fal SAM segmentation completed", {
+      targetPrompt,
+      conceptCount: conceptList.length,
+      matchedCount: subjectMasks.length,
+      durationMs: Date.now() - startedAt,
+    });
     return { subjectMasks, diagnostics: getFalSamDiagnostics(targetPrompt, attempts) };
   }
 
-  console.warn("fal SAM prompted segmentation failed.", { targetPrompt, attempts });
+  console.warn("fal SAM prompted segmentation failed.", {
+    targetPrompt,
+    durationMs: Date.now() - startedAt,
+    attempts,
+  });
   const diagnostics = getFalSamDiagnostics(targetPrompt, attempts);
   throw new FalSamSegmentationError(
-    `fal SAM prompted segmentation failed. ${formatFalSamAttemptFailures(attempts)}`,
+    getFalSamUserMessage(conceptList),
     diagnostics,
   );
+}
+
+function getTargetConcepts(targetPrompt: string) {
+  const MAX_CONCEPTS = 4;
+  const concepts = targetPrompt
+    .replace(/\s*&\s*/g, ",")
+    .split(/[,;]+|\s+(?:and|plus|with)\s+/i)
+    .map((concept) => concept.replace(/^(?:a|an|the)\s+/i, "").trim())
+    .filter(Boolean)
+    .slice(0, MAX_CONCEPTS);
+
+  return Array.from(new Set(concepts));
+}
+
+function getFalSamUserMessage(concepts: string[]) {
+  const label = concepts.filter(Boolean).join(", ");
+
+  return label
+    ? `I couldn't isolate ${concepts.length > 1 ? `those subjects (${label})` : `“${label}”`} in this art. Try one simpler visible object, like “arrow”, “bow”, “face”, or “wolf”.`
+    : "I couldn't isolate that subject in this art. Try one simple visible object, or use manual mask editing.";
 }
 
 function getFalSamAttemptFailure(endpointId: string, applyMask: boolean, error: unknown): FalSamDiagnosticAttempt {
@@ -222,31 +252,35 @@ function getFalSamDiagnostics(targetPrompt: string, attempts: FalSamDiagnosticAt
   };
 }
 
-function formatFalSamAttemptFailures(attempts: FalSamDiagnosticAttempt[]) {
-  return attempts
-    .filter((attempt) => attempt.status === "failed")
-    .map((attempt) => {
-      const mode = attempt.applyMask ? "masked preview" : "mask image";
-      return `${attempt.endpointId} (${mode}): ${attempt.error}`;
-    })
-    .join(" ");
-}
-
 // Retries transient transport failures (e.g. Deno HTTP/2 "unspecific protocol
 // error" while uploading a large body). Only network-level throws are retried —
 // an HTTP error response is returned as-is for the caller to handle.
-async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  attempts = 2,
+  timeoutMs = FAL_SAM_FETCH_TIMEOUT_MS,
+): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
-      return await fetch(url, init);
+      return await fetch(url, { ...init, signal: controller.signal });
     } catch (error) {
       lastError = error;
+      if (controller.signal.aborted) {
+        throw new FalRequestTimeoutError(`fal request timed out after ${Math.round(timeoutMs / 1000)}s.`);
+      }
+
       console.warn(`[subject-matte] transport error (attempt ${attempt + 1}/${attempts})`, getErrorMessage(error));
       if (attempt < attempts - 1) {
         await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
       }
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -259,7 +293,8 @@ async function callFalSamSyncEndpoint(
   targetPrompt: string,
   key: string,
 ) {
-  console.log("[subject-matte] calling fal", { endpointId, targetPrompt });
+  const startedAt = Date.now();
+  console.log("[subject-matte] calling fal", { endpointId, targetPrompt, timeoutMs: FAL_SAM_FETCH_TIMEOUT_MS });
   const body = JSON.stringify({
     image_url: imageDataUrl,
     prompt: targetPrompt,
@@ -282,12 +317,14 @@ async function callFalSamSyncEndpoint(
       "Content-Type": "application/json",
     },
     body,
-  });
+  }, 2, FAL_SAM_FETCH_TIMEOUT_MS);
   const payload = await response.json().catch(() => ({})) as FalImageResult;
   console.log("[subject-matte] fal responded", {
     endpointId,
+    targetPrompt,
     status: response.status,
     ok: response.ok,
+    durationMs: Date.now() - startedAt,
     summary: summarizeFalPayload(payload),
   });
 
@@ -302,12 +339,12 @@ async function callFalSamSyncEndpoint(
 
   if (!url) {
     const summary = summarizeFalPayload(payload);
-    console.warn(`${endpointId} response did not contain a readable mask URL.`, summary);
+    console.warn(`${endpointId} response did not contain a readable mask URL.`, { targetPrompt, summary });
     const foundNothing = !(payload.masks?.length) && !isImageUrl(payload.image?.url);
     throw new FalNoMaskUrlError(
       foundNothing
-        ? `Couldn't find “${targetPrompt}” in this art — try a simpler or more literal subject word. (Payload: ${JSON.stringify(summary)})`
-        : `${endpointId} did not return a segmented mask URL. Payload shape: ${JSON.stringify(summary)}`,
+        ? `Couldn't find “${targetPrompt}” in this art.`
+        : `${endpointId} did not return a segmented mask URL.`,
       summary,
     );
   }

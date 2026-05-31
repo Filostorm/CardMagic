@@ -109,6 +109,7 @@ import {
 } from "@/lib/dfc";
 import {
   adjustFlattenPending,
+  compositeFlattenedMaskedArt,
   compositeFlattenedMaskedFrame,
 } from "@/lib/export-flatten";
 import { getDisplayRulesText, getKeywordRulesText } from "@/lib/keyword-text";
@@ -212,6 +213,7 @@ type RulesFlavorLayout = {
   showFlavor: boolean;
   showDivider: boolean;
   centerRulesContent: boolean;
+  rulesContentVerticalAlign?: "center" | "bottom";
   rulesRect: CoordinateRect;
   flavorRect: CoordinateRect;
   dividerRect: CoordinateRect;
@@ -269,6 +271,7 @@ type FrameTreatmentLayout = {
   powerToughness: CoordinateRect;
   footer: CoordinateRect;
   showTypeLine: boolean;
+  rulesContentVerticalAlign?: "center" | "bottom";
 };
 
 const DEFAULT_FRAME_TREATMENT_LAYOUT: FrameTreatmentLayout = {
@@ -404,9 +407,10 @@ const STELLAR_SIGHTS_TREATMENT_LAYOUT: FrameTreatmentLayout = {
   manaCost: { x: 250, y: 317, width: 96, height: 30 },
   typeLine: { x: 31, y: 351, width: 304, height: 22 },
   setSymbol: { x: 0, y: 0, width: 0, height: 0 },
-  textArea: { x: 31, y: 373, width: 304, height: 105 },
+  textArea: { x: 45, y: 373, width: 262, height: 105 },
   rulesFlavorDivider: { x: 50, y: 424, width: 275, height: 2 },
   footer: { x: 24, y: 488, width: 326, height: 24 },
+  rulesContentVerticalAlign: "bottom",
 };
 
 const BATTLE_COORDINATES = {
@@ -1901,7 +1905,9 @@ function CardPreviewComponent({
   const showcasePtOverlayRect =
     showcaseSpec?.ptOverlay ? scaleShowcaseRect(showcaseSpec.ptOverlay.rect, showcaseSpec) : null;
   const showcasePowerToughnessTextRect =
-    showcaseSpec?.id === "dndRulebook" && showcasePtOverlayRect
+    showcaseSpec?.powerToughnessTextRect
+      ? scaleShowcaseRect(showcaseSpec.powerToughnessTextRect, showcaseSpec)
+      : showcaseSpec?.id === "dndRulebook" && showcasePtOverlayRect
       ? {
           x: showcasePtOverlayRect.x + 6,
           y: showcasePtOverlayRect.y + 4,
@@ -2022,6 +2028,18 @@ function CardPreviewComponent({
   const displayedRulesContentHeightScaled = displayedRulesContentHeight * scale;
   const displayedRulesVerticalInset =
     Math.max(0, (rulesLayout.rulesRect.height - displayedRulesContentHeight) / 2) * scale;
+  const rulesContentVerticalInset =
+    rulesLayout.centerRulesContent
+      ? compactRulesVerticalInset
+      : rulesLayout.rulesContentVerticalAlign === "bottom"
+        ? Math.max(0, rulesLayout.rulesRect.height - displayedRulesContentHeight - 1) * scale
+        : displayedRulesVerticalInset;
+  const rulesContentPaddingBottom =
+    rulesLayout.centerRulesContent
+      ? compactRulesVerticalInset
+      : rulesLayout.rulesContentVerticalAlign === "bottom"
+        ? 0
+        : displayedRulesVerticalInset;
   const displayedFlavorLineCount = rulesLayout.showFlavor
     ? estimateWrappedLineCount(
         displayedFlavorText,
@@ -2038,7 +2056,7 @@ function CardPreviewComponent({
   ) * scale;
   const rulesInlineHitBand = getInlineTextHitBand(
     rulesLayout.rulesRect.height * scale,
-    rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+    rulesContentVerticalInset,
     rulesLayout.centerRulesContent ? compactRulesContentHeightScaled : displayedRulesContentHeightScaled,
     10 * scale,
   );
@@ -2559,14 +2577,24 @@ function CardPreviewComponent({
       ) : null}
 
       {typeFrame !== "saga" && hasShowcaseArtTreatment && showcaseSpec && !showArtGenerating ? (
-        <ShowcaseMaskedArt
-          cacheKey={`showcase-art-${showcaseFrame}`}
-          artUri={faceCard.artUri}
-          artRect={artRect}
-          artTransform={artTransform}
-          imageAspectRatio={imageAspectRatio}
-          spec={showcaseSpec}
-        />
+        exportFlattenMasks && showcaseSpec.artMask ? (
+          <FlattenedShowcaseMaskedArt
+            artUri={faceCard.artUri}
+            artRect={artRect}
+            artTransform={artTransform}
+            imageAspectRatio={imageAspectRatio}
+            spec={showcaseSpec}
+          />
+        ) : (
+          <ShowcaseMaskedArt
+            cacheKey={`showcase-art-${showcaseFrame}`}
+            artUri={faceCard.artUri}
+            artRect={artRect}
+            artTransform={artTransform}
+            imageAspectRatio={imageAspectRatio}
+            spec={showcaseSpec}
+          />
+        )
       ) : null}
 
       {typeFrame !== "saga" && shouldRenderArtBehindTreatmentFrame ? (
@@ -2676,12 +2704,22 @@ function CardPreviewComponent({
       {typeFrame === "standard" ? (
         showcaseSpec && showcaseFrameBlendSources ? (
           <>
-            <ShowcaseFrameBlendImage
-              cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
-              sources={showcaseFrameBlendSources}
-              spec={showcaseSpec}
-              mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
-            />
+            {exportFlattenMasks ? (
+              <ShowcaseFlattenedFrameLayers
+                cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
+                source={showcaseFrameBlendSources.left}
+                splitSources={showcaseFrameBlendSources}
+                spec={showcaseSpec}
+                mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
+              />
+            ) : (
+              <ShowcaseFrameBlendImage
+                cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
+                sources={showcaseFrameBlendSources}
+                spec={showcaseSpec}
+                mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
+              />
+            )}
             <ShowcaseStampTreatmentBlendLayer
               cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
               sources={showcaseFrameBlendSources}
@@ -2693,11 +2731,19 @@ function CardPreviewComponent({
           </>
         ) : showcaseSpec && treatmentFrameSource ? (
           <>
-            <ShowcaseFrameImage
-              cacheKey={`showcase-${showcaseFrame}`}
-              source={treatmentFrameSource}
-              spec={showcaseSpec}
-            />
+            {exportFlattenMasks ? (
+              <ShowcaseFlattenedFrameLayers
+                cacheKey={`showcase-${showcaseFrame}`}
+                source={treatmentFrameSource}
+                spec={showcaseSpec}
+              />
+            ) : (
+              <ShowcaseFrameImage
+                cacheKey={`showcase-${showcaseFrame}`}
+                source={treatmentFrameSource}
+                spec={showcaseSpec}
+              />
+            )}
             <ShowcaseStampTreatmentLayer
               cacheKey={`showcase-${showcaseFrame}`}
               source={treatmentFrameSource}
@@ -3476,6 +3522,7 @@ function CardPreviewComponent({
                 value={displayedAdventureRulesText}
                 color={frameStyle.ink}
                 fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+                italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                 fontSize={12 * scale}
                 lineHeight={14.4 * scale}
                 symbolSize={13.5 * scale}
@@ -3552,8 +3599,8 @@ function CardPreviewComponent({
                 position: "absolute",
                 top: 0,
                 left: 0,
-                paddingTop: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
-                paddingBottom: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+                paddingTop: rulesContentVerticalInset,
+                paddingBottom: rulesContentPaddingBottom,
                 paddingHorizontal: 0,
                 overflow: "hidden",
                 backgroundColor: "transparent",
@@ -3573,7 +3620,7 @@ function CardPreviewComponent({
                     : displayedRulesContentHeightScaled,
                 ),
                 position: "absolute",
-                top: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+                top: rulesContentVerticalInset,
                 left: 0,
                 justifyContent: "center",
               }}
@@ -3582,6 +3629,7 @@ function CardPreviewComponent({
                 value={displayedRulesText}
                 color={rulesTextInk}
                 fontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroBody : FULL_MAGIC_PACK.fontFamilies.body}
+                italicFontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroItalic : FULL_MAGIC_PACK.fontFamilies.italic}
                 fontSize={rulesLayout.rulesFontSize * scale}
                 lineHeight={rulesLayout.rulesLineHeight * scale}
                 symbolSize={rulesLayout.rulesFontSize * scale * 1.18}
@@ -4237,6 +4285,7 @@ function ClassicSplitHalfSlot({
             value={displayedRulesText}
             color={frameStyle.ink}
             fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+            italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
             fontSize={rulesMetrics.rulesFontSize * scale}
             lineHeight={rulesMetrics.rulesLineHeight * scale}
             symbolSize={rulesMetrics.rulesFontSize * scale * 1.15}
@@ -4372,6 +4421,7 @@ function FuseReminderStrip({
           value={reminderText}
           color="#1a1612"
           fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+          italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
           fontSize={12 * scale}
           lineHeight={14 * scale}
           symbolSize={13 * scale}
@@ -4730,6 +4780,7 @@ function AftermathSplitPreview({
           value={displayedTopRulesText}
           color={topFrameStyle.ink}
           fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+          italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
           fontSize={topRulesMetrics.fontSize * scale}
           lineHeight={topRulesMetrics.lineHeight * scale}
           symbolSize={topRulesMetrics.fontSize * scale * 1.15}
@@ -4837,6 +4888,7 @@ function AftermathSplitPreview({
               value={displayedBottomRulesText}
               color={bottomFrameStyle.ink}
               fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+              italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
               fontSize={bottomRulesMetrics.rulesFontSize * scale}
               lineHeight={bottomRulesMetrics.rulesLineHeight * scale}
               symbolSize={bottomRulesMetrics.rulesFontSize * scale * 1.15}
@@ -5869,6 +5921,7 @@ function PlaneswalkerPreview({
                   value={ability.text}
                   color={frameStyle.ink}
                   fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+                  italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                   fontSize={metrics.fontSize * scale}
                   lineHeight={metrics.lineHeight * scale}
                   symbolSize={metrics.fontSize * scale * 1.12}
@@ -6527,6 +6580,7 @@ function BattleFrontPreview({
                   value={displayedRulesText}
                   color={battleInk}
                   fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+                  italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                   fontSize={rulesFontSize * scale}
                   lineHeight={rulesLineHeight * scale}
                   symbolSize={rulesFontSize * scale * 1.16}
@@ -7095,6 +7149,7 @@ function SagaRulesPanel({
                     value={entry.text}
                     color="#11110e"
                     fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
+                    italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                     fontSize={metrics.fontSize * scale}
                     lineHeight={metrics.lineHeight * scale}
                     symbolSize={metrics.fontSize * scale * 1.14}
@@ -7160,6 +7215,7 @@ function SagaTextContent({
   value,
   color,
   fontFamily,
+  italicFontFamily = fontFamily,
   fontSize,
   lineHeight,
   symbolSize,
@@ -7167,16 +7223,18 @@ function SagaTextContent({
   value: string;
   color: string;
   fontFamily: string;
+  italicFontFamily?: string;
   fontSize: number;
   lineHeight: number;
   symbolSize: number;
 }) {
-  if (/\{[^}]+\}/.test(value)) {
+  if (INLINE_MANA_SYMBOL_PATTERN.test(value) || INLINE_PARENTHETICAL_TEXT_PATTERN.test(value)) {
     return (
       <InlineSymbolText
         value={value}
         color={color}
         fontFamily={fontFamily}
+        italicFontFamily={italicFontFamily}
         fontSize={fontSize}
         lineHeight={lineHeight}
         symbolSize={symbolSize}
@@ -7204,6 +7262,7 @@ function InlineSymbolText({
   value,
   color,
   fontFamily,
+  italicFontFamily = fontFamily,
   fontSize,
   lineHeight,
   symbolSize,
@@ -7213,13 +7272,14 @@ function InlineSymbolText({
   value: string;
   color: string;
   fontFamily: string;
+  italicFontFamily?: string;
   fontSize: number;
   lineHeight: number;
   symbolSize: number;
   symbolVariant?: "modern" | "retro";
   textAlign?: "left" | "center";
 }) {
-  if (!INLINE_MANA_SYMBOL_PATTERN.test(value) && !value.includes("\n")) {
+  if (!INLINE_MANA_SYMBOL_PATTERN.test(value) && !INLINE_PARENTHETICAL_TEXT_PATTERN.test(value) && !value.includes("\n")) {
     return (
       <Text
         selectable={false}
@@ -7281,7 +7341,7 @@ function InlineSymbolText({
             selectable={false}
             style={{
               color,
-              fontFamily,
+              fontFamily: token.italic ? italicFontFamily : fontFamily,
               fontSize,
               lineHeight,
               includeFontPadding: false,
@@ -7297,18 +7357,19 @@ function InlineSymbolText({
 }
 
 const INLINE_MANA_SYMBOL_PATTERN = /\{[^}]+\}/;
+const INLINE_PARENTHETICAL_TEXT_PATTERN = /\([^)]*\)/;
 
 function tokenizeInlineSymbols(value: string): Array<
-  | { type: "text"; value: string }
+  | { type: "text"; value: string; italic?: boolean }
   | { type: "symbol"; value: string }
   | { type: "newline"; value: string; blank?: boolean }
 > {
   const tokens: Array<
-    | { type: "text"; value: string }
+    | { type: "text"; value: string; italic?: boolean }
     | { type: "symbol"; value: string }
     | { type: "newline"; value: string; blank?: boolean }
   > = [];
-  const pattern = /(\{[^}]+\}|\n)/g;
+  const pattern = /(\{[^}]+\}|\([^)]*\)|\n)/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
 
@@ -7321,6 +7382,8 @@ function tokenizeInlineSymbols(value: string): Array<
 
     if (rawToken === "\n") {
       tokens.push({ type: "newline", value: rawToken, blank: tokens[tokens.length - 1]?.type === "newline" });
+    } else if (rawToken.startsWith("(") && rawToken.endsWith(")")) {
+      pushTextTokens(tokens, rawToken, true);
     } else {
       const symbol = rawToken.slice(1, -1).trim();
       tokens.push(symbol ? { type: "symbol", value: symbol } : { type: "text", value: rawToken });
@@ -7338,16 +7401,17 @@ function tokenizeInlineSymbols(value: string): Array<
 
 function pushTextTokens(
   tokens: Array<
-    | { type: "text"; value: string }
+    | { type: "text"; value: string; italic?: boolean }
     | { type: "symbol"; value: string }
     | { type: "newline"; value: string; blank?: boolean }
   >,
   text: string,
+  italic = false,
 ) {
   const parts = text.match(/\S+\s*|\s+/g) ?? [];
 
   for (const part of parts) {
-    tokens.push({ type: "text", value: part });
+    tokens.push({ type: "text", value: part, italic });
   }
 }
 
@@ -7941,6 +8005,101 @@ function ShowcaseMaskedArt({
   );
 }
 
+function FlattenedShowcaseMaskedArt({
+  artUri,
+  artRect,
+  artTransform,
+  imageAspectRatio,
+  spec,
+}: {
+  artUri?: string;
+  artRect: CoordinateRect;
+  artTransform: ArtTransform;
+  imageAspectRatio?: number | null;
+  spec: ShowcaseFrameSpec;
+}) {
+  const [uri, setUri] = useState<string | null>(null);
+  const maskUri = spec.artMask ? getImageSourceUri(spec.artMask.source) : null;
+  const overlayUri = spec.artOverlay ? getImageSourceUri(spec.artOverlay.source) : null;
+  const maskRect =
+    spec.artMask?.coordinateSpace === "card"
+      ? { x: 0, y: 0, width: CARD_COORDINATES.width, height: CARD_COORDINATES.height }
+      : artRect;
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !maskUri || typeof document === "undefined") {
+      return;
+    }
+
+    let cancelled = false;
+    let settled = false;
+    adjustFlattenPending(1);
+    const release = () => {
+      if (!settled) {
+        settled = true;
+        adjustFlattenPending(-1);
+      }
+    };
+
+    compositeFlattenedMaskedArt({
+      artUri: artUri ?? null,
+      maskUri,
+      overlayUri,
+      overlayOpacity: spec.artOverlay?.opacity ?? 1,
+      artRect,
+      maskRect,
+      artTransform,
+      imageAspectRatio,
+      grayscale: spec.artFilter === "grayscale",
+    })
+      .then((result) => {
+        if (!cancelled) {
+          setUri(result);
+        }
+      })
+      .catch((error) => {
+        console.warn("[CardMagic export] flatten showcase art failed.", error);
+      })
+      .finally(release);
+
+    return () => {
+      cancelled = true;
+      release();
+    };
+  }, [
+    artUri,
+    maskUri,
+    overlayUri,
+    spec.artOverlay?.opacity,
+    spec.artFilter,
+    artRect.x,
+    artRect.y,
+    artRect.width,
+    artRect.height,
+    maskRect.x,
+    maskRect.y,
+    maskRect.width,
+    maskRect.height,
+    artTransform.offsetX,
+    artTransform.offsetY,
+    artTransform.scale,
+    imageAspectRatio,
+  ]);
+
+  if (!uri) {
+    return null;
+  }
+
+  return (
+    <Image
+      accessibilityIgnoresInvertColors
+      source={{ uri }}
+      resizeMode="stretch"
+      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%" }}
+    />
+  );
+}
+
 function ShowcaseStampTreatmentLayer({
   source,
   frameIdentity,
@@ -8407,6 +8566,49 @@ function ShowcaseFrameBlendImage({
         </G>
       ))}
     </Svg>
+  );
+}
+
+function ShowcaseFlattenedFrameLayers({
+  source,
+  splitSources,
+  spec,
+  cacheKey,
+  mirrorX = false,
+}: {
+  source: ImageSourcePropType;
+  splitSources?: SplitFrameSources | null;
+  spec: ShowcaseFrameSpec | null;
+  cacheKey: string;
+  mirrorX?: boolean;
+}) {
+  const frameMasks = spec?.frameMasks ?? (spec?.frameMask ? [spec.frameMask] : []);
+
+  if (!spec || frameMasks.length === 0) {
+    return splitSources ? (
+      <MseSplitFrameImage
+        cacheKey={cacheKey}
+        sources={splitSources}
+        mirrorX={mirrorX}
+        exportMode
+      />
+    ) : (
+      <DirectFrameImage source={source} resizeMode="stretch" />
+    );
+  }
+
+  return (
+    <>
+      {frameMasks.map((frameMask, index) => (
+        <FlattenedMaskedFrameLayer
+          key={`${cacheKey}-flattened-showcase-${index}`}
+          source={source}
+          splitSources={splitSources}
+          maskSource={frameMask}
+          mirrorX={mirrorX}
+        />
+      ))}
+    </>
   );
 }
 
@@ -10763,6 +10965,7 @@ function getRulesFlavorLayout(
       showFlavor: true,
       showDivider: true,
       centerRulesContent: false,
+      rulesContentVerticalAlign: treatmentLayout?.rulesContentVerticalAlign,
       rulesRect: { ...areaRect, y, height: rulesHeight },
       flavorRect: {
         ...areaRect,
@@ -10798,6 +11001,7 @@ function getRulesFlavorLayout(
     showFlavor,
     showDivider: false,
     centerRulesContent: shouldCenterCompactRulesBlock,
+    rulesContentVerticalAlign: treatmentLayout?.rulesContentVerticalAlign,
     rulesRect: showRules ? { ...areaRect, y: singleY, height: singleHeight } : hiddenRect,
     flavorRect: showFlavor ? { ...areaRect, y: singleY, height: singleHeight } : hiddenRect,
     dividerRect: { ...dividerRect, y: singleY + singleHeight },

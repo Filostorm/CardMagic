@@ -540,9 +540,9 @@ export function isCreature(card: CardDraft): boolean {
 }
 
 export function hasPowerToughnessBox(card: CardDraft): boolean {
-  const cardTypes = parseTypeLine(card.typeLine).cardTypes;
+  const typeInfo = parseTypeLine(card.typeLine);
 
-  return cardTypes.includes("Creature") || cardTypes.includes("Vehicle");
+  return typeInfo.cardTypes.includes("Creature") || typeInfo.subtypes.includes("Vehicle");
 }
 
 export function isArtifactFrameCard(card: CardDraft): boolean {

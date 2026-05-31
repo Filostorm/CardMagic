@@ -1,5 +1,6 @@
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
@@ -144,6 +145,7 @@ import {
   type CheckoutProductId,
   type CreditTransactionType,
 } from "@/lib/commerce";
+import { getResizedCommunityImageUrl } from "@/lib/community-image";
 import {
   FRAME_SELECTION_LABELS,
   FRAME_TREATMENT_LABELS,
@@ -199,6 +201,7 @@ import {
   ShowcaseFrameId,
   SplitCardHalf,
   SplitCardLayout,
+  SubjectMaskComponent,
   TypeFrame,
 } from "@/types/card";
 
@@ -210,6 +213,126 @@ const PACKAGE_METADATA = require("./package.json") as { version: string };
 const CARDMAGIC_APP_VERSION = PACKAGE_METADATA.version;
 const CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID = "cardmagic-single-export-preview";
 const CARDMAGIC_BATCH_EXPORT_PREVIEW_ID = "cardmagic-batch-export-preview";
+
+type PatchNoteEntry = {
+  version: string;
+  date: string;
+  title: string;
+  bullets: string[];
+};
+
+const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
+  {
+    version: "3.24.10",
+    date: "May 31, 2026",
+    title: "Community, showcase, and editor fixes",
+    bullets: [
+      "Community feed loading is faster and more resilient, with card art fallbacks and clearer Supabase/RPC diagnostics.",
+      "Eternal Night, Stained Glass, Stellar Sights, and Vehicle rendering were tightened across preview and exported PNG output.",
+      "The floating toolbar palette now positions from the toolbar viewport and uses a three-style base grid width.",
+      "Subtype editing in the sheet now uses the same type-line autocomplete as manual type lines.",
+      "Rules reminder text in parentheses now renders in italics on card previews and exports.",
+    ],
+  },
+  {
+    version: "3.24.9",
+    date: "May 31, 2026",
+    title: "Stellar Sights text fit",
+    bullets: [
+      "Stellar Sights rules text now uses a tighter text measure and bottom alignment so rules copy wraps more naturally near the flavor divider.",
+      "Community feed errors now display normalized diagnostic text instead of raw object strings.",
+    ],
+  },
+  {
+    version: "3.24.8",
+    date: "May 31, 2026",
+    title: "Vehicle PT boxes",
+    bullets: [
+      "Vehicle cards now render a power/toughness box when the type line uses Vehicle as an artifact subtype.",
+    ],
+  },
+  {
+    version: "3.24.7",
+    date: "May 31, 2026",
+    title: "Adaptive toolbar palette",
+    bullets: [
+      "The floating toolbar palette menu now repositions and resizes from the toolbar's current viewport position, with a three-style base grid width.",
+    ],
+  },
+  {
+    version: "3.24.6",
+    date: "May 31, 2026",
+    title: "Stained Glass export art",
+    bullets: [
+      "Stained Glass exports now flatten the MSE art mask before capture so the illustration appears in the saved PNG.",
+    ],
+  },
+  {
+    version: "3.24.5",
+    date: "May 31, 2026",
+    title: "Eternal Night PT alignment",
+    bullets: [
+      "Eternal Night creature power/toughness text now uses the frame's MSE-aligned text box so exported stats sit centered in the badge.",
+    ],
+  },
+  {
+    version: "3.24.4",
+    date: "May 31, 2026",
+    title: "Community art fallback",
+    bullets: [
+      "Community feed cards without a hosted render now fall back to their original saved art instead of showing empty artwork.",
+    ],
+  },
+  {
+    version: "3.24.3",
+    date: "May 31, 2026",
+    title: "Community and export fixes",
+    bullets: [
+      "Community feed now includes existing public cards that were published before rendered feed images were stored separately.",
+      "Eternal Night and Stained Glass showcase frames now preserve their masked frame layers in exported PNGs.",
+    ],
+  },
+  {
+    version: "3.24.1",
+    date: "May 30, 2026",
+    title: "Leaner community publishing",
+    bullets: [
+      "Published cards no longer store heavy embedded art data, keeping the community feed fast.",
+      "Saving a community card image now downloads the finished render directly instead of rebuilding it.",
+    ],
+  },
+  {
+    version: "3.24.0",
+    date: "May 30, 2026",
+    title: "Faster community feed",
+    bullets: [
+      "Community card feed loads noticeably faster and more consistently.",
+      "Feed cards now use right-sized, cached images in modern formats (WebP/AVIF) instead of full-resolution renders.",
+      "Images fade in within a fixed frame, so the feed no longer jumps around while loading.",
+    ],
+  },
+  {
+    version: "3.23.1",
+    date: "May 29, 2026",
+    title: "Mask responsiveness",
+    bullets: [
+      "Targeted mask segmentation now has explicit timeout behavior instead of waiting indefinitely on slow SAM inference.",
+      "Prompted mask requests use a smaller transport image while preserving source-resolution mask normalization.",
+      "Mask status messages now explain when a targeted mask is taking too long and suggest a simpler visible object.",
+    ],
+  },
+  {
+    version: "3.23.0",
+    date: "May 29, 2026",
+    title: "Production release notes",
+    bullets: [
+      "Version label now opens in-app patch notes so users can inspect the current production release.",
+      "Targeted mask prompts split compound subjects like “bow and arrow” into separate SAM segmentation concepts.",
+      "Targeted mask failures now show user-friendly guidance while keeping technical diagnostics in logs.",
+      "Subject mask components are saved with card data and restored when cards are loaded.",
+    ],
+  },
+];
 
 type InspectorTab = "edit" | "keywords" | "sets" | "community";
 type VisibleInspectorTab = Exclude<InspectorTab, "keywords">;
@@ -261,6 +384,53 @@ type FrameTemplateData = {
   showcaseFrame?: ShowcaseFrameId;
   frameCustomization?: FrameCustomization;
 };
+
+// Ticks elapsed whole-seconds while `active` is true (resets to 0 when it goes
+// false). Drives the live generation timers shown across every AI flow.
+function useElapsedSeconds(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      setElapsed(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setElapsed(0);
+    const intervalId = setInterval(() => {
+      setElapsed(Math.max(0, Math.round((Date.now() - startedAt) / 1000)));
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [active]);
+
+  return elapsed;
+}
+
+// Appends a live "(Ns)" timer to a generation label while busy.
+function withElapsedLabel(label: string, elapsedSeconds: number, active: boolean): string {
+  return active && elapsedSeconds > 0 ? `${label} (${elapsedSeconds}s)` : label;
+}
+
+// Shared generate-button label that shows a live elapsed timer while busy.
+function GenerationButtonLabel({
+  busy,
+  idleLabel,
+  busyLabel = "Generating",
+}: {
+  busy: boolean;
+  idleLabel: string;
+  busyLabel?: string;
+}) {
+  const elapsed = useElapsedSeconds(busy);
+
+  return (
+    <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "900" }}>
+      {busy ? withElapsedLabel(busyLabel, elapsed, true) : idleLabel}
+    </Text>
+  );
+}
 
 function useMobileWebInputZoomGuard() {
   useEffect(() => {
@@ -578,6 +748,16 @@ const PREVIEW_ACTION_TOOLBAR_PADDING = 7;
 const PREVIEW_ACTION_HORIZONTAL_GAP = 8;
 const PREVIEW_ACTION_GRABBER_SIZE = 22;
 const PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN = 10;
+const PREVIEW_ACTION_TOOLBAR_MENU_GAP = 10;
+const FRAME_STYLE_PREVIEW_BUTTON_WIDTH = 76;
+const FRAME_STYLE_PREVIEW_GRID_GAP = 8;
+const FRAME_STYLE_PREVIEW_SCROLL_PADDING_RIGHT = 6;
+const FRAME_STYLE_MENU_HORIZONTAL_PADDING = 8;
+const FRAME_STYLE_MENU_BASE_WIDTH =
+  FRAME_STYLE_MENU_HORIZONTAL_PADDING * 2 +
+  FRAME_STYLE_PREVIEW_BUTTON_WIDTH * 3 +
+  FRAME_STYLE_PREVIEW_GRID_GAP * 2 +
+  FRAME_STYLE_PREVIEW_SCROLL_PADDING_RIGHT;
 const PREVIEW_FLOATING_TOOLBAR_CARD_GAP_RESERVE = 18;
 const PREVIEW_FLOATING_TOOLBAR_Z_INDEX = 12;
 const PREVIEW_FLOATING_TOOLBAR_MENU_Z_INDEX = 24;
@@ -874,6 +1054,55 @@ async function materializeCardDraftImageDataUris(card: CardDraft, prefix: string
     }
   }
 
+  const materializeSubjectMaskComponents = async (
+    key: "artSubjectMaskComponents" | "backArtSubjectMaskComponents",
+  ) => {
+    const components = nextCard[key];
+
+    if (!components || components.length === 0) {
+      return;
+    }
+
+    let changed = false;
+    const nextComponents: SubjectMaskComponent[] = [];
+
+    for (let index = 0; index < components.length; index += 1) {
+      const component = components[index];
+      let cutoutUrl = component.cutoutUrl;
+
+      try {
+        cutoutUrl = await materializeImageUri(component.cutoutUrl, `${prefix}-${key}-${index}`);
+      } catch (error) {
+        logStorageWarning("Unable to materialize stored subject-mask component URI; preserving original URI.", {
+          prefix,
+          field: key,
+          concept: component.concept,
+          uri: getImageUriLogDescriptor(component.cutoutUrl),
+          error,
+        });
+      }
+
+      if (cutoutUrl !== component.cutoutUrl) {
+        changed = true;
+      }
+
+      nextComponents.push({
+        ...component,
+        cutoutUrl,
+      });
+    }
+
+    if (changed) {
+      nextCard = {
+        ...nextCard,
+        [key]: nextComponents,
+      };
+    }
+  };
+
+  await materializeSubjectMaskComponents("artSubjectMaskComponents");
+  await materializeSubjectMaskComponents("backArtSubjectMaskComponents");
+
   return nextCard;
 }
 
@@ -1090,10 +1319,10 @@ async function openStripeCheckoutUrl(checkoutUrl: string, popup?: Window | null)
 
 // SAM segmentation doesn't need full resolution — the returned mask is scaled
 // back to the source dimensions during normalization. Downscaling shrinks the
-// request body ~4×, which keeps concurrent (parallel) fal uploads under the
+// request body, which keeps concurrent (parallel) fal uploads under the
 // HTTP/2 limit and speeds up inference. Aspect ratio is preserved (width-only
 // resize), so per-axis upscaling during normalization realigns it.
-const SUBJECT_MASK_REQUEST_MAX_DIMENSION = 768;
+const SUBJECT_MASK_REQUEST_MAX_DIMENSION = 640;
 
 async function downscaleImageForMaskRequest(uri: string) {
   try {
@@ -2878,6 +3107,50 @@ function normalizeArtTransformField(value: unknown): ArtTransform | undefined {
   };
 }
 
+function normalizeSubjectMaskComponentsField(value: unknown): SubjectMaskComponent[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const seen = new Set<string>();
+  const components = value.flatMap((component, index): SubjectMaskComponent[] => {
+    if (!component || typeof component !== "object") {
+      return [];
+    }
+
+    const source = component as Partial<SubjectMaskComponent> & { url?: unknown };
+    const cutoutUrl =
+      typeof source.cutoutUrl === "string"
+        ? source.cutoutUrl.trim()
+        : typeof source.url === "string"
+          ? source.url.trim()
+          : "";
+
+    if (!cutoutUrl) {
+      return [];
+    }
+
+    const concept = typeof source.concept === "string" && source.concept.trim()
+      ? source.concept.trim()
+      : `Subject ${index + 1}`;
+    const key = `${concept}\n${cutoutUrl}`;
+
+    if (seen.has(key)) {
+      return [];
+    }
+
+    seen.add(key);
+
+    return [{
+      concept,
+      cutoutUrl,
+      enabled: source.enabled !== false,
+    }];
+  });
+
+  return components.length > 0 ? components : undefined;
+}
+
 function normalizeFrameCustomizationField(value: unknown): FrameCustomization | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -3072,6 +3345,8 @@ function normalizeStoredCardDraft(value: unknown): CardDraft {
   normalized.splitRight = normalizeSplitHalfField(source.splitRight);
   normalized.artTransform = normalizeArtTransformField(source.artTransform);
   normalized.backArtTransform = normalizeArtTransformField(source.backArtTransform);
+  normalized.artSubjectMaskComponents = normalizeSubjectMaskComponentsField(source.artSubjectMaskComponents);
+  normalized.backArtSubjectMaskComponents = normalizeSubjectMaskComponentsField(source.backArtSubjectMaskComponents);
   normalized.setSymbolUsesRarityTreatment = getOptionalBooleanField(source, "setSymbolUsesRarityTreatment");
   normalized.watermarkOpacity = getOptionalNumberField(source, "watermarkOpacity");
   normalized.watermarkScale = getOptionalNumberField(source, "watermarkScale");
@@ -4700,6 +4975,15 @@ function normalizeWebPngExportUri(result: string) {
   throw new Error(`Unexpected web PNG export result: ${trimmed.slice(0, 48)}`);
 }
 
+function blobToDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image blob."));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function webPngExportUriToBlob(result: string) {
   const normalizedUri = normalizeWebPngExportUri(result);
 
@@ -5045,7 +5329,18 @@ async function compositeSubjectCutouts(urls: string[]): Promise<string> {
     return urls[0];
   }
 
-  const images = await Promise.all(urls.map(loadHtmlImage));
+  const images = await Promise.all(
+    urls.map((url, index) =>
+      loadHtmlImage(url).catch((error) => {
+        console.warn("[CardMagic subject mask] Subject cutout image failed to load.", {
+          index,
+          uri: getImageUriLogDescriptor(url),
+          error,
+        });
+        throw error;
+      }),
+    ),
+  );
   const width = Math.max(...images.map((image) => image.naturalWidth || 0)) || images[0].naturalWidth;
   const height = Math.max(...images.map((image) => image.naturalHeight || 0)) || images[0].naturalHeight;
   const canvas = document.createElement("canvas");
@@ -5061,7 +5356,67 @@ async function compositeSubjectCutouts(urls: string[]): Promise<string> {
     ctx.drawImage(image, 0, 0, width, height);
   }
 
-  return canvas.toDataURL("image/png");
+  try {
+    return canvas.toDataURL("image/png");
+  } catch (error) {
+    console.warn("[CardMagic subject mask] Subject cutout canvas export failed.", {
+      imageCount: images.length,
+      sources: urls.map(getImageUriLogDescriptor),
+      error,
+    });
+    throw new Error(
+      "Subject mask cutouts loaded but could not be composited. The image source may not allow canvas export.",
+    );
+  }
+}
+
+function getSubjectMaskConcepts(targetPrompt?: string): string[] {
+  const prompt = targetPrompt?.trim();
+
+  if (!prompt) {
+    return [];
+  }
+
+  const concepts = prompt
+    .replace(/\s*&\s*/g, ",")
+    .split(/[,;]+|\s+(?:and|plus|with)\s+/i)
+    .map((concept) => concept.replace(/^(?:a|an|the)\s+/i, "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  return Array.from(new Set(concepts));
+}
+
+function getSubjectMaskPromptForProvider(targetPrompt?: string): string | undefined {
+  const concepts = getSubjectMaskConcepts(targetPrompt);
+  return concepts.length > 0 ? concepts.join(", ") : undefined;
+}
+
+function getFriendlySubjectMaskError(error: unknown, targetPrompt?: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  const concepts = getSubjectMaskConcepts(targetPrompt);
+  const targetLabel = concepts.length > 0 ? concepts.join(", ") : targetPrompt?.trim();
+  const targetText =
+    targetLabel && concepts.length > 1
+      ? `those subjects (${targetLabel})`
+      : targetLabel
+        ? `“${targetLabel}”`
+        : "that subject";
+
+  if (message.includes("taking too long") || message.includes("timed out")) {
+    return message || "Targeted masking is taking too long. Try one simpler visible object, or try again in a moment.";
+  }
+
+  if (
+    error instanceof SubjectMatteProviderError ||
+    message.includes("Couldn't find") ||
+    message.includes("masksLength") ||
+    message.includes("did not return a segmented mask URL")
+  ) {
+    return `I couldn't isolate ${targetText} in this art. Try one simple visible object, like “arrow”, “bow”, “face”, or “wolf”. Very thin or overlapping objects may need a simpler target or manual mask editing.`;
+  }
+
+  return message || "CardMagic could not generate the subject mask.";
 }
 
 async function generateSubjectMatteUri({
@@ -5074,10 +5429,11 @@ async function generateSubjectMatteUri({
   // Prompted SAM segmentation runs one fal call per concept (in parallel); send a
   // downscaled image so the bodies stay small. The mask is normalized against the
   // full-res original below, so output resolution is unaffected.
-  const requestImageUri = targetPrompt?.trim()
+  const providerPrompt = getSubjectMaskPromptForProvider(targetPrompt);
+  const requestImageUri = providerPrompt
     ? await downscaleImageForMaskRequest(imageUri)
     : imageUri;
-  const matte = await generateSubjectMatteViaEdge({ imageUri: requestImageUri, targetPrompt });
+  const matte = await generateSubjectMatteViaEdge({ imageUri: requestImageUri, targetPrompt: providerPrompt });
   let matteUri: string;
 
   // Per-concept cutouts (prompted segmentation): merge the enabled ones and keep
@@ -5629,9 +5985,7 @@ export default function App() {
   const [subjectMaskError, setSubjectMaskError] = useState<string | null>(null);
   const [subjectMaskDiagnostics, setSubjectMaskDiagnostics] = useState<SubjectMatteDiagnostics | null>(null);
   // Per-subject cutouts from the last prompted segmentation, each toggleable on/off.
-  const [subjectMaskComponents, setSubjectMaskComponents] = useState<
-    { concept: string; cutoutUrl: string; enabled: boolean }[]
-  >([]);
+  const [subjectMaskComponents, setSubjectMaskComponents] = useState<SubjectMaskComponent[]>([]);
   const subjectMaskSourceUriRef = useRef<string | null>(null);
   const [subjectMaskToggleBusy, setSubjectMaskToggleBusy] = useState(false);
   const [rulesTextFixerBusy, setRulesTextFixerBusy] = useState(false);
@@ -5661,12 +6015,24 @@ export default function App() {
   const [userProgressHydrated, setUserProgressHydrated] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [showReturnToTop, setShowReturnToTop] = useState(false);
+  const [patchNotesOpen, setPatchNotesOpen] = useState(false);
   const { width, height } = useWindowDimensions();
   const mobileBrowserBottomInset = useMobileBrowserBottomInset(width);
   const [cardFontsLoaded, cardFontLoadError] = useFonts(FULL_MAGIC_PACK.fonts);
   const cardFontsReady = cardFontsLoaded || Boolean(cardFontLoadError);
 
   const faceCard = useMemo(() => getEditableCardFace(card), [card]);
+
+  useEffect(() => {
+    if (subjectMaskBusy || subjectMaskToggleBusy) {
+      return;
+    }
+
+    const components = normalizeSubjectMaskComponentsField(faceCard.artSubjectMaskComponents) ?? [];
+    setSubjectMaskComponents(components);
+    subjectMaskSourceUriRef.current = components.length > 0 ? faceCard.artUri ?? null : null;
+  }, [faceCard.artSubjectMaskComponents, faceCard.artUri, subjectMaskBusy, subjectMaskToggleBusy]);
+
   const accountFooterOwnerName = useMemo(() => {
     const explicitName =
       accountProfile?.username ??
@@ -5866,6 +6232,83 @@ export default function App() {
   const resolvedPreviewToolbarPosition = clampPreviewToolbarPosition(
     previewToolbarPosition ?? previewDefaultToolbarPosition,
   );
+  const previewToolbarFrameMenuLayout = useMemo(() => {
+    const edge = PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
+    const gap = PREVIEW_ACTION_TOOLBAR_MENU_GAP;
+    const bottomInset = keyboardVisible
+      ? edge
+      : BOTTOM_TAB_BAR_HEIGHT + mobileBrowserBottomInset + edge;
+    const usableLeft = edge;
+    const usableRight = Math.max(usableLeft, width - edge);
+    const usableTop = edge;
+    const usableBottom = Math.max(
+      usableTop,
+      previewToolbarViewportHeight - bottomInset,
+    );
+    const toolbarLeft = resolvedPreviewToolbarPosition.x;
+    const toolbarTop = resolvedPreviewToolbarPosition.y;
+    const toolbarRight = toolbarLeft + previewToolbarWidth;
+    const toolbarBottom = toolbarTop + previewToolbarHeight;
+    const toolbarCenterX = toolbarLeft + previewToolbarWidth / 2;
+    const toolbarCenterY = toolbarTop + previewToolbarHeight / 2;
+    const viewportMenuWidth = Math.max(0, usableRight - usableLeft);
+    const preferredMenuWidth = Math.min(FRAME_STYLE_MENU_BASE_WIDTH, viewportMenuWidth);
+    const minMenuWidth = Math.min(236, preferredMenuWidth);
+    const leftSpace = Math.max(0, toolbarLeft - usableLeft - gap);
+    const rightSpace = Math.max(0, usableRight - toolbarRight - gap);
+    const preferSideMenu = previewToolbarOrientation === "vertical";
+    const openLeft = leftSpace >= rightSpace;
+    const sideSpace = openLeft ? leftSpace : rightSpace;
+    const fallbackSideSpace = openLeft ? rightSpace : leftSpace;
+    const sideWidth = Math.max(sideSpace, fallbackSideSpace);
+    const menuWidth = preferSideMenu && sideWidth > 0
+      ? Math.min(preferredMenuWidth, Math.max(minMenuWidth, sideWidth))
+      : preferredMenuWidth;
+    const useLeftSide = preferSideMenu
+      ? leftSpace >= menuWidth || (leftSpace >= rightSpace && rightSpace < menuWidth)
+      : false;
+    const useRightSide = preferSideMenu && !useLeftSide && rightSpace >= menuWidth;
+    const left = useLeftSide
+      ? toolbarLeft - gap - menuWidth
+      : useRightSide
+        ? toolbarRight + gap
+        : clamp(toolbarCenterX - menuWidth / 2, usableLeft, usableRight - menuWidth);
+    const spaceAbove = Math.max(0, toolbarTop - usableTop - gap);
+    const spaceBelow = Math.max(0, usableBottom - toolbarBottom - gap);
+    const verticalSpace = previewToolbarOrientation === "horizontal"
+      ? Math.max(spaceAbove, spaceBelow)
+      : Math.max(0, usableBottom - usableTop);
+    const maxAvailableHeight = Math.max(0, usableBottom - usableTop);
+    const maxHeight = Math.min(432, Math.max(188, verticalSpace), maxAvailableHeight);
+    const top = previewToolbarOrientation === "horizontal"
+      ? spaceAbove >= spaceBelow
+        ? toolbarTop - gap - maxHeight
+        : toolbarBottom + gap
+      : clamp(toolbarCenterY - maxHeight / 2, usableTop, usableBottom - maxHeight);
+
+    return {
+      left: clamp(left, usableLeft, usableRight - menuWidth),
+      top: clamp(top, usableTop, usableBottom - maxHeight),
+      width: menuWidth,
+      maxHeight,
+    };
+  }, [
+    keyboardVisible,
+    mobileBrowserBottomInset,
+    previewToolbarHeight,
+    previewToolbarOrientation,
+    previewToolbarViewportHeight,
+    previewToolbarWidth,
+    resolvedPreviewToolbarPosition.x,
+    resolvedPreviewToolbarPosition.y,
+    width,
+  ]);
+  const previewToolbarFrameMenuRelativeStyle = {
+    position: "absolute" as const,
+    left: previewToolbarFrameMenuLayout.left - resolvedPreviewToolbarPosition.x,
+    top: previewToolbarFrameMenuLayout.top - resolvedPreviewToolbarPosition.y,
+    width: previewToolbarFrameMenuLayout.width,
+  };
 
   const beginPreviewToolbarDrag = useCallback(() => {
     const dragStart = previewToolbarPositionRef.current ?? resolvedPreviewToolbarPosition;
@@ -7409,6 +7852,7 @@ export default function App() {
         ...artistPatch,
         backArtUri: artUri,
         backArtSubjectMaskUri: undefined,
+        backArtSubjectMaskComponents: undefined,
         backArtTransform: { offsetX: 0, offsetY: 0, scale: 1 },
       });
       return;
@@ -7418,6 +7862,7 @@ export default function App() {
       ...artistPatch,
       artUri,
       artSubjectMaskUri: undefined,
+      artSubjectMaskComponents: undefined,
       artTransform: { offsetX: 0, offsetY: 0, scale: 1 },
     });
   };
@@ -7611,71 +8056,60 @@ export default function App() {
       return;
     }
 
+    const normalizedTargetPrompt = targetPrompt?.trim();
+    const concepts = getSubjectMaskConcepts(normalizedTargetPrompt);
+    const providerTargetPrompt = getSubjectMaskPromptForProvider(normalizedTargetPrompt);
+
     setSubjectMaskBusy(true);
-    reportSubjectMaskStatus("Preparing your art…");
     setSubjectMaskError(null);
     setSubjectMaskDiagnostics(null);
     setSubjectMaskComponents([]);
 
+    // One timer running from the true start of masking; the phase label advances
+    // through prepare → segment → combine → apply with continuous elapsed.
+    const stopMaskTimer = startSubjectMaskTimer("Preparing your art…");
+
     try {
       let maskUri: string;
-      const normalizedTargetPrompt = targetPrompt?.trim();
+      let nextComponents: SubjectMaskComponent[] = [];
 
       try {
         if (Platform.OS !== "web") {
           throw new Error("Dedicated subject matte normalization is currently web-only.");
         }
 
-        const concepts = normalizedTargetPrompt
-          ? normalizedTargetPrompt.split(/[,;]+/).map((concept) => concept.trim()).filter(Boolean)
-          : [];
-        const segmentationStartedAt = Date.now();
-        let progressTimer: ReturnType<typeof setInterval> | null = null;
+        stopMaskTimer.setPhase(
+          !normalizedTargetPrompt
+            ? "Removing the background from your art…"
+            : concepts.length > 1
+              ? `Segmenting ${concepts.length} subjects: ${concepts.join(", ")}…`
+              : `Segmenting “${concepts[0] ?? normalizedTargetPrompt}”…`,
+        );
 
-        if (normalizedTargetPrompt) {
-          // Each subject is a separate (slow) SAM inference; show live elapsed +
-          // which subject so the wait reflects progress instead of freezing.
-          let tick = 0;
-          const renderProgress = () => {
-            const elapsed = Math.round((Date.now() - segmentationStartedAt) / 1000);
-            const subject =
-              concepts.length > 1
-                ? `${concepts.length} subjects — “${concepts[tick % concepts.length]}”`
-                : `“${concepts[0] ?? normalizedTargetPrompt}”`;
-            reportSubjectMaskStatus(`Segmenting ${subject}… (${elapsed}s)`);
-            tick += 1;
-          };
-          renderProgress();
-          progressTimer = setInterval(renderProgress, 1800);
-        } else {
-          reportSubjectMaskStatus("Removing the background from your art…");
-        }
-
-        try {
-          const generatedMask = await generateSubjectMatteUri({
-            imageUri: artUri,
-            targetPrompt: normalizedTargetPrompt,
-          });
-          maskUri = generatedMask.uri;
-          setSubjectMaskDiagnostics(generatedMask.diagnostics ?? null);
-          subjectMaskSourceUriRef.current = generatedMask.sourceUri ?? artUri;
-          setSubjectMaskComponents(
+        const generatedMask = await generateSubjectMatteUri({
+          imageUri: artUri,
+          targetPrompt: providerTargetPrompt,
+        });
+        maskUri = generatedMask.uri;
+        setSubjectMaskDiagnostics(generatedMask.diagnostics ?? null);
+        subjectMaskSourceUriRef.current = generatedMask.sourceUri ?? artUri;
+        nextComponents =
+          normalizeSubjectMaskComponentsField(
             (generatedMask.components ?? []).map((component) => ({ ...component, enabled: true })),
-          );
-        } finally {
-          if (progressTimer) {
-            clearInterval(progressTimer);
-          }
-        }
+          ) ?? [];
+        setSubjectMaskComponents(nextComponents);
 
-        reportSubjectMaskStatus(concepts.length > 1 ? "Combining the masks…" : "Cleaning up the cutout…");
+        stopMaskTimer.setPhase(concepts.length > 1 ? "Combining the masks…" : "Cleaning up the cutout…");
       } catch (matteError) {
         console.warn("Dedicated subject matte provider unavailable.", matteError);
         throw matteError;
       }
 
-      reportSubjectMaskStatus("Applying the cutout to your card…");
-      updateCurrentFace({ artSubjectMaskUri: maskUri });
+      stopMaskTimer.setPhase("Applying the cutout to your card…");
+      updateCurrentFace({
+        artSubjectMaskUri: maskUri,
+        artSubjectMaskComponents: nextComponents.length > 0 ? nextComponents : undefined,
+      });
       setActiveSection("art");
       setSheetSection(null);
       setArtSourceOpen(false);
@@ -7687,9 +8121,96 @@ export default function App() {
       if (error instanceof SubjectMatteProviderError) {
         setSubjectMaskDiagnostics(error.diagnostics ?? null);
       }
-      setSubjectMaskError(error instanceof Error ? error.message : "CardMagic could not generate the subject mask.");
-      setArtSourceOpen(true);
+      setSubjectMaskError(getFriendlySubjectMaskError(error, normalizedTargetPrompt));
+      setArtSourceOpen(false);
+      setArtAdjustmentInitialMode("mask");
+      setArtAdjustOpen(true);
     } finally {
+      stopMaskTimer.stop();
+      setSubjectMaskBusy(false);
+      setSubjectMaskStatus(null);
+    }
+  };
+
+  // Drives the masking status line with a continuous elapsed timer. Returns a
+  // handle to advance the phase label and to stop the timer.
+  const startSubjectMaskTimer = (initialPhase: string) => {
+    const startedAt = Date.now();
+    let phase = initialPhase;
+    const render = () => {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      reportSubjectMaskStatus(`${phase} (${elapsed}s)`);
+    };
+    render();
+    const intervalId = setInterval(render, 1000);
+    return {
+      setPhase: (next: string) => {
+        phase = next;
+        render();
+      },
+      stop: () => clearInterval(intervalId),
+    };
+  };
+
+  // Add another subject to an existing mask: segment just the new concept and
+  // append it to the current components, then re-merge.
+  const addSubjectMask = async (concept: string) => {
+    const trimmed = concept.trim();
+    const sourceUri = subjectMaskSourceUriRef.current;
+
+    if (!trimmed || !sourceUri || subjectMaskBusy) {
+      return;
+    }
+
+    const creditStatus = canSpendCredits(userProgress, "subjectMask");
+
+    if (!creditStatus.ok) {
+      setSubjectMaskError(
+        `Adding a subject costs ${creditStatus.cost} credits. Add ${creditStatus.shortfall} more to continue.`,
+      );
+      openCreditStore();
+      return;
+    }
+
+    setSubjectMaskBusy(true);
+    setSubjectMaskError(null);
+    const stopMaskTimer = startSubjectMaskTimer(`Adding “${trimmed}”…`);
+
+    try {
+      const requestImageUri = await downscaleImageForMaskRequest(sourceUri);
+      const matte = await generateSubjectMatteViaEdge({
+        imageUri: requestImageUri,
+        targetPrompt: getSubjectMaskPromptForProvider(trimmed),
+      });
+      const newMasks = (matte.subjectMasks ?? []).filter((mask) => mask && Boolean(mask.url));
+
+      if (newMasks.length === 0) {
+        throw new Error(`Couldn't find “${trimmed}” in your art.`);
+      }
+
+      const additions = newMasks.map((mask) => ({ concept: mask.concept, cutoutUrl: mask.url, enabled: true }));
+      const next = normalizeSubjectMaskComponentsField([...subjectMaskComponents, ...additions]) ?? [];
+      setSubjectMaskComponents(next);
+
+      if (matte.diagnostics) {
+        setSubjectMaskDiagnostics(matte.diagnostics);
+      }
+
+      stopMaskTimer.setPhase("Combining the masks…");
+      const composed = await composeSubjectMaskFromComponents(next, sourceUri);
+      updateCurrentFace({
+        artSubjectMaskUri: composed ?? undefined,
+        artSubjectMaskComponents: next.length > 0 ? next : undefined,
+      });
+      recordSuccessfulCreditSpend("subjectMask");
+    } catch (error) {
+      console.warn("Unable to add subject mask.", error);
+      if (error instanceof SubjectMatteProviderError) {
+        setSubjectMaskDiagnostics(error.diagnostics ?? null);
+      }
+      setSubjectMaskError(getFriendlySubjectMaskError(error, trimmed));
+    } finally {
+      stopMaskTimer.stop();
       setSubjectMaskBusy(false);
       setSubjectMaskStatus(null);
     }
@@ -7713,12 +8234,17 @@ export default function App() {
     );
     setSubjectMaskComponents(next);
     setSubjectMaskToggleBusy(true);
+    setSubjectMaskError(null);
 
     try {
       const composed = await composeSubjectMaskFromComponents(next, sourceUri);
-      updateCurrentFace({ artSubjectMaskUri: composed ?? undefined });
+      updateCurrentFace({
+        artSubjectMaskUri: composed ?? undefined,
+        artSubjectMaskComponents: next.length > 0 ? next : undefined,
+      });
     } catch (error) {
       console.warn("Unable to update subject mask toggle.", error);
+      setSubjectMaskError(error instanceof Error ? error.message : "CardMagic could not update that subject mask.");
     } finally {
       setSubjectMaskToggleBusy(false);
     }
@@ -8440,8 +8966,30 @@ export default function App() {
     }
   };
 
-  const exportCommunityCardPng = useCallback(async (communityCard: CardDraft, cardName: string, footerOwnerName?: string) => {
+  const exportCommunityCardPng = useCallback(async (communityCard: CardDraft, cardName: string, footerOwnerName?: string, renderedImageUrl?: string) => {
     const fileName = getExportFileName(cardName || "community-card", "card").replace(/\.json$/, ".png");
+
+    // Prefer the already-rendered hosted image. Community cards no longer carry
+    // embedded art in their JSON (compacted at publish), so re-rendering would be
+    // blank — and downloading the finished PNG is faster anyway.
+    if (Platform.OS === "web" && renderedImageUrl) {
+      try {
+        setWebPhotoExportBusy(true);
+        const response = await fetch(renderedImageUrl);
+        if (!response.ok) {
+          throw new Error(`Image download failed with HTTP ${response.status}.`);
+        }
+        const dataUri = await blobToDataUri(await response.blob());
+        setWebPhotoExport({ fileName, dataUri });
+        recordProgressEvent("export-card");
+        return;
+      } catch (error) {
+        console.warn("Community image download failed; falling back to re-render.", error);
+      } finally {
+        setWebPhotoExportBusy(false);
+      }
+    }
+
     const exportCard = cloneCardDraft(communityCard);
     const exportTarget: FlatCardExportTarget = {
       kind: "card",
@@ -9238,18 +9786,28 @@ export default function App() {
                       >
                         CardMagic
                       </Text>
-                      <Text
-                        selectable
-                        numberOfLines={1}
-                        adjustsFontSizeToFit
-                        style={{
-                          color: "#5f6570",
-                          fontSize: 13,
-                          fontWeight: "700",
-                        }}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Show patch notes for ${headerVersionLabel}`}
+                        hitSlop={8}
+                        onPress={() => setPatchNotesOpen(true)}
+                        style={{ alignSelf: "flex-start" }}
                       >
-                        {headerVersionLabel}
-                      </Text>
+                        <Text
+                          selectable={false}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          style={{
+                            color: "#5f6570",
+                            fontSize: 13,
+                            fontWeight: "700",
+                            textDecorationLine: "underline",
+                            textDecorationColor: "rgba(95, 101, 112, 0.38)",
+                          }}
+                        >
+                          {headerVersionLabel}
+                        </Text>
+                      </Pressable>
                       <Text
                         selectable
                         numberOfLines={1}
@@ -9434,14 +9992,11 @@ export default function App() {
                           ) : null}
                           {cardActionMenuOpen ? (
                             <View
-                              style={{
-                                position: "absolute",
-                                ...previewToolbarMenuAnchorStyle,
-                                width: previewToolbarMenuWidth,
-                              }}
+                              style={previewToolbarFrameMenuRelativeStyle}
                             >
                               <FrameChangeMenuPanel
-                                menuWidth={previewToolbarMenuWidth}
+                                menuWidth={previewToolbarFrameMenuLayout.width}
+                                maxHeight={previewToolbarFrameMenuLayout.maxHeight}
                                 frameIdentity={previewFrameIdentity}
                                 selectedFrameTreatment={activeFrameTreatment}
                                 selectedShowcaseFrame={activeShowcaseFrame}
@@ -9836,10 +10391,10 @@ export default function App() {
           subjectMaskBusy={subjectMaskBusy}
           subjectMaskStatus={subjectMaskStatus}
           subjectMaskError={subjectMaskError}
-          subjectMaskDiagnostics={subjectMaskDiagnostics}
           subjectMaskComponents={subjectMaskComponents}
           subjectMaskToggleBusy={subjectMaskToggleBusy}
           onToggleSubjectMaskComponent={toggleSubjectMaskComponent}
+          onAddSubjectMask={addSubjectMask}
           onPickPhoto={() => {
             setArtAdjustOpen(false);
             setArtAdjustmentInitialMode("crop");
@@ -9884,6 +10439,12 @@ export default function App() {
           profile={userProgress}
           onClose={() => setAchievementsOpen(false)}
         />
+        <PatchNotesModal
+          visible={patchNotesOpen}
+          appVersion={CARDMAGIC_APP_VERSION}
+          notes={CARDMAGIC_PATCH_NOTES}
+          onClose={() => setPatchNotesOpen(false)}
+        />
       </GestureHandlerRootView>
     </HybridSymbolStyleProvider>
   );
@@ -9912,6 +10473,152 @@ async function copyTextToClipboard(text: string) {
   }
 
   return false;
+}
+
+function PatchNotesModal({
+  visible,
+  appVersion,
+  notes,
+  onClose,
+}: {
+  visible: boolean;
+  appVersion: string;
+  notes: PatchNoteEntry[];
+  onClose: () => void;
+}) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(12, 15, 22, 0.48)",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+        }}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss patch notes"
+          onPress={onClose}
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+          }}
+        />
+        <View
+          style={{
+            width: "100%",
+            maxWidth: 440,
+            maxHeight: "82%",
+            borderRadius: 18,
+            borderCurve: "continuous",
+            backgroundColor: "#ffffff",
+            shadowColor: "#000000",
+            shadowOpacity: 0.22,
+            shadowRadius: 26,
+            shadowOffset: { width: 0, height: 14 },
+            elevation: 18,
+            overflow: "hidden",
+          }}
+        >
+          <View
+            style={{
+              paddingHorizontal: 20,
+              paddingTop: 20,
+              paddingBottom: 14,
+              borderBottomWidth: 1,
+              borderBottomColor: "#eceef2",
+              flexDirection: "row",
+              alignItems: "flex-start",
+              gap: 14,
+            }}
+          >
+            <View
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: 23,
+                backgroundColor: "#111827",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <BookOpen size={22} color="#69d2df" strokeWidth={2.6} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+              <Text selectable={false} style={{ color: "#11151c", fontSize: 22, fontWeight: "900" }}>
+                Patch Notes
+              </Text>
+              <Text selectable={false} style={{ color: "#5e6673", fontSize: 13, lineHeight: 18, fontWeight: "800" }}>
+                Current version v{appVersion}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss patch notes"
+              onPress={onClose}
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: "#eef0f4",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <X size={18} color="#222733" strokeWidth={2.5} />
+            </Pressable>
+          </View>
+
+          <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+            {notes.map((entry) => (
+              <View
+                key={entry.version}
+                style={{
+                  borderRadius: 14,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: "#e1e4eb",
+                  backgroundColor: "#f8f9fb",
+                  padding: 14,
+                  gap: 10,
+                }}
+              >
+                <View style={{ gap: 3 }}>
+                  <Text selectable={false} style={{ color: "#11151c", fontSize: 16, fontWeight: "900" }}>
+                    v{entry.version} · {entry.title}
+                  </Text>
+                  <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+                    {entry.date}
+                  </Text>
+                </View>
+                <View style={{ gap: 8 }}>
+                  {entry.bullets.map((bullet) => (
+                    <View key={bullet} style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+                      <Text selectable={false} style={{ color: "#0b7180", fontSize: 15, lineHeight: 19, fontWeight: "900" }}>
+                        •
+                      </Text>
+                      <Text selectable={false} style={{ flex: 1, color: "#2a303a", fontSize: 13, lineHeight: 19, fontWeight: "700" }}>
+                        {bullet}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 function EarlyAccessCodeModal({
@@ -10703,9 +11410,7 @@ function ArtGeneratorModal({
               }}
             >
               {busy ? <ActivityIndicator color="#ffffff" /> : <Palette size={18} color="#ffffff" strokeWidth={2.5} />}
-              <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "900" }}>
-                {busy ? "Generating, please wait" : submitLabel}
-              </Text>
+              <GenerationButtonLabel busy={busy} idleLabel={submitLabel} busyLabel="Generating, please wait" />
             </Pressable>
           </View>
         </View>
@@ -10831,9 +11536,7 @@ function SetSymbolGeneratorModal({
               }}
             >
               {busy ? <ActivityIndicator color="#ffffff" /> : <Sparkles size={18} color="#ffffff" strokeWidth={2.5} />}
-              <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "900" }}>
-                {busy ? "Generating" : "Generate"}
-              </Text>
+              <GenerationButtonLabel busy={busy} idleLabel="Generate" />
             </Pressable>
           </View>
         </View>
@@ -11053,66 +11756,13 @@ function CardBackGeneratorModal({
               }}
             >
               {busy ? <ActivityIndicator color="#ffffff" /> : <Sparkles size={18} color="#ffffff" strokeWidth={2.5} />}
-              <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "900" }}>
-                {busy ? "Generating" : "Generate"}
-              </Text>
+              <GenerationButtonLabel busy={busy} idleLabel="Generate" />
             </Pressable>
           </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>
   );
-}
-
-function getSubjectMaskAttemptMode(applyMask: boolean) {
-  return applyMask ? "masked preview" : "mask image";
-}
-
-function getSubjectMaskAttemptSummary(summary: unknown) {
-  if (!summary || typeof summary !== "object") {
-    return null;
-  }
-
-  const record = summary as {
-    keys?: unknown;
-    masksLength?: unknown;
-    firstMaskKeys?: unknown;
-    imageKeys?: unknown;
-    dataKeys?: unknown;
-    outputType?: unknown;
-    resultKeys?: unknown;
-  };
-  const details: string[] = [];
-
-  if (Array.isArray(record.keys)) {
-    details.push(`keys: ${record.keys.join(", ")}`);
-  }
-
-  if (typeof record.masksLength === "number") {
-    details.push(`masks: ${record.masksLength}`);
-  }
-
-  if (Array.isArray(record.firstMaskKeys)) {
-    details.push(`first mask: ${record.firstMaskKeys.join(", ")}`);
-  }
-
-  if (Array.isArray(record.imageKeys)) {
-    details.push(`image: ${record.imageKeys.join(", ")}`);
-  }
-
-  if (Array.isArray(record.dataKeys)) {
-    details.push(`data: ${record.dataKeys.join(", ")}`);
-  }
-
-  if (typeof record.outputType === "string" && record.outputType !== "undefined") {
-    details.push(`output: ${record.outputType}`);
-  }
-
-  if (Array.isArray(record.resultKeys)) {
-    details.push(`result: ${record.resultKeys.join(", ")}`);
-  }
-
-  return details.length > 0 ? details.join(" | ") : null;
 }
 
 function ArtAdjustmentModal({
@@ -11124,10 +11774,10 @@ function ArtAdjustmentModal({
   subjectMaskBusy,
   subjectMaskStatus,
   subjectMaskError,
-  subjectMaskDiagnostics,
   subjectMaskComponents,
   subjectMaskToggleBusy,
   onToggleSubjectMaskComponent,
+  onAddSubjectMask,
   onPickPhoto,
   onGenerateArt,
   onClose,
@@ -11140,10 +11790,10 @@ function ArtAdjustmentModal({
   subjectMaskBusy: boolean;
   subjectMaskStatus: string | null;
   subjectMaskError: string | null;
-  subjectMaskDiagnostics: SubjectMatteDiagnostics | null;
-  subjectMaskComponents: { concept: string; cutoutUrl: string; enabled: boolean }[];
+  subjectMaskComponents: SubjectMaskComponent[];
   subjectMaskToggleBusy: boolean;
   onToggleSubjectMaskComponent: (concept: string) => void;
+  onAddSubjectMask: (concept: string) => void;
   onPickPhoto: () => void;
   onGenerateArt: () => void;
   onClose: () => void;
@@ -11152,10 +11802,13 @@ function ArtAdjustmentModal({
   const faceCard = getEditableCardFace(card);
   const artUri = faceCard.artUri;
   const [imageAspectRatio, setImageAspectRatio] = useState<number | null>(null);
-  const [maskOverlayVisible, setMaskOverlayVisible] = useState(false);
+  const [addSubjectPrompt, setAddSubjectPrompt] = useState("");
+  // Artwork vs Mask view: each shows only its own controls.
+  const [adjustMode, setAdjustMode] = useState<ArtAdjustmentInitialMode>(initialMode);
   const [maskBrushMode, setMaskBrushMode] = useState<MaskBrushMode>("add");
   const [maskBrushSize, setMaskBrushSize] = useState(18);
   const [maskPreviewUri, setMaskPreviewUri] = useState<string | null>(faceCard.artSubjectMaskUri ?? null);
+  const maskOverlayVisible = adjustMode === "mask" && Boolean(maskPreviewUri);
   const [maskTargetPrompt, setMaskTargetPrompt] = useState("");
   const [maskEditStatus, setMaskEditStatus] = useState<string | null>(null);
   const artRect = getVisibleArtRectForCard(card);
@@ -11249,15 +11902,22 @@ function ArtAdjustmentModal({
   }, [artTransform, artRect, card, artUri, maskPreviewUri, coordinateScale, imageAspectRatio, cropWidth, cropHeight, fittedImageLayout]);
 
   useEffect(() => {
-    if (visible) {
-      panStartTransform.current = artTransform;
-      pinchStartTransform.current = artTransform;
-      const opensWithMaskOverlay = initialMode === "mask" && Boolean(faceCard.artSubjectMaskUri);
-      setMaskOverlayVisible(opensWithMaskOverlay);
-      setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
-      setMaskEditStatus(null);
+    if (!visible) {
+      return;
     }
-  }, [artUri, faceCard.artSubjectMaskUri, initialMode, visible]);
+
+    panStartTransform.current = artTransform;
+    pinchStartTransform.current = artTransform;
+    setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
+    setMaskEditStatus(null);
+    setAdjustMode(initialMode);
+  }, [artUri, initialMode, visible]);
+
+  useEffect(() => {
+    if (visible) {
+      setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
+    }
+  }, [faceCard.artSubjectMaskUri, visible]);
 
   const updateArtTransform = useCallback((nextTransform: ArtTransform) => {
     const normalizedTransform = normalizeArtTransformForVisibleRect(
@@ -11310,6 +11970,7 @@ function ArtAdjustmentModal({
       setMaskPreviewUri(nextUri);
       onChange(toDfcFacePatch(cardRef.current, {
         artSubjectMaskUri: nextUri,
+        artSubjectMaskComponents: undefined,
       }));
     } catch (error) {
       console.warn("Unable to edit subject mask.", error);
@@ -11360,15 +12021,6 @@ function ArtAdjustmentModal({
 
     return Gesture.Simultaneous(panGesture, pinchGesture);
   }, [updateArtTransform]);
-
-  const normalizedMaskTargetPrompt = maskTargetPrompt.trim();
-  const maskGenerateLabel = subjectMaskBusy
-    ? "Masking"
-    : normalizedMaskTargetPrompt
-      ? "Generate target mask"
-      : faceCard.artSubjectMaskUri
-        ? "Replace mask"
-        : "Generate mask";
 
   if (!visible || !artUri) {
     return null;
@@ -11461,7 +12113,7 @@ function ArtAdjustmentModal({
                     }}
                   />
                 </View>
-                {maskOverlayVisible && maskPreviewUri ? (
+                {maskOverlayVisible && maskPreviewUri && adjustMode === "mask" ? (
                   <View
                     pointerEvents="none"
                     style={{
@@ -11500,46 +12152,90 @@ function ArtAdjustmentModal({
             </View>
             <View
               style={{
-                width: cropWidth,
-                borderRadius: 16,
+                flexDirection: "row",
+                alignSelf: "center",
+                gap: 8,
+                padding: 4,
+                borderRadius: 999,
                 borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: "rgba(255, 255, 255, 0.24)",
-                backgroundColor: "rgba(255, 255, 255, 0.1)",
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                gap: 6,
+                backgroundColor: "rgba(255, 255, 255, 0.08)",
               }}
             >
-              <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
-                MASK TARGET
-              </Text>
-              <TextInput
-                value={maskTargetPrompt}
-                onChangeText={setMaskTargetPrompt}
-                placeholder="Optional: sword, wings, face, blue flame"
-                placeholderTextColor="rgba(255, 255, 255, 0.5)"
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!subjectMaskBusy}
+              {(["crop", "mask"] as const).map((mode) => {
+                const active = adjustMode === mode;
+                return (
+                  <Pressable
+                    key={mode}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    onPress={() => {
+                      setAdjustMode(mode);
+                      if (mode === "mask") {
+                        setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
+                      }
+                    }}
+                    style={{
+                      paddingHorizontal: 20,
+                      paddingVertical: 8,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      backgroundColor: active ? "#ffffff" : "transparent",
+                    }}
+                  >
+                    <Text
+                      selectable={false}
+                      style={{ color: active ? "#151820" : "rgba(255, 255, 255, 0.7)", fontSize: 13, fontWeight: "900" }}
+                    >
+                      {mode === "crop" ? "Artwork" : "Mask"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {adjustMode === "mask" ? (
+              <View
                 style={{
-                  minHeight: 40,
-                  borderRadius: 12,
+                  width: cropWidth,
+                  borderRadius: 16,
                   borderCurve: "continuous",
                   borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.22)",
-                  backgroundColor: "rgba(255, 255, 255, 0.12)",
-                  color: "#ffffff",
-                  fontSize: 14,
-                  fontWeight: "800",
+                  borderColor: "rgba(255, 255, 255, 0.24)",
+                  backgroundColor: "rgba(255, 255, 255, 0.1)",
                   paddingHorizontal: 12,
-                  paddingVertical: 8,
+                  paddingVertical: 10,
+                  gap: 6,
                 }}
-              />
-              <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.62)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
-                Leave blank for the normal foreground matte. Add a phrase to use fal SAM semantic segmentation.
-              </Text>
-            </View>
+              >
+                <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
+                  MASK TARGET
+                </Text>
+                <TextInput
+                  value={maskTargetPrompt}
+                  onChangeText={setMaskTargetPrompt}
+                  placeholder="Optional: sword, wings, face, blue flame"
+                  placeholderTextColor="rgba(255, 255, 255, 0.5)"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!subjectMaskBusy}
+                  style={{
+                    minHeight: 40,
+                    borderRadius: 12,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.22)",
+                    backgroundColor: "rgba(255, 255, 255, 0.12)",
+                    color: "#ffffff",
+                    fontSize: 14,
+                    fontWeight: "800",
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                  }}
+                />
+                <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.62)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
+                  Leave blank for the normal foreground matte. Add a phrase to use fal SAM semantic segmentation.
+                </Text>
+              </View>
+            ) : null}
             <View
               style={{
 	                flexDirection: "row",
@@ -11549,6 +12245,7 @@ function ArtAdjustmentModal({
 	                gap: 10,
               }}
             >
+              {adjustMode === "crop" ? (
               <View
                 style={{
                   height: 46,
@@ -11594,9 +12291,11 @@ function ArtAdjustmentModal({
                   <Plus size={18} color="#ffffff" strokeWidth={2.8} />
                 </Pressable>
               </View>
-              <Pressable
+              ) : null}
+              {adjustMode === "mask" ? (
+                <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={subjectMaskBusy ? "Generating subject mask" : "Generate subject mask"}
+                  accessibilityLabel={subjectMaskBusy ? "Generating target mask" : "Generate target mask"}
                   accessibilityState={{ busy: subjectMaskBusy }}
                   disabled={subjectMaskBusy}
                   onPress={() => onGenerateSubjectMask(maskTargetPrompt)}
@@ -11631,46 +12330,11 @@ function ArtAdjustmentModal({
                       fontWeight: "800",
                     }}
                   >
-                    {maskGenerateLabel}
+                    {subjectMaskBusy ? "Masking" : "Generate target mask"}
                   </Text>
                 </Pressable>
-		              {faceCard.artSubjectMaskUri ? (
-		                <Pressable
-		                  accessibilityRole="switch"
-		                  accessibilityState={{ checked: maskOverlayVisible }}
-		                  accessibilityLabel={maskOverlayVisible ? "Hide subject mask overlay" : "Show subject mask overlay"}
-			                  onPress={() => {
-			                    const nextMaskOverlayVisible = !maskOverlayVisible;
-			                    setMaskOverlayVisible(nextMaskOverlayVisible);
-			                    setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
-			                  }}
-		                  style={{
-		                    minHeight: 46,
-		                    borderRadius: 999,
-		                    borderWidth: 1,
-		                    borderColor: maskOverlayVisible ? "rgba(85, 223, 245, 0.88)" : "rgba(255, 255, 255, 0.38)",
-		                    backgroundColor: maskOverlayVisible ? "rgba(85, 223, 245, 0.2)" : "rgba(255, 255, 255, 0.12)",
-		                    alignItems: "center",
-		                    justifyContent: "center",
-		                    paddingHorizontal: 14,
-	                    flexDirection: "row",
-		                    gap: 7,
-		                  }}
-		                >
-		                  <Palette size={17} color={maskOverlayVisible ? "#b7f6ff" : "#ffffff"} strokeWidth={2.5} />
-		                  <Text
-		                    selectable={false}
-		                    style={{
-		                      color: maskOverlayVisible ? "#b7f6ff" : "#ffffff",
-		                      fontSize: 14,
-		                      fontWeight: "800",
-		                    }}
-		                  >
-		                    Mask
-		                  </Text>
-		                </Pressable>
-		              ) : null}
-              {subjectMaskStatus || subjectMaskError ? (
+              ) : null}
+              {(subjectMaskStatus || subjectMaskError) && adjustMode === "mask" ? (
                 <View
                   style={{
                     width: "100%",
@@ -11698,7 +12362,7 @@ function ArtAdjustmentModal({
                   </Text>
                 </View>
               ) : null}
-              {subjectMaskComponents.length > 0 ? (
+              {subjectMaskComponents.length > 0 && adjustMode === "mask" ? (
                 <View
                   style={{
                     width: "100%",
@@ -11761,132 +12425,117 @@ function ArtAdjustmentModal({
                       </Pressable>
                     ))}
                   </View>
-                </View>
-              ) : null}
-              {subjectMaskDiagnostics?.attempts?.length ? (
-                <View
-                  style={{
-                    width: "100%",
-                    maxWidth: cropWidth,
-                    borderRadius: 14,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.2)",
-                    backgroundColor: "rgba(7, 11, 18, 0.72)",
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    gap: 8,
-                  }}
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 11, fontWeight: "900" }}>
-                      MASK DIAGNOSTICS
-                    </Text>
-                    <Text selectable={false} style={{ color: "rgba(230, 247, 251, 0.66)", fontSize: 11, fontWeight: "800" }}>
-                      {subjectMaskDiagnostics.provider ?? "provider"}
-                    </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <TextInput
+                      value={addSubjectPrompt}
+                      onChangeText={setAddSubjectPrompt}
+                      editable={!subjectMaskBusy}
+                      placeholder="Add another subject…"
+                      placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                      onSubmitEditing={() => {
+                        const value = addSubjectPrompt.trim();
+                        if (value && !subjectMaskBusy) {
+                          onAddSubjectMask(value);
+                          setAddSubjectPrompt("");
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        color: "#ffffff",
+                        fontSize: 13,
+                        fontWeight: "700",
+                        paddingHorizontal: 12,
+                        paddingVertical: 9,
+                        borderRadius: 999,
+                        borderCurve: "continuous",
+                        borderWidth: 1,
+                        borderColor: "rgba(255, 255, 255, 0.24)",
+                        backgroundColor: "rgba(255, 255, 255, 0.05)",
+                      }}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Add subject to mask"
+                      disabled={subjectMaskBusy || addSubjectPrompt.trim().length === 0}
+                      onPress={() => {
+                        const value = addSubjectPrompt.trim();
+                        if (value && !subjectMaskBusy) {
+                          onAddSubjectMask(value);
+                          setAddSubjectPrompt("");
+                        }
+                      }}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 6,
+                        paddingHorizontal: 14,
+                        paddingVertical: 9,
+                        borderRadius: 999,
+                        borderCurve: "continuous",
+                        backgroundColor: "#31d0e0",
+                        opacity: subjectMaskBusy || addSubjectPrompt.trim().length === 0 ? 0.5 : 1,
+                      }}
+                    >
+                      {subjectMaskBusy ? (
+                        <ActivityIndicator color="#04222b" />
+                      ) : (
+                        <Plus size={15} color="#04222b" strokeWidth={3} />
+                      )}
+                      <Text selectable={false} style={{ color: "#04222b", fontSize: 13, fontWeight: "900" }}>
+                        Add
+                      </Text>
+                    </Pressable>
                   </View>
-                  {subjectMaskDiagnostics.targetPrompt ? (
-                    <Text selectable style={{ color: "rgba(230, 247, 251, 0.72)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
-                      target: {subjectMaskDiagnostics.targetPrompt}
-                    </Text>
-                  ) : null}
-                  {subjectMaskDiagnostics.attempts.map((attempt, index) => {
-                    const summaryText = getSubjectMaskAttemptSummary(attempt.summary);
-                    const isSuccess = attempt.status === "success";
-
-                    return (
-                      <View
-                        key={`${attempt.endpointId}-${attempt.applyMask ? "preview" : "mask"}-${index}`}
-                        style={{
-                          borderRadius: 10,
-                          borderCurve: "continuous",
-                          borderWidth: 1,
-                          borderColor: isSuccess ? "rgba(92, 226, 157, 0.42)" : "rgba(255, 179, 171, 0.34)",
-                          backgroundColor: isSuccess ? "rgba(49, 184, 109, 0.12)" : "rgba(180, 35, 24, 0.14)",
-                          paddingHorizontal: 10,
-                          paddingVertical: 8,
-                          gap: 3,
-                        }}
-                      >
-                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                          <Text selectable style={{ flex: 1, color: "#ffffff", fontSize: 11, lineHeight: 15, fontWeight: "900" }}>
-                            {attempt.endpointId}
-                          </Text>
-                          <Text
-                            selectable={false}
-                            style={{
-                              color: isSuccess ? "#9ff0bd" : "#ffd4ce",
-                              fontSize: 10,
-                              fontWeight: "900",
-                              textTransform: "uppercase",
-                            }}
-                          >
-                            {attempt.status}
-                          </Text>
-                        </View>
-                        <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.64)", fontSize: 10, lineHeight: 14, fontWeight: "800" }}>
-                          output: {getSubjectMaskAttemptMode(attempt.applyMask)}
-                        </Text>
-                        {attempt.error ? (
-                          <Text selectable style={{ color: "#ffd4ce", fontSize: 10, lineHeight: 14, fontWeight: "700" }}>
-                            {attempt.error}
-                          </Text>
-                        ) : null}
-                        {summaryText ? (
-                          <Text selectable style={{ color: "rgba(255, 255, 255, 0.58)", fontSize: 10, lineHeight: 14, fontWeight: "700" }}>
-                            {summaryText}
-                          </Text>
-                        ) : null}
-                      </View>
-                    );
-                  })}
                 </View>
               ) : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Pick replacement image"
-                onPress={onPickPhoto}
-                style={{
-                  minHeight: 46,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.38)",
-                  backgroundColor: "rgba(255, 255, 255, 0.12)",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingHorizontal: 14,
-                  flexDirection: "row",
-                  gap: 7,
-                }}
-              >
-                <Upload size={17} color="#ffffff" strokeWidth={2.5} />
-                <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}>
-                  Pick photo
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Regenerate replacement art"
-                onPress={onGenerateArt}
-                style={{
-                  minHeight: 46,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.38)",
-                  backgroundColor: "rgba(255, 255, 255, 0.12)",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingHorizontal: 14,
-                  flexDirection: "row",
-                  gap: 7,
-                }}
-              >
-                <Palette size={17} color="#ffffff" strokeWidth={2.5} />
-                <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}>
-                  Regenerate
-                </Text>
-              </Pressable>
+              {adjustMode !== "mask" ? (
+                <>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Pick replacement image"
+                    onPress={onPickPhoto}
+                    style={{
+                      minHeight: 46,
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: "rgba(255, 255, 255, 0.38)",
+                      backgroundColor: "rgba(255, 255, 255, 0.12)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 14,
+                      flexDirection: "row",
+                      gap: 7,
+                    }}
+                  >
+                    <Upload size={17} color="#ffffff" strokeWidth={2.5} />
+                    <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}>
+                      Pick photo
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Regenerate replacement art"
+                    onPress={onGenerateArt}
+                    style={{
+                      minHeight: 46,
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: "rgba(255, 255, 255, 0.38)",
+                      backgroundColor: "rgba(255, 255, 255, 0.12)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 14,
+                      flexDirection: "row",
+                      gap: 7,
+                    }}
+                  >
+                    <Palette size={17} color="#ffffff" strokeWidth={2.5} />
+                    <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}>
+                      Regenerate
+                    </Text>
+                  </Pressable>
+                </>
+              ) : null}
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Done editing image"
@@ -13671,6 +14320,7 @@ function CardEditMenuPanel({
 
 function FrameChangeMenuPanel({
   menuWidth,
+  maxHeight,
   frameIdentity,
   selectedFrameTreatment,
   selectedShowcaseFrame,
@@ -13680,6 +14330,7 @@ function FrameChangeMenuPanel({
   onChangeShowcaseFrame,
 }: {
   menuWidth: number;
+  maxHeight?: number;
   frameIdentity: FrameIdentity;
   selectedFrameTreatment: FrameTreatment;
   selectedShowcaseFrame: ShowcaseFrameId;
@@ -13690,7 +14341,7 @@ function FrameChangeMenuPanel({
 }) {
   const { height: viewportHeight } = useWindowDimensions();
   const hasAlternateFrameTypes = compatibleFrameTreatments.length > 1;
-  const frameMenuMaxHeight = Math.min(432, Math.max(240, viewportHeight * 0.52));
+  const frameMenuMaxHeight = maxHeight ?? Math.min(432, Math.max(240, viewportHeight * 0.52));
 
   return (
     <View
@@ -13805,9 +14456,9 @@ function FrameTreatmentPreviewGrid({
           contentContainerStyle={{
             flexDirection: "row",
             flexWrap: "wrap",
-            gap: 8,
+            gap: FRAME_STYLE_PREVIEW_GRID_GAP,
             justifyContent: "center",
-            paddingRight: 6,
+            paddingRight: FRAME_STYLE_PREVIEW_SCROLL_PADDING_RIGHT,
             paddingBottom: 2,
           }}
         >
@@ -13857,7 +14508,7 @@ function FrameTreatmentPreviewButton({
       accessibilityLabel={`Choose ${FRAME_TREATMENT_LABELS[treatment]} frame type`}
       onPress={onPress}
       style={{
-        width: 76,
+        width: FRAME_STYLE_PREVIEW_BUTTON_WIDTH,
         borderRadius: 8,
         borderCurve: "continuous",
         borderWidth: selected ? 2 : 1,
@@ -13975,7 +14626,7 @@ function ShowcaseFramePreviewButton({
       accessibilityLabel={`Choose ${spec.label} showcase frame`}
       onPress={onSelect}
       style={{
-        width: 76,
+        width: FRAME_STYLE_PREVIEW_BUTTON_WIDTH,
         borderRadius: 8,
         borderCurve: "continuous",
         borderWidth: selected ? 2 : 1,
@@ -15040,7 +15691,7 @@ function CommunityPanel({
 }: {
   sets: CardSet[];
   accountUser: SupabaseUser | null;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
   const [browseMode, setBrowseMode] = useState<CommunityBrowseMode>("cards");
   const [searchText, setSearchText] = useState("");
@@ -16989,7 +17640,7 @@ function CommunityCardsPreview({
   onToggleLike: (cardId: string, liked: boolean) => void;
   onToggleFollow: (userId: string, followed: boolean) => void;
   onOpenComments: (cardId: string) => void;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const [renderedCardCount, setRenderedCardCount] = useState(COMMUNITY_INITIAL_RENDERED_CARD_COUNT);
@@ -17093,10 +17744,11 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
   onToggleLike: (cardId: string, liked: boolean) => void;
   onToggleFollow: (userId: string, followed: boolean) => void;
   onOpenComments: (cardId: string) => void;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
-  const face = getEditableCardFace(entry.card);
-  const cardName = face.name || "Untitled Card";
+  // Use the lean row fields (not the card JSON) so this works whether the feed
+  // payload carries a full card or just display metadata.
+  const cardName = entry.name || "Untitled Card";
   const label = entry.typeLine || "Community card";
   const cardAspectRatio = getTypeFrameSpec(getPreviewTypeFrame(entry.card)).aspectRatio;
 
@@ -17159,27 +17811,42 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
           paddingVertical: 12,
         }}
       >
-        {entry.imageUrl ? (
-          <Image
-            source={{ uri: entry.imageUrl }}
-            resizeMode="contain"
-            style={{
-              width: cardPreviewWidth,
-              height: cardPreviewWidth / cardAspectRatio,
-              borderRadius: 9,
-            }}
-          />
-        ) : (
-          <CardPreview
-            card={entry.card}
-            activeSection={null}
-            width={cardPreviewWidth}
-            cornerRadius={9}
-            footerOwnerName={entry.authorName}
-            onSectionPress={noopCardPreviewHandler}
-            onChange={noopCardPreviewHandler}
-          />
-        )}
+        <View
+          style={{
+            width: cardPreviewWidth,
+            height: cardPreviewWidth / cardAspectRatio,
+            borderRadius: 9,
+            overflow: "hidden",
+            backgroundColor: "#e7e9ee",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {entry.imageUrl ? (
+            // expo-image: memory + disk caching, lazy decode, and the source is a
+            // Supabase image-transform URL (right-sized, WebP) rather than the
+            // full-res export PNG. The fixed aspect-ratio box above prevents
+            // layout shift while it loads.
+            <ExpoImage
+              source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
+              contentFit="contain"
+              transition={180}
+              cachePolicy="memory-disk"
+              recyclingKey={entry.id}
+              style={{ width: "100%", height: "100%" }}
+            />
+          ) : (
+            <CardPreview
+              card={entry.card}
+              activeSection={null}
+              width={cardPreviewWidth}
+              cornerRadius={9}
+              footerOwnerName={entry.authorName}
+              onSectionPress={noopCardPreviewHandler}
+              onChange={noopCardPreviewHandler}
+            />
+          )}
+        </View>
       </View>
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -17206,7 +17873,7 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
         <CommunityFeedActionButton
           label={`Save rendered image for ${cardName}`}
           icon={<Download size={18} color="#46505d" strokeWidth={2.5} />}
-          onPress={() => void onExportCardImage(entry.card, cardName, entry.authorName)}
+          onPress={() => void onExportCardImage(entry.card, cardName, entry.authorName, entry.imageUrl)}
         />
       </View>
     </View>
@@ -17220,7 +17887,7 @@ const CommunityFallbackCardItem = memo(function CommunityFallbackCardItem({
 }: {
   entry: { id: string; setName: string; card: CardDraft };
   cardPreviewWidth: number;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string) => Promise<void>;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
   const face = getEditableCardFace(entry.card);
   const cardName = face.name || "Untitled Card";

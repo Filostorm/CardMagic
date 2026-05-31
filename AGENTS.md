@@ -6,6 +6,7 @@
 - Use existing MSE/source-pack assets as the authoritative source for frame textures, pinlines, masks, and blend assets.
 - After every code patch, update the beta Cloudflare Pages deployment when credentials and environment allow it. The automatic agent deployment target is the `beta` Pages branch; use `npm run deploy:cloudflare`.
 - Do not update the production Cloudflare Pages deployment automatically. Production is a manual promotion target; use `npm run deploy:cloudflare:production` only when the user explicitly asks to update the normal production page.
+- Always update the in-app patch notes opened from the header version number for every user-visible change before deploying. The latest app version must have a matching entry in `CARDMAGIC_PATCH_NOTES` before running either `npm run deploy:cloudflare` or `npm run deploy:cloudflare:production`.
 - Do not use Expo or EAS as a deployment target for this project. Do not run `eas deploy`, `eas build`, `expo publish`, or Expo Hosting workflows unless the user explicitly asks for native/mobile packaging work. If a local web bundle is needed, run it only through the repo's Cloudflare deployment/export scripts, not as an Expo-hosted deployment.
 - Before beta or production deployment, increment the app version in both `package.json` and `app.json` using semantic-versioning scale:
   - Large feature: increment the major version by `1.0.0`.

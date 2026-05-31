@@ -46,6 +46,8 @@ type SubjectMatteFunctionResponse = AiImageResult & {
   error?: string;
 };
 
+const SUBJECT_MATTE_EDGE_TIMEOUT_MS = 30000;
+
 export class SubjectMatteProviderError extends Error {
   readonly diagnostics?: SubjectMatteDiagnostics;
 
@@ -123,15 +125,34 @@ export async function generateSubjectMatteViaEdge({
   }
 
   const imageDataUrl = await imageUriToDataUrl(imageUri);
-  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/functions/v1/generate-subject-matte`, {
-    method: "POST",
-    headers: {
-      apikey: supabaseAnonKey,
-      authorization: `Bearer ${supabaseAnonKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ imageDataUrl, targetPrompt }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SUBJECT_MATTE_EDGE_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/functions/v1/generate-subject-matte`, {
+      method: "POST",
+      headers: {
+        apikey: supabaseAnonKey,
+        authorization: `Bearer ${supabaseAnonKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ imageDataUrl, targetPrompt }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new SubjectMatteProviderError(
+        targetPrompt
+          ? "Targeted masking is taking too long. Try one simpler visible object, or try again in a moment."
+          : "Subject masking is taking too long. Try again in a moment.",
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   const data = await response.json().catch(() => null) as SubjectMatteFunctionResponse | null;
 
   if (!response.ok) {

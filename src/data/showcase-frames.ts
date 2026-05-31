@@ -56,6 +56,12 @@ export type ShowcaseFrameSpec = {
     };
     sources: Partial<Record<FrameIdentity, ImageSourcePropType>> | ImageSourcePropType;
   };
+  powerToughnessTextRect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   previewSource: ImageSourcePropType;
 };
 
@@ -319,6 +325,7 @@ export const SHOWCASE_FRAMES: Record<ShowcaseFrameId, ShowcaseFrameSpec> = {
         colorless: require("../../assets/card-assets/basic-m15/showcase-mse/magic-m15-showcase-innistrad-double-feature.mse-style/pt/cpt.png"),
       },
     },
+    powerToughnessTextRect: { x: 597, y: 928, width: 91, height: 50 },
     previewSource: ETERNAL_NIGHT_FRAMES.black,
   },
   scrolls: {

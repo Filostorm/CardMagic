@@ -3932,6 +3932,10 @@ function RichTextEditor({
         : [],
     [autocompleteDefinitions, selectionStart, value],
   );
+  const promotableKeywordDefinitions = useMemo(
+    () => getPromotableRulesKeywordDefinitions(autocompleteDefinitions ?? []),
+    [autocompleteDefinitions],
+  );
   const multilineMinHeight = 108;
   const multilineLineHeight = 21;
   const multilineVerticalPadding = 22;
@@ -3967,6 +3971,38 @@ function RichTextEditor({
         : { start: nextStart, end: nextEnd };
     });
   }, [value.length]);
+
+  useEffect(() => {
+    if (!onChangeKeywords || promotableKeywordDefinitions.length === 0) {
+      return;
+    }
+
+    const promotion = promoteRulesTextKeywordLinesToChips(
+      value,
+      keywords,
+      promotableKeywordDefinitions,
+    );
+
+    if (!promotion) {
+      return;
+    }
+
+    onChangeKeywords(promotion.keywords);
+
+    if (promotion.rulesText !== value) {
+      onChangeText(promotion.rulesText);
+      const cursorIndex = Math.min(selectionRange.start, promotion.rulesText.length);
+      setSelectionRange({ start: cursorIndex, end: cursorIndex });
+      setForcedSelectionRange({ start: cursorIndex, end: cursorIndex });
+    }
+  }, [
+    keywords,
+    onChangeKeywords,
+    onChangeText,
+    promotableKeywordDefinitions,
+    selectionRange.start,
+    value,
+  ]);
 
   const appendSymbol = (symbol: string) => {
     if (symbol === "1") {
@@ -4369,6 +4405,7 @@ type RulesKeywordFragment = {
 const RULES_KEYWORD_WORD_PATTERN = /[A-Za-z][A-Za-z'’!-]*/g;
 const RULES_KEYWORD_WORD_CHAR_PATTERN = /[A-Za-z'’!-]/;
 const MAX_RULES_KEYWORD_SUGGESTIONS = 6;
+const PROMOTABLE_RULES_KEYWORD_CATEGORIES = new Set<KeywordCategory>(["ability", "custom"]);
 
 const RULES_KEYWORD_CATEGORY_WEIGHT: Record<KeywordCategory, number> = {
   ability: 0,
@@ -4431,6 +4468,174 @@ function RulesKeywordAutocompleteMenu({
       ))}
     </View>
   );
+}
+
+type PromotedRulesKeyword = {
+  definition: KeywordDefinition;
+  showReminder: boolean;
+};
+
+type RulesKeywordPromotion = {
+  rulesText: string;
+  keywords: CardKeyword[];
+};
+
+function getPromotableRulesKeywordDefinitions(
+  customDefinitions: KeywordDefinition[],
+): KeywordDefinition[] {
+  return getSearchKeywordCatalog(customDefinitions, false)
+    .filter((definition) => PROMOTABLE_RULES_KEYWORD_CATEGORIES.has(definition.category))
+    .sort((first, second) => second.name.length - first.name.length || first.name.localeCompare(second.name));
+}
+
+function promoteRulesTextKeywordLinesToChips(
+  rulesText: string,
+  keywords: CardKeyword[],
+  definitions: KeywordDefinition[],
+): RulesKeywordPromotion | null {
+  if (!rulesText.trim() || definitions.length === 0) {
+    return null;
+  }
+
+  const nextKeywords = [...keywords];
+  const normalizedKeywordIds = new Set(nextKeywords.map((keyword) => keyword.id));
+  const normalizedRulesText = rulesText.replace(/\r\n?/g, "\n");
+  let promotedAnyLine = false;
+  let updatedExistingReminderState = false;
+  const retainedLines: string[] = [];
+
+  for (const line of normalizedRulesText.split("\n")) {
+    const promotedKeywords = getPromotedRulesKeywordLine(line, definitions);
+
+    if (!promotedKeywords) {
+      retainedLines.push(line);
+      continue;
+    }
+
+    promotedAnyLine = true;
+
+    for (const promotedKeyword of promotedKeywords) {
+      const existingIndex = nextKeywords.findIndex((keyword) => keyword.id === promotedKeyword.definition.id);
+
+      if (existingIndex >= 0) {
+        if (
+          promotedKeyword.showReminder &&
+          !nextKeywords[existingIndex].showReminder &&
+          nextKeywords[existingIndex].reminderText?.trim()
+        ) {
+          nextKeywords[existingIndex] = {
+            ...nextKeywords[existingIndex],
+            showReminder: true,
+          };
+          updatedExistingReminderState = true;
+        }
+
+        continue;
+      }
+
+      if (normalizedKeywordIds.has(promotedKeyword.definition.id)) {
+        continue;
+      }
+
+      normalizedKeywordIds.add(promotedKeyword.definition.id);
+      nextKeywords.push({
+        ...promotedKeyword.definition,
+        showReminder: promotedKeyword.showReminder,
+      });
+    }
+  }
+
+  if (!promotedAnyLine && !updatedExistingReminderState) {
+    return null;
+  }
+
+  const promotedRulesText = normalizeRulesTextAfterKeywordPromotion(retainedLines);
+
+  if (
+    promotedRulesText === rulesText &&
+    nextKeywords.length === keywords.length &&
+    nextKeywords.every((keyword, index) => keyword === keywords[index])
+  ) {
+    return null;
+  }
+
+  return {
+    rulesText: promotedRulesText,
+    keywords: nextKeywords,
+  };
+}
+
+function getPromotedRulesKeywordLine(
+  line: string,
+  definitions: KeywordDefinition[],
+): PromotedRulesKeyword[] | null {
+  const trimmedLine = line.trim();
+
+  if (!trimmedLine || /[.;:]$/.test(trimmedLine)) {
+    return null;
+  }
+
+  const phrases = trimmedLine.split(/\s*,\s*/).filter(Boolean);
+
+  if (phrases.length === 0) {
+    return null;
+  }
+
+  const promotedKeywords: PromotedRulesKeyword[] = [];
+  const seenIds = new Set<string>();
+
+  for (const phrase of phrases) {
+    const promotedKeyword = getPromotedRulesKeywordPhrase(phrase, definitions);
+
+    if (!promotedKeyword || seenIds.has(promotedKeyword.definition.id)) {
+      return null;
+    }
+
+    seenIds.add(promotedKeyword.definition.id);
+    promotedKeywords.push(promotedKeyword);
+  }
+
+  return promotedKeywords;
+}
+
+function getPromotedRulesKeywordPhrase(
+  phrase: string,
+  definitions: KeywordDefinition[],
+): PromotedRulesKeyword | null {
+  const trimmedPhrase = phrase.trim();
+
+  for (const definition of definitions) {
+    const keywordPattern = new RegExp(
+      `^${escapeRegExp(definition.name)}(?:\\s*\\(([^)]*)\\))?$`,
+      "i",
+    );
+    const match = trimmedPhrase.match(keywordPattern);
+
+    if (!match) {
+      continue;
+    }
+
+    const inlineReminderText = match[1]?.trim();
+    const definitionReminderText = definition.reminderText?.trim();
+
+    return {
+      definition,
+      showReminder: Boolean(inlineReminderText && definitionReminderText),
+    };
+  }
+
+  return null;
+}
+
+function normalizeRulesTextAfterKeywordPromotion(lines: string[]): string {
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function getRulesKeywordAutocompleteSuggestions(

@@ -71,6 +71,8 @@ export type CommunitySetPayload = {
   updatedAt: string;
 };
 
+export type CommunitySetCardPayload = CommunityCardPayload;
+
 export type CommunityCardCommentPayload = {
   id: string;
   cardId: string;
@@ -867,6 +869,42 @@ export async function fetchCommunitySets(limit = 24, offset = 0): Promise<Commun
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+export async function fetchCommunitySetCards(setId: string): Promise<CommunitySetCardPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const params = {
+    p_set_id: setId,
+  };
+  let data: unknown;
+  let error: unknown;
+
+  try {
+    const response = await supabase.rpc("community_set_cards", params);
+    data = response.data;
+    error = response.error;
+  } catch (requestError) {
+    throw createCommunityRequestError({
+      action: "Community set cards",
+      rpc: "community_set_cards",
+      params,
+      error: requestError,
+    });
+  }
+
+  if (error) {
+    throw createCommunityRequestError({
+      action: "Community set cards",
+      rpc: "community_set_cards",
+      params,
+      error,
+    });
+  }
+
+  return ((data ?? []) as CommunityCardRow[]).flatMap(mapCommunityCardRow);
 }
 
 export async function toggleCommunityCardLike(cardId: string, liked: boolean): Promise<void> {

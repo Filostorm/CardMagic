@@ -16,7 +16,6 @@ import {
   View,
   ViewStyle,
 } from "react-native";
-import type { GestureResponderEvent } from "react-native";
 import Svg, {
   ClipPath,
   Defs,
@@ -107,11 +106,6 @@ import {
   shouldShowDfcFaceManaCost,
   toDfcFacePatch,
 } from "@/lib/dfc";
-import {
-  adjustFlattenPending,
-  compositeFlattenedMaskedArt,
-  compositeFlattenedMaskedFrame,
-} from "@/lib/export-flatten";
 import { getDisplayRulesText, getKeywordRulesText } from "@/lib/keyword-text";
 import { getLoyaltyAbilities, getStartingLoyalty } from "@/lib/planeswalker";
 import { resolveRulesTextCardNameToken } from "@/lib/rules-text";
@@ -165,10 +159,6 @@ type CardPreviewProps = {
   exportMode?: boolean;
   exportCaptureMode?: boolean;
   exportSetSymbolMode?: boolean;
-  // Pre-flatten masked layers (borderless pinline, rarity set symbol) into plain
-  // raster <img> via offscreen-canvas compositing, so the html2canvas export can
-  // capture them faithfully. Web-only; the editor uses its live mask paths.
-  exportFlattenMasks?: boolean;
   artGenerating?: boolean;
   footerOwnerName?: string;
   initialArtImageAspectRatio?: number | null;
@@ -213,7 +203,6 @@ type RulesFlavorLayout = {
   showFlavor: boolean;
   showDivider: boolean;
   centerRulesContent: boolean;
-  rulesContentVerticalAlign?: "center" | "bottom";
   rulesRect: CoordinateRect;
   flavorRect: CoordinateRect;
   dividerRect: CoordinateRect;
@@ -271,7 +260,6 @@ type FrameTreatmentLayout = {
   powerToughness: CoordinateRect;
   footer: CoordinateRect;
   showTypeLine: boolean;
-  rulesContentVerticalAlign?: "center" | "bottom";
 };
 
 const DEFAULT_FRAME_TREATMENT_LAYOUT: FrameTreatmentLayout = {
@@ -407,10 +395,9 @@ const STELLAR_SIGHTS_TREATMENT_LAYOUT: FrameTreatmentLayout = {
   manaCost: { x: 250, y: 317, width: 96, height: 30 },
   typeLine: { x: 31, y: 351, width: 304, height: 22 },
   setSymbol: { x: 0, y: 0, width: 0, height: 0 },
-  textArea: { x: 45, y: 373, width: 262, height: 105 },
+  textArea: { x: 31, y: 373, width: 304, height: 105 },
   rulesFlavorDivider: { x: 50, y: 424, width: 275, height: 2 },
   footer: { x: 24, y: 488, width: 326, height: 24 },
-  rulesContentVerticalAlign: "bottom",
 };
 
 const BATTLE_COORDINATES = {
@@ -1700,7 +1687,6 @@ function CardPreviewComponent({
   exportMode = false,
   exportCaptureMode = false,
   exportSetSymbolMode = false,
-  exportFlattenMasks = false,
   artGenerating = false,
   footerOwnerName,
   initialArtImageAspectRatio,
@@ -1841,13 +1827,12 @@ function CardPreviewComponent({
     typeFrame === "standard" && frameTreatment === "borderless"
       ? getMseM15TransparentBorderlessDarkTextboxFillSource()
       : null;
-  // Editor always renders the pinline-restore layer. In export it is rendered
-  // only when a mask-aware (foreignObject) capture backend is in use, since the
-  // layer relies on an SVG mask that html2canvas cannot rasterize.
+  // SPIKE: gate intentionally relaxed so the pinline-restore layer also renders
+  // in export. Safe only because the web export now rasterizes via
+  // modern-screenshot (foreignObject), which honors the SVG mask this layer uses.
+  // Revert by re-adding `&& !exportMode && !exportCaptureMode`.
   const borderlessPinlineOnlyRestoreMaskSource =
-    typeFrame === "standard" &&
-    frameTreatment === "borderless" &&
-    (exportFlattenMasks || (!exportMode && !exportCaptureMode))
+    typeFrame === "standard" && frameTreatment === "borderless"
       ? getMseM15BorderlessPinlineOnlyRestoreMaskSource()
       : null;
   const transparentBorderlessTextboxBlendSources =
@@ -1905,9 +1890,7 @@ function CardPreviewComponent({
   const showcasePtOverlayRect =
     showcaseSpec?.ptOverlay ? scaleShowcaseRect(showcaseSpec.ptOverlay.rect, showcaseSpec) : null;
   const showcasePowerToughnessTextRect =
-    showcaseSpec?.powerToughnessTextRect
-      ? scaleShowcaseRect(showcaseSpec.powerToughnessTextRect, showcaseSpec)
-      : showcaseSpec?.id === "dndRulebook" && showcasePtOverlayRect
+    showcaseSpec?.id === "dndRulebook" && showcasePtOverlayRect
       ? {
           x: showcasePtOverlayRect.x + 6,
           y: showcasePtOverlayRect.y + 4,
@@ -1979,7 +1962,6 @@ function CardPreviewComponent({
     titleManaRect,
     titleBaseRect,
     isRetroTreatment ? 19.5 : frameTreatment === "etchedFoil" ? 16 : 18,
-    isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroTitle : FULL_MAGIC_PACK.fontFamilies.title,
   );
   const sagaTextLayout = typeFrame === "saga" ? parseSagaText(displayedRulesText) : null;
   const futureTypeSymbolSource = isFutureshiftedShowcase
@@ -2028,18 +2010,6 @@ function CardPreviewComponent({
   const displayedRulesContentHeightScaled = displayedRulesContentHeight * scale;
   const displayedRulesVerticalInset =
     Math.max(0, (rulesLayout.rulesRect.height - displayedRulesContentHeight) / 2) * scale;
-  const rulesContentVerticalInset =
-    rulesLayout.centerRulesContent
-      ? compactRulesVerticalInset
-      : rulesLayout.rulesContentVerticalAlign === "bottom"
-        ? Math.max(0, rulesLayout.rulesRect.height - displayedRulesContentHeight - 1) * scale
-        : displayedRulesVerticalInset;
-  const rulesContentPaddingBottom =
-    rulesLayout.centerRulesContent
-      ? compactRulesVerticalInset
-      : rulesLayout.rulesContentVerticalAlign === "bottom"
-        ? 0
-        : displayedRulesVerticalInset;
   const displayedFlavorLineCount = rulesLayout.showFlavor
     ? estimateWrappedLineCount(
         displayedFlavorText,
@@ -2054,56 +2024,6 @@ function CardPreviewComponent({
     0,
     (rulesLayout.flavorRect.height - displayedFlavorContentHeight) / 2,
   ) * scale;
-  const rulesInlineHitBand = getInlineTextHitBand(
-    rulesLayout.rulesRect.height * scale,
-    rulesContentVerticalInset,
-    rulesLayout.centerRulesContent ? compactRulesContentHeightScaled : displayedRulesContentHeightScaled,
-    10 * scale,
-  );
-  const flavorInlineHitBand = getInlineTextHitBand(
-    rulesLayout.flavorRect.height * scale,
-    displayedFlavorVerticalInset,
-    displayedFlavorContentHeightScaled,
-    10 * scale,
-  );
-  // The text box's surrounding frame "ring" (the area just outside the text box,
-  // which otherwise falls through to the frame catch-all) opens the rules sheet.
-  // Expand the text-area rect outward on the sides/bottom to cover that ring.
-  const rulesSheetHitRect = (() => {
-    const base = treatmentLayout?.textArea ?? getTextAreaRect(typeFrame);
-    const sideMargin = 20;
-    const bottomMargin = 18;
-    const left = Math.max(0, base.x - sideMargin);
-    const right = Math.min(CARD_COORDINATES.width, base.x + base.width + sideMargin);
-    return {
-      x: left,
-      y: base.y,
-      width: right - left,
-      height: Math.min(CARD_COORDINATES.height - base.y, base.height + bottomMargin),
-    };
-  })();
-  const handleRulesTextPress = (event: GestureResponderEvent) => {
-    if (
-      activeSection !== "rules" &&
-      !isWithinInlineTextHitBand(event.nativeEvent.locationY, rulesInlineHitBand)
-    ) {
-      onSectionPress("rules", { openSheet: true });
-      return;
-    }
-
-    onSectionPress("rules");
-  };
-  const handleFlavorTextPress = (event: GestureResponderEvent) => {
-    if (
-      activeSection !== "rules" &&
-      !isWithinInlineTextHitBand(event.nativeEvent.locationY, flavorInlineHitBand)
-    ) {
-      onSectionPress("rules", { openSheet: true });
-      return;
-    }
-
-    onSectionPress("rules");
-  };
   useEffect(() => {
     let cancelled = false;
 
@@ -2553,8 +2473,6 @@ function CardPreviewComponent({
           right: 0,
           bottom: 0,
           left: 0,
-          zIndex: 0,
-          elevation: 0,
           ...zone("frame", 18),
         }}
       />
@@ -2577,24 +2495,14 @@ function CardPreviewComponent({
       ) : null}
 
       {typeFrame !== "saga" && hasShowcaseArtTreatment && showcaseSpec && !showArtGenerating ? (
-        exportFlattenMasks && showcaseSpec.artMask ? (
-          <FlattenedShowcaseMaskedArt
-            artUri={faceCard.artUri}
-            artRect={artRect}
-            artTransform={artTransform}
-            imageAspectRatio={imageAspectRatio}
-            spec={showcaseSpec}
-          />
-        ) : (
-          <ShowcaseMaskedArt
-            cacheKey={`showcase-art-${showcaseFrame}`}
-            artUri={faceCard.artUri}
-            artRect={artRect}
-            artTransform={artTransform}
-            imageAspectRatio={imageAspectRatio}
-            spec={showcaseSpec}
-          />
-        )
+        <ShowcaseMaskedArt
+          cacheKey={`showcase-art-${showcaseFrame}`}
+          artUri={faceCard.artUri}
+          artRect={artRect}
+          artTransform={artTransform}
+          imageAspectRatio={imageAspectRatio}
+          spec={showcaseSpec}
+        />
       ) : null}
 
       {typeFrame !== "saga" && shouldRenderArtBehindTreatmentFrame ? (
@@ -2704,22 +2612,12 @@ function CardPreviewComponent({
       {typeFrame === "standard" ? (
         showcaseSpec && showcaseFrameBlendSources ? (
           <>
-            {exportFlattenMasks ? (
-              <ShowcaseFlattenedFrameLayers
-                cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
-                source={showcaseFrameBlendSources.left}
-                splitSources={showcaseFrameBlendSources}
-                spec={showcaseSpec}
-                mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
-              />
-            ) : (
-              <ShowcaseFrameBlendImage
-                cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
-                sources={showcaseFrameBlendSources}
-                spec={showcaseSpec}
-                mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
-              />
-            )}
+            <ShowcaseFrameBlendImage
+              cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
+              sources={showcaseFrameBlendSources}
+              spec={showcaseSpec}
+              mirrorX={Boolean(resolvedMseColorBlend?.mirrorX)}
+            />
             <ShowcaseStampTreatmentBlendLayer
               cacheKey={`showcase-${showcaseFrame}-${resolvedMseColorBlend?.mode ?? "blend"}-${resolvedMseColorBlend?.key ?? frameColors.join("")}`}
               sources={showcaseFrameBlendSources}
@@ -2731,19 +2629,11 @@ function CardPreviewComponent({
           </>
         ) : showcaseSpec && treatmentFrameSource ? (
           <>
-            {exportFlattenMasks ? (
-              <ShowcaseFlattenedFrameLayers
-                cacheKey={`showcase-${showcaseFrame}`}
-                source={treatmentFrameSource}
-                spec={showcaseSpec}
-              />
-            ) : (
-              <ShowcaseFrameImage
-                cacheKey={`showcase-${showcaseFrame}`}
-                source={treatmentFrameSource}
-                spec={showcaseSpec}
-              />
-            )}
+            <ShowcaseFrameImage
+              cacheKey={`showcase-${showcaseFrame}`}
+              source={treatmentFrameSource}
+              spec={showcaseSpec}
+            />
             <ShowcaseStampTreatmentLayer
               cacheKey={`showcase-${showcaseFrame}`}
               source={treatmentFrameSource}
@@ -2803,31 +2693,18 @@ function CardPreviewComponent({
             />
           )}
           {borderlessPinlineOnlyRestoreMaskSource ? (
-            exportFlattenMasks ? (
-              <FlattenedMaskedFrameLayer
-                source={
-                  treatmentFrameSource ??
-                  artifactMainframeColorSource ??
-                  getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
-                }
-                splitSources={borderlessTreatmentFrameBlendSources}
-                maskSource={borderlessPinlineOnlyRestoreMaskSource}
-                mirrorX={Boolean(treatmentFrameMirrorX)}
-              />
-            ) : (
-              <MsePinlineOnlyRestoreLayer
-                cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}-pinline-only`}
-                source={
-                  treatmentFrameSource ??
-                  artifactMainframeColorSource ??
-                  getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
-                }
-                splitSources={borderlessTreatmentFrameBlendSources}
-                maskSource={borderlessPinlineOnlyRestoreMaskSource}
-                mirrorX={Boolean(treatmentFrameMirrorX)}
-                exportMode={exportMode}
-              />
-            )
+            <MsePinlineOnlyRestoreLayer
+              cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}-pinline-only`}
+              source={
+                treatmentFrameSource ??
+                artifactMainframeColorSource ??
+                getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
+              }
+              splitSources={borderlessTreatmentFrameBlendSources}
+              maskSource={borderlessPinlineOnlyRestoreMaskSource}
+              mirrorX={Boolean(treatmentFrameMirrorX)}
+              exportMode={exportMode}
+            />
           ) : null}
         </>
       ) : null}
@@ -3022,7 +2899,6 @@ function CardPreviewComponent({
         style={{
           ...rectStyle(titleLayout.rect),
           justifyContent: "center",
-          overflow: "hidden",
           ...(showcaseEditableHitPriority ?? futureOverlayHitPriority),
           ...zone("identity"),
         }}
@@ -3039,9 +2915,6 @@ function CardPreviewComponent({
                 : FULL_MAGIC_PACK.fontFamilies.title,
               fontSize: titleLayout.fontSize * scale,
               lineHeight: titleLayout.lineHeight * scale,
-              width: "100%",
-              maxWidth: "100%",
-              minWidth: 0,
               ...EXPORT_TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
               includeFontPadding: false,
@@ -3068,10 +2941,6 @@ function CardPreviewComponent({
                 titleLayout.fontSize * scale,
                 titleLayout.lineHeight * scale,
               ),
-              width: "100%",
-              maxWidth: "100%",
-              minWidth: 0,
-              flexShrink: 1,
               height: titleLayout.lineHeight * scale,
               ...TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
@@ -3093,9 +2962,6 @@ function CardPreviewComponent({
                 : FULL_MAGIC_PACK.fontFamilies.title,
               fontSize: titleLayout.baseNameFontSize * scale,
               lineHeight: titleLayout.baseNameLineHeight * scale,
-              width: "100%",
-              maxWidth: "100%",
-              minWidth: 0,
               ...TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
               includeFontPadding: false,
@@ -3522,7 +3388,6 @@ function CardPreviewComponent({
                 value={displayedAdventureRulesText}
                 color={frameStyle.ink}
                 fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-                italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                 fontSize={12 * scale}
                 lineHeight={14.4 * scale}
                 symbolSize={13.5 * scale}
@@ -3550,13 +3415,8 @@ function CardPreviewComponent({
           accessibilityLabel="Open rules editor"
           onPress={() => onSectionPress("rules", { openSheet: true })}
           style={{
-            ...rectStyle(rulesSheetHitRect),
+            ...rectStyle(treatmentLayout?.textArea ?? getTextAreaRect(typeFrame)),
             ...showcaseEditableHitPriority,
-            // z0 (rendered after the frame catch-all) keeps this above the frame
-            // ring but below later interactive zones (power/toughness, inline
-            // rules text) so they stay tappable.
-            zIndex: 0,
-            elevation: 0,
             ...zone("rules", 3),
           }}
         />
@@ -3565,13 +3425,11 @@ function CardPreviewComponent({
       {typeFrame !== "saga" && !isTextlessTreatment && rulesLayout.showRules ? (
         <Pressable
           accessibilityRole="button"
-          onPress={handleRulesTextPress}
+          onPress={() => onSectionPress("rules")}
           style={{
             ...rectStyle(rulesLayout.rulesRect),
             justifyContent: "center",
             ...showcaseEditableHitPriority,
-            zIndex: 3,
-            elevation: 3,
             ...zone("rules", 3),
           }}
         >
@@ -3599,8 +3457,8 @@ function CardPreviewComponent({
                 position: "absolute",
                 top: 0,
                 left: 0,
-                paddingTop: rulesContentVerticalInset,
-                paddingBottom: rulesContentPaddingBottom,
+                paddingTop: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
+                paddingBottom: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
                 paddingHorizontal: 0,
                 overflow: "hidden",
                 backgroundColor: "transparent",
@@ -3620,7 +3478,7 @@ function CardPreviewComponent({
                     : displayedRulesContentHeightScaled,
                 ),
                 position: "absolute",
-                top: rulesContentVerticalInset,
+                top: rulesLayout.centerRulesContent ? compactRulesVerticalInset : displayedRulesVerticalInset,
                 left: 0,
                 justifyContent: "center",
               }}
@@ -3629,7 +3487,6 @@ function CardPreviewComponent({
                 value={displayedRulesText}
                 color={rulesTextInk}
                 fontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroBody : FULL_MAGIC_PACK.fontFamilies.body}
-                italicFontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroItalic : FULL_MAGIC_PACK.fontFamilies.italic}
                 fontSize={rulesLayout.rulesFontSize * scale}
                 lineHeight={rulesLayout.rulesLineHeight * scale}
                 symbolSize={rulesLayout.rulesFontSize * scale * 1.18}
@@ -3650,8 +3507,6 @@ function CardPreviewComponent({
             ...rectStyle(rulesLayout.dividerRect),
             justifyContent: "center",
             ...showcaseEditableHitPriority,
-            zIndex: 3,
-            elevation: 3,
           }}
         >
           <Image
@@ -3670,13 +3525,11 @@ function CardPreviewComponent({
       {typeFrame !== "saga" && !isTextlessTreatment && rulesLayout.showFlavor ? (
         <Pressable
           accessibilityRole="button"
-          onPress={handleFlavorTextPress}
+          onPress={() => onSectionPress("rules")}
           style={{
             ...rectStyle(rulesLayout.flavorRect),
             justifyContent: activeSection === "rules" ? "flex-start" : "center",
             ...showcaseEditableHitPriority,
-            zIndex: 3,
-            elevation: 3,
             ...zone("rules", 3),
           }}
         >
@@ -3782,7 +3635,6 @@ function CardPreviewComponent({
             rarity={card.rarity}
             size={getSetSymbolMarkSize(20 * scale, card)}
             exportMode={exportMode || exportSetSymbolMode}
-            exportFlattenMasks={exportFlattenMasks}
           />
         </Pressable>
       ) : null}
@@ -4285,7 +4137,6 @@ function ClassicSplitHalfSlot({
             value={displayedRulesText}
             color={frameStyle.ink}
             fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-            italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
             fontSize={rulesMetrics.rulesFontSize * scale}
             lineHeight={rulesMetrics.rulesLineHeight * scale}
             symbolSize={rulesMetrics.rulesFontSize * scale * 1.15}
@@ -4421,7 +4272,6 @@ function FuseReminderStrip({
           value={reminderText}
           color="#1a1612"
           fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-          italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
           fontSize={12 * scale}
           lineHeight={14 * scale}
           symbolSize={13 * scale}
@@ -4780,7 +4630,6 @@ function AftermathSplitPreview({
           value={displayedTopRulesText}
           color={topFrameStyle.ink}
           fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-          italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
           fontSize={topRulesMetrics.fontSize * scale}
           lineHeight={topRulesMetrics.lineHeight * scale}
           symbolSize={topRulesMetrics.fontSize * scale * 1.15}
@@ -4888,7 +4737,6 @@ function AftermathSplitPreview({
               value={displayedBottomRulesText}
               color={bottomFrameStyle.ink}
               fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-              italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
               fontSize={bottomRulesMetrics.rulesFontSize * scale}
               lineHeight={bottomRulesMetrics.rulesLineHeight * scale}
               symbolSize={bottomRulesMetrics.rulesFontSize * scale * 1.15}
@@ -5383,8 +5231,8 @@ function getSplitHalfRulesMetrics(
 } {
   const baseRulesFontSize = 12.7;
   const baseRulesLineHeight = 15.2;
-  const baseFlavorFontSize = baseRulesFontSize;
-  const baseFlavorLineHeight = baseRulesLineHeight;
+  const baseFlavorFontSize = 12;
+  const baseFlavorLineHeight = 14.4;
   const rulesLineCount = estimateWrappedLineCount(rulesText, 31);
   const flavorLineCount = estimateWrappedLineCount(flavorText, 33);
   const rulesScale = getTextScale(
@@ -5921,7 +5769,6 @@ function PlaneswalkerPreview({
                   value={ability.text}
                   color={frameStyle.ink}
                   fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-                  italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                   fontSize={metrics.fontSize * scale}
                   lineHeight={metrics.lineHeight * scale}
                   symbolSize={metrics.fontSize * scale * 1.12}
@@ -6563,8 +6410,8 @@ function BattleFrontPreview({
                       color: battleInk,
                       fontFamily: FULL_MAGIC_PACK.fontFamilies.italic,
                       ...getWebSafeEditableTextMetrics(
-                        rulesFontSize * scale,
-                        rulesLineHeight * scale,
+                        Math.max(9.5, rulesFontSize - 1.5) * scale,
+                        Math.max(12, rulesLineHeight - 1.5) * scale,
                       ),
                       padding: 0,
                       overflow: "hidden",
@@ -6580,7 +6427,6 @@ function BattleFrontPreview({
                   value={displayedRulesText}
                   color={battleInk}
                   fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-                  italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                   fontSize={rulesFontSize * scale}
                   lineHeight={rulesLineHeight * scale}
                   symbolSize={rulesFontSize * scale * 1.16}
@@ -6598,8 +6444,8 @@ function BattleFrontPreview({
                       value={displayedFlavorText}
                       color={battleInk}
                       fontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
-                      fontSize={rulesFontSize * scale}
-                      lineHeight={rulesLineHeight * scale}
+                      fontSize={Math.max(9.5, rulesFontSize - 1.5) * scale}
+                      lineHeight={Math.max(12, rulesLineHeight - 1.5) * scale}
                       symbolSize={rulesFontSize * scale}
                     />
                   </>
@@ -7149,7 +6995,6 @@ function SagaRulesPanel({
                     value={entry.text}
                     color="#11110e"
                     fontFamily={FULL_MAGIC_PACK.fontFamilies.body}
-                    italicFontFamily={FULL_MAGIC_PACK.fontFamilies.italic}
                     fontSize={metrics.fontSize * scale}
                     lineHeight={metrics.lineHeight * scale}
                     symbolSize={metrics.fontSize * scale * 1.14}
@@ -7215,7 +7060,6 @@ function SagaTextContent({
   value,
   color,
   fontFamily,
-  italicFontFamily = fontFamily,
   fontSize,
   lineHeight,
   symbolSize,
@@ -7223,18 +7067,16 @@ function SagaTextContent({
   value: string;
   color: string;
   fontFamily: string;
-  italicFontFamily?: string;
   fontSize: number;
   lineHeight: number;
   symbolSize: number;
 }) {
-  if (INLINE_MANA_SYMBOL_PATTERN.test(value) || INLINE_PARENTHETICAL_TEXT_PATTERN.test(value)) {
+  if (/\{[^}]+\}/.test(value)) {
     return (
       <InlineSymbolText
         value={value}
         color={color}
         fontFamily={fontFamily}
-        italicFontFamily={italicFontFamily}
         fontSize={fontSize}
         lineHeight={lineHeight}
         symbolSize={symbolSize}
@@ -7262,7 +7104,6 @@ function InlineSymbolText({
   value,
   color,
   fontFamily,
-  italicFontFamily = fontFamily,
   fontSize,
   lineHeight,
   symbolSize,
@@ -7272,14 +7113,13 @@ function InlineSymbolText({
   value: string;
   color: string;
   fontFamily: string;
-  italicFontFamily?: string;
   fontSize: number;
   lineHeight: number;
   symbolSize: number;
   symbolVariant?: "modern" | "retro";
   textAlign?: "left" | "center";
 }) {
-  if (!INLINE_MANA_SYMBOL_PATTERN.test(value) && !INLINE_PARENTHETICAL_TEXT_PATTERN.test(value) && !value.includes("\n")) {
+  if (!INLINE_MANA_SYMBOL_PATTERN.test(value) && !value.includes("\n")) {
     return (
       <Text
         selectable={false}
@@ -7341,7 +7181,7 @@ function InlineSymbolText({
             selectable={false}
             style={{
               color,
-              fontFamily: token.italic ? italicFontFamily : fontFamily,
+              fontFamily,
               fontSize,
               lineHeight,
               includeFontPadding: false,
@@ -7357,19 +7197,18 @@ function InlineSymbolText({
 }
 
 const INLINE_MANA_SYMBOL_PATTERN = /\{[^}]+\}/;
-const INLINE_PARENTHETICAL_TEXT_PATTERN = /\([^)]*\)/;
 
 function tokenizeInlineSymbols(value: string): Array<
-  | { type: "text"; value: string; italic?: boolean }
+  | { type: "text"; value: string }
   | { type: "symbol"; value: string }
   | { type: "newline"; value: string; blank?: boolean }
 > {
   const tokens: Array<
-    | { type: "text"; value: string; italic?: boolean }
+    | { type: "text"; value: string }
     | { type: "symbol"; value: string }
     | { type: "newline"; value: string; blank?: boolean }
   > = [];
-  const pattern = /(\{[^}]+\}|\([^)]*\)|\n)/g;
+  const pattern = /(\{[^}]+\}|\n)/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
 
@@ -7382,8 +7221,6 @@ function tokenizeInlineSymbols(value: string): Array<
 
     if (rawToken === "\n") {
       tokens.push({ type: "newline", value: rawToken, blank: tokens[tokens.length - 1]?.type === "newline" });
-    } else if (rawToken.startsWith("(") && rawToken.endsWith(")")) {
-      pushTextTokens(tokens, rawToken, true);
     } else {
       const symbol = rawToken.slice(1, -1).trim();
       tokens.push(symbol ? { type: "symbol", value: symbol } : { type: "text", value: rawToken });
@@ -7401,17 +7238,16 @@ function tokenizeInlineSymbols(value: string): Array<
 
 function pushTextTokens(
   tokens: Array<
-    | { type: "text"; value: string; italic?: boolean }
+    | { type: "text"; value: string }
     | { type: "symbol"; value: string }
     | { type: "newline"; value: string; blank?: boolean }
   >,
   text: string,
-  italic = false,
 ) {
   const parts = text.match(/\S+\s*|\s+/g) ?? [];
 
   for (const part of parts) {
-    tokens.push({ type: "text", value: part, italic });
+    tokens.push({ type: "text", value: part });
   }
 }
 
@@ -8005,101 +7841,6 @@ function ShowcaseMaskedArt({
   );
 }
 
-function FlattenedShowcaseMaskedArt({
-  artUri,
-  artRect,
-  artTransform,
-  imageAspectRatio,
-  spec,
-}: {
-  artUri?: string;
-  artRect: CoordinateRect;
-  artTransform: ArtTransform;
-  imageAspectRatio?: number | null;
-  spec: ShowcaseFrameSpec;
-}) {
-  const [uri, setUri] = useState<string | null>(null);
-  const maskUri = spec.artMask ? getImageSourceUri(spec.artMask.source) : null;
-  const overlayUri = spec.artOverlay ? getImageSourceUri(spec.artOverlay.source) : null;
-  const maskRect =
-    spec.artMask?.coordinateSpace === "card"
-      ? { x: 0, y: 0, width: CARD_COORDINATES.width, height: CARD_COORDINATES.height }
-      : artRect;
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !maskUri || typeof document === "undefined") {
-      return;
-    }
-
-    let cancelled = false;
-    let settled = false;
-    adjustFlattenPending(1);
-    const release = () => {
-      if (!settled) {
-        settled = true;
-        adjustFlattenPending(-1);
-      }
-    };
-
-    compositeFlattenedMaskedArt({
-      artUri: artUri ?? null,
-      maskUri,
-      overlayUri,
-      overlayOpacity: spec.artOverlay?.opacity ?? 1,
-      artRect,
-      maskRect,
-      artTransform,
-      imageAspectRatio,
-      grayscale: spec.artFilter === "grayscale",
-    })
-      .then((result) => {
-        if (!cancelled) {
-          setUri(result);
-        }
-      })
-      .catch((error) => {
-        console.warn("[CardMagic export] flatten showcase art failed.", error);
-      })
-      .finally(release);
-
-    return () => {
-      cancelled = true;
-      release();
-    };
-  }, [
-    artUri,
-    maskUri,
-    overlayUri,
-    spec.artOverlay?.opacity,
-    spec.artFilter,
-    artRect.x,
-    artRect.y,
-    artRect.width,
-    artRect.height,
-    maskRect.x,
-    maskRect.y,
-    maskRect.width,
-    maskRect.height,
-    artTransform.offsetX,
-    artTransform.offsetY,
-    artTransform.scale,
-    imageAspectRatio,
-  ]);
-
-  if (!uri) {
-    return null;
-  }
-
-  return (
-    <Image
-      accessibilityIgnoresInvertColors
-      source={{ uri }}
-      resizeMode="stretch"
-      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%" }}
-    />
-  );
-}
-
 function ShowcaseStampTreatmentLayer({
   source,
   frameIdentity,
@@ -8569,49 +8310,6 @@ function ShowcaseFrameBlendImage({
   );
 }
 
-function ShowcaseFlattenedFrameLayers({
-  source,
-  splitSources,
-  spec,
-  cacheKey,
-  mirrorX = false,
-}: {
-  source: ImageSourcePropType;
-  splitSources?: SplitFrameSources | null;
-  spec: ShowcaseFrameSpec | null;
-  cacheKey: string;
-  mirrorX?: boolean;
-}) {
-  const frameMasks = spec?.frameMasks ?? (spec?.frameMask ? [spec.frameMask] : []);
-
-  if (!spec || frameMasks.length === 0) {
-    return splitSources ? (
-      <MseSplitFrameImage
-        cacheKey={cacheKey}
-        sources={splitSources}
-        mirrorX={mirrorX}
-        exportMode
-      />
-    ) : (
-      <DirectFrameImage source={source} resizeMode="stretch" />
-    );
-  }
-
-  return (
-    <>
-      {frameMasks.map((frameMask, index) => (
-        <FlattenedMaskedFrameLayer
-          key={`${cacheKey}-flattened-showcase-${index}`}
-          source={source}
-          splitSources={splitSources}
-          maskSource={frameMask}
-          mirrorX={mirrorX}
-        />
-      ))}
-    </>
-  );
-}
-
 function ShowcaseLinearBlendImage({
   sources,
   designWidth,
@@ -8953,66 +8651,6 @@ function getImageSourceUri(source: ImageSourcePropType): string | null {
   return resolveAssetSource?.(source)?.uri ?? null;
 }
 
-function FlattenedMaskedFrameLayer({
-  source,
-  splitSources,
-  maskSource,
-  mirrorX,
-}: {
-  source: ImageSourcePropType;
-  splitSources?: SplitFrameSources | null;
-  maskSource: ImageSourcePropType;
-  mirrorX: boolean;
-}) {
-  const [uri, setUri] = useState<string | null>(null);
-  const sourceUri = getImageSourceUri(source);
-  const leftUri = splitSources ? getImageSourceUri(splitSources.left) : null;
-  const rightUri = splitSources ? getImageSourceUri(splitSources.right) : null;
-  const maskUri = getImageSourceUri(maskSource);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !maskUri || typeof document === "undefined") {
-      return;
-    }
-    let cancelled = false;
-    let settled = false;
-    adjustFlattenPending(1);
-    const release = () => {
-      if (!settled) {
-        settled = true;
-        adjustFlattenPending(-1);
-      }
-    };
-    compositeFlattenedMaskedFrame({ sourceUri, leftUri, rightUri, maskUri, mirrorX })
-      .then((result) => {
-        if (!cancelled) {
-          setUri(result);
-        }
-      })
-      .catch((error) => {
-        console.warn("[CardMagic export] flatten composite failed.", error);
-      })
-      .finally(release);
-    return () => {
-      cancelled = true;
-      release();
-    };
-  }, [sourceUri, leftUri, rightUri, maskUri, mirrorX]);
-
-  if (!uri) {
-    return null;
-  }
-
-  return (
-    <Image
-      accessibilityIgnoresInvertColors
-      source={{ uri }}
-      resizeMode="stretch"
-      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%" }}
-    />
-  );
-}
-
 function MsePinlineOnlyRestoreLayer({
   source,
   splitSources,
@@ -9028,9 +8666,11 @@ function MsePinlineOnlyRestoreLayer({
   mirrorX?: boolean;
   exportMode: boolean;
 }) {
-  // SVG mask path, used by the editor and by native export (react-native-view-shot
-  // rasterizes react-native-svg fine). Web export instead pre-flattens via
-  // FlattenedMaskedFrameLayer, since html2canvas cannot rasterize masks.
+  // SPIKE: previously the web-export path used CssMaskedFrameImage as an
+  // html2canvas workaround (html2canvas can't mask). modern-screenshot rasterizes
+  // the SVG mask directly, so export now uses the exact same SVG path as the
+  // editor — pixel-identical. Revert by restoring the `web && exportMode` early
+  // return to CssMaskedFrameImage.
   const maskId = `${cacheKey}-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const gradientId = `${cacheKey}-split-gradient`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const rightMaskId = `${cacheKey}-right-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -9882,8 +9522,7 @@ function shouldShowDfcColorIndicator(typeFrame: TypeFrame, card: CardDraft): boo
 }
 
 function getSetSymbolMarkSize(baseSize: number, card: CardDraft): number {
-  const visualBaseSize = baseSize * 0.9;
-  return card.setSymbolUri && card.setSymbolUsesRarityTreatment ? visualBaseSize * 1.32 : visualBaseSize;
+  return card.setSymbolUri && card.setSymbolUsesRarityTreatment ? baseSize * 1.35 : baseSize;
 }
 
 function shouldRenderDfcFrontWithStandardTreatmentGeometry(treatment: FrameTreatment): boolean {
@@ -10063,37 +9702,6 @@ function getWatermarkRect(typeFrame: TypeFrame, rulesLayout: RulesFlavorLayout):
   }
 
   return rulesLayout.rulesRect;
-}
-
-function getInlineTextHitBand(
-  containerHeight: number,
-  contentTopInset: number,
-  contentHeight: number,
-  padding: number,
-): { top: number; height: number } {
-  const fallbackHeight = Math.min(containerHeight, 28);
-  const hitContentHeight = contentHeight > 0 ? contentHeight : fallbackHeight;
-  const rawTop = contentTopInset - padding;
-  const rawBottom = contentTopInset + hitContentHeight + padding;
-  const top = clamp(rawTop, 0, containerHeight);
-  const minBottom = Math.min(containerHeight, top + fallbackHeight);
-  const bottom = clamp(rawBottom, minBottom, containerHeight);
-
-  return {
-    top,
-    height: Math.max(1, bottom - top),
-  };
-}
-
-function isWithinInlineTextHitBand(
-  locationY: number | undefined,
-  band: { top: number; height: number },
-): boolean {
-  if (typeof locationY !== "number") {
-    return true;
-  }
-
-  return locationY >= band.top && locationY <= band.top + band.height;
 }
 
 function getTypeLineRect(typeFrame: TypeFrame, showColorIndicator = false): CoordinateRect {
@@ -10757,9 +10365,8 @@ function getTitleLayout(
   manaRect: CoordinateRect,
   baseRect: CoordinateRect = CARD_COORDINATES.name,
   baseFontSize = 18,
-  fontFamily: string = FULL_MAGIC_PACK.fontFamilies.title,
 ): TitleLayout {
-  const titleGap = 4;
+  const titleGap = 8;
   const width = clamp(manaRect.x - baseRect.x - titleGap, 24, baseRect.width);
   const rect = {
     ...baseRect,
@@ -10770,10 +10377,10 @@ function getTitleLayout(
   const titleBaseFontSize = hasBaseCardName ? baseFontSize * 0.74 : baseFontSize;
   const baseNameBaseFontSize = hasBaseCardName ? baseFontSize * 0.47 : 0;
   const textWidth = Math.max(
-    measureSingleLineTextWidth(name || "Untitled", titleBaseFontSize, fontFamily),
-    hasBaseCardName ? measureSingleLineTextWidth(baseCardName, baseNameBaseFontSize, fontFamily) : 0,
+    estimateSingleLineTextWidth(name || "Untitled", titleBaseFontSize),
+    hasBaseCardName ? estimateSingleLineTextWidth(baseCardName, baseNameBaseFontSize) : 0,
   );
-  const fitScale = clamp(availableWidth / Math.max(1, textWidth), 0.24, 1);
+  const fitScale = clamp(availableWidth / textWidth, 0.3, 1);
   const fontSize = titleBaseFontSize * fitScale;
   const baseNameFontSize = baseNameBaseFontSize * fitScale;
 
@@ -10797,7 +10404,7 @@ function getManaCostEditorFontSize(manaCost: string, width: number, baseFontSize
 }
 
 function getTypeLineFontSize(typeLine: string, width: number, baseFontSize = 14): number {
-  const availableWidth = Math.max(1, width - 1);
+  const availableWidth = Math.max(1, width - 3);
   const textWidth = estimateSingleLineTextWidth(typeLine || "Card Type", baseFontSize);
 
   return baseFontSize * clamp(availableWidth / textWidth, 0.58, 1);
@@ -10824,7 +10431,7 @@ function getTypeLineSetSymbolInset(typeLineRect: CoordinateRect, setSymbolRect: 
   const typeRight = typeLineRect.x + typeLineRect.width;
   const symbolOverlap = typeRight - setSymbolRect.x;
 
-  return Math.max(0, symbolOverlap + 1);
+  return Math.max(0, symbolOverlap + 5);
 }
 
 function getBattleNameFontSize(name: string, baseCardName = ""): number {
@@ -10854,7 +10461,7 @@ function estimateSingleLineTextWidth(text: string, fontSize: number): number {
     }
 
     if ("MW@#%&".includes(character)) {
-      return width + fontSize * 0.82;
+      return width + fontSize * 0.8;
     }
 
     if ("ilI1.,'|".includes(character)) {
@@ -10865,30 +10472,8 @@ function estimateSingleLineTextWidth(text: string, fontSize: number): number {
       return width + fontSize * 0.62;
     }
 
-    return width + fontSize * 0.52;
+    return width + fontSize * 0.5;
   }, 0);
-}
-
-function measureSingleLineTextWidth(text: string, fontSize: number, fontFamily: string): number {
-  const normalizedText = text.trim();
-  const estimatedWidth = estimateSingleLineTextWidth(normalizedText, fontSize);
-
-  if (Platform.OS !== "web" || typeof document === "undefined") {
-    return estimatedWidth;
-  }
-
-  try {
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return estimatedWidth;
-    }
-
-    context.font = `700 ${fontSize}px ${fontFamily}`;
-    return Math.max(estimatedWidth * 0.82, context.measureText(normalizedText).width * 1.025);
-  } catch {
-    return estimatedWidth;
-  }
 }
 
 function getRulesFlavorLayout(
@@ -10916,8 +10501,8 @@ function getRulesFlavorLayout(
   const showDivider = hasRules && hasFlavor;
   const baseRulesFontSize = useRetroTypography ? 14 : 12.8;
   const baseRulesLineHeight = useRetroTypography ? 16.8 : 16.2;
-  const baseFlavorFontSize = baseRulesFontSize;
-  const baseFlavorLineHeight = baseRulesLineHeight;
+  const baseFlavorFontSize = useRetroTypography ? 14 : 12.4;
+  const baseFlavorLineHeight = useRetroTypography ? 16.8 : 15.8;
   const charsPerLine = Math.max(18, Math.floor(textArea.width / 6.15));
   const rulesLineCount = estimateWrappedLineCount(card.rulesText, charsPerLine);
   const flavorLineCount = estimateWrappedLineCount(card.flavorText, charsPerLine);
@@ -10965,7 +10550,6 @@ function getRulesFlavorLayout(
       showFlavor: true,
       showDivider: true,
       centerRulesContent: false,
-      rulesContentVerticalAlign: treatmentLayout?.rulesContentVerticalAlign,
       rulesRect: { ...areaRect, y, height: rulesHeight },
       flavorRect: {
         ...areaRect,
@@ -11001,7 +10585,6 @@ function getRulesFlavorLayout(
     showFlavor,
     showDivider: false,
     centerRulesContent: shouldCenterCompactRulesBlock,
-    rulesContentVerticalAlign: treatmentLayout?.rulesContentVerticalAlign,
     rulesRect: showRules ? { ...areaRect, y: singleY, height: singleHeight } : hiddenRect,
     flavorRect: showFlavor ? { ...areaRect, y: singleY, height: singleHeight } : hiddenRect,
     dividerRect: { ...dividerRect, y: singleY + singleHeight },

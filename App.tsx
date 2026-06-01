@@ -4,7 +4,7 @@ import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
-import { ArrowDown, ArrowUp, BookOpen, Bug, Check, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, Users, X } from "lucide-react-native";
+import { ArrowDown, ArrowUp, BookOpen, Bug, Check, ChevronDown, ChevronUp, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, Users, X } from "lucide-react-native";
 import { Component, memo, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -99,6 +99,7 @@ import {
   fetchCommunityCardComments,
   fetchCommunityFeaturedCard,
   fetchCommunityPolls,
+  fetchCommunitySetCards,
   fetchCommunitySets,
   fetchRemoteCustomSetSymbols,
   fetchRemoteCardSets,
@@ -125,6 +126,7 @@ import {
   type CommunityFeedbackType,
   type CommunityPollPayload,
   type CommunityPollSelectionType,
+  type CommunitySetCardPayload,
   type CommunitySetPayload,
 } from "@/lib/account-sets";
 import {
@@ -218,10 +220,57 @@ type PatchNoteEntry = {
   version: string;
   date: string;
   title: string;
-  bullets: string[];
+  bullets: PatchNoteBullet[];
 };
 
+type PatchNoteBullet =
+  | string
+  | {
+      text: string;
+      linkLabel: string;
+      linkUrl: string;
+    };
+
 const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
+  {
+    version: "3.24.14",
+    date: "May 31, 2026",
+    title: "Community set preview polish",
+    bullets: [
+      "Flavor text now uses the same computed font size and line height as rules text across normal, split, and battle card previews.",
+      "Community set card previews no longer add the extra wrapper bands above and below rendered cards.",
+    ],
+  },
+  {
+    version: "3.24.13",
+    date: "May 31, 2026",
+    title: "Community set browsing",
+    bullets: [
+      "Community set rows now expand on tap so users can inspect the public cards inside each set.",
+      "Set detail loading uses a dedicated public Supabase RPC with card previews and rendered-image export actions.",
+    ],
+  },
+  {
+    version: "3.24.12",
+    date: "May 31, 2026",
+    title: "Beta link",
+    bullets: [
+      {
+        text: "Current beta build:",
+        linkLabel: "beta.cardmagic-5dy.pages.dev",
+        linkUrl: "https://beta.cardmagic-5dy.pages.dev",
+      },
+    ],
+  },
+  {
+    version: "3.24.11",
+    date: "May 31, 2026",
+    title: "Rules keyword chips",
+    bullets: [
+      "Rules-sheet keyword ability lines now save as persisted keyword chips below the rules editor.",
+      "Toggling a keyword chip now controls whether that keyword's reminder text appears on card previews and exports.",
+    ],
+  },
   {
     version: "3.24.10",
     date: "May 31, 2026",
@@ -10475,6 +10524,10 @@ async function copyTextToClipboard(text: string) {
   return false;
 }
 
+function getPatchNoteBulletKey(bullet: PatchNoteBullet): string {
+  return typeof bullet === "string" ? bullet : `${bullet.text}-${bullet.linkUrl}`;
+}
+
 function PatchNotesModal({
   visible,
   appVersion,
@@ -10601,13 +10654,35 @@ function PatchNotesModal({
                   </Text>
                 </View>
                 <View style={{ gap: 8 }}>
-                  {entry.bullets.map((bullet) => (
-                    <View key={bullet} style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+                  {entry.bullets.map((bullet, index) => (
+                    <View
+                      key={`${entry.version}-${index}-${getPatchNoteBulletKey(bullet)}`}
+                      style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}
+                    >
                       <Text selectable={false} style={{ color: "#0b7180", fontSize: 15, lineHeight: 19, fontWeight: "900" }}>
                         •
                       </Text>
                       <Text selectable={false} style={{ flex: 1, color: "#2a303a", fontSize: 13, lineHeight: 19, fontWeight: "700" }}>
-                        {bullet}
+                        {typeof bullet === "string" ? (
+                          bullet
+                        ) : (
+                          <>
+                            {bullet.text}{" "}
+                            <Text
+                              accessibilityRole="link"
+                              onPress={() => void Linking.openURL(bullet.linkUrl)}
+                              style={{
+                                color: "#0b7180",
+                                fontSize: 13,
+                                lineHeight: 19,
+                                fontWeight: "900",
+                                textDecorationLine: "underline",
+                              }}
+                            >
+                              {bullet.linkLabel}
+                            </Text>
+                          </>
+                        )}
                       </Text>
                     </View>
                   ))}
@@ -15700,6 +15775,10 @@ function CommunityPanel({
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [communityCards, setCommunityCards] = useState<CommunityCardPayload[]>([]);
   const [communitySets, setCommunitySets] = useState<CommunitySetPayload[]>([]);
+  const [selectedCommunitySetId, setSelectedCommunitySetId] = useState<string | null>(null);
+  const [communitySetCardsBySetId, setCommunitySetCardsBySetId] = useState<Record<string, CommunitySetCardPayload[]>>({});
+  const [communitySetCardsLoadingId, setCommunitySetCardsLoadingId] = useState<string | null>(null);
+  const [communitySetCardsErrorBySetId, setCommunitySetCardsErrorBySetId] = useState<Record<string, string>>({});
   const [featuredCard, setFeaturedCard] = useState<CommunityCardPayload | null>(null);
   const [communityBusy, setCommunityBusy] = useState(false);
   const [communitySetsLoaded, setCommunitySetsLoaded] = useState(false);
@@ -15903,6 +15982,39 @@ function CommunityPanel({
   const handleCommunityCommentCountChange = useCallback((cardId: string, commentCount: number) => {
     patchCommunityCard(cardId, { commentCount });
   }, [patchCommunityCard]);
+
+  const openCommunitySet = useCallback((set: CommunitySetPayload) => {
+    const nextSelectedSetId = selectedCommunitySetId === set.id ? null : set.id;
+    setSelectedCommunitySetId(nextSelectedSetId);
+
+    if (!nextSelectedSetId || communitySetCardsBySetId[set.id] || communitySetCardsLoadingId === set.id) {
+      return;
+    }
+
+    setCommunitySetCardsLoadingId(set.id);
+    setCommunitySetCardsErrorBySetId((current) => {
+      const next = { ...current };
+      delete next[set.id];
+      return next;
+    });
+
+    void fetchCommunitySetCards(set.id)
+      .then((cards) => {
+        setCommunitySetCardsBySetId((current) => ({
+          ...current,
+          [set.id]: cards,
+        }));
+      })
+      .catch((error) => {
+        setCommunitySetCardsErrorBySetId((current) => ({
+          ...current,
+          [set.id]: error instanceof Error ? error.message : "Unable to load this set.",
+        }));
+      })
+      .finally(() => {
+        setCommunitySetCardsLoadingId((current) => current === set.id ? null : current);
+      });
+  }, [communitySetCardsBySetId, communitySetCardsLoadingId, selectedCommunitySetId]);
 
   useEffect(() => {
     void loadCommunityCards();
@@ -16189,7 +16301,15 @@ function CommunityPanel({
             onExportCardImage={onExportCardImage}
           />
         ) : (
-          <CommunitySetsPreview sets={filteredSets} />
+          <CommunitySetsPreview
+            sets={filteredSets}
+            selectedSetId={selectedCommunitySetId}
+            cardsBySetId={communitySetCardsBySetId}
+            loadingSetId={communitySetCardsLoadingId}
+            errorBySetId={communitySetCardsErrorBySetId}
+            onOpenSet={openCommunitySet}
+            onExportCardImage={onExportCardImage}
+          />
         )}
       </View>
       <CommunityCommentsPopover
@@ -17996,7 +18116,29 @@ function CommunityFeedActionButton({
   );
 }
 
-function CommunitySetsPreview({ sets }: { sets: CommunitySetPayload[] }) {
+function CommunitySetsPreview({
+  sets,
+  selectedSetId,
+  cardsBySetId,
+  loadingSetId,
+  errorBySetId,
+  onOpenSet,
+  onExportCardImage,
+}: {
+  sets: CommunitySetPayload[];
+  selectedSetId: string | null;
+  cardsBySetId: Record<string, CommunitySetCardPayload[]>;
+  loadingSetId: string | null;
+  errorBySetId: Record<string, string>;
+  onOpenSet: (set: CommunitySetPayload) => void;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
+}) {
+  const { width: windowWidth } = useWindowDimensions();
+  const cardPreviewWidth =
+    windowWidth >= 900 ? 360 :
+    windowWidth >= 620 ? 330 :
+    Math.min(320, Math.max(270, windowWidth - 56));
+
   if (sets.length === 0) {
     return (
       <CommunityEmptyState
@@ -18009,47 +18151,170 @@ function CommunitySetsPreview({ sets }: { sets: CommunitySetPayload[] }) {
 
   return (
     <View style={{ padding: 12, gap: 10 }}>
-      {sets.map((set) => (
-        <View
-          key={set.id}
-          style={{
-            minHeight: 72,
-            borderRadius: 10,
-            borderCurve: "continuous",
-            borderWidth: 1,
-            borderColor: "#eceef2",
-            backgroundColor: "#fbfcfe",
-            padding: 10,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
+      {sets.map((set) => {
+        const expanded = selectedSetId === set.id;
+        const setCards = cardsBySetId[set.id] ?? [];
+        const loading = loadingSetId === set.id;
+        const error = errorBySetId[set.id];
+
+        return (
           <View
+            key={set.id}
             style={{
-              width: 44,
-              height: 44,
               borderRadius: 10,
-              backgroundColor: "#151820",
-              alignItems: "center",
-              justifyContent: "center",
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: expanded ? "#9edbe5" : "#eceef2",
+              backgroundColor: expanded ? "#f7fdfe" : "#fbfcfe",
+              overflow: "hidden",
             }}
           >
-            <BookOpen size={21} color="#ffffff" strokeWidth={2.5} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${expanded ? "Collapse" : "View"} ${set.name}`}
+              accessibilityState={{ expanded }}
+              onPress={() => onOpenSet(set)}
+              style={({ pressed }) => ({
+                minHeight: 72,
+                padding: 10,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 10,
+                opacity: pressed ? 0.72 : 1,
+              })}
+            >
+              <View
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 10,
+                  backgroundColor: "#151820",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <BookOpen size={21} color="#ffffff" strokeWidth={2.5} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+                  {set.name}
+                </Text>
+                <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+                  {set.authorName} · Level {set.authorLevel} · {set.cardCount} {set.cardCount === 1 ? "card" : "cards"}
+                </Text>
+                <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
+                  {set.code ?? "SET"}
+                </Text>
+              </View>
+              {expanded ? (
+                <ChevronUp size={18} color="#46505d" strokeWidth={2.6} />
+              ) : (
+                <ChevronDown size={18} color="#46505d" strokeWidth={2.6} />
+              )}
+            </Pressable>
+
+            {expanded ? (
+              <View style={{ borderTopWidth: 1, borderTopColor: "#e2f1f4", padding: 10, gap: 12 }}>
+                {loading ? (
+                  <View style={{ minHeight: 54, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 }}>
+                    <ActivityIndicator color="#0b7180" size="small" />
+                    <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "900" }}>
+                      Loading set cards
+                    </Text>
+                  </View>
+                ) : error ? (
+                  <Text selectable style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                    {error}
+                  </Text>
+                ) : setCards.length === 0 ? (
+                  <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                    No public cards are available for this set.
+                  </Text>
+                ) : (
+                  setCards.map((entry) => (
+                    <CommunitySetCardPreview
+                      key={entry.id}
+                      entry={entry}
+                      cardPreviewWidth={cardPreviewWidth}
+                      onExportCardImage={onExportCardImage}
+                    />
+                  ))
+                )}
+              </View>
+            ) : null}
           </View>
-          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
-              {set.name}
-            </Text>
-            <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-              {set.authorName} · Level {set.authorLevel} · {set.cardCount} {set.cardCount === 1 ? "card" : "cards"}
-            </Text>
-            <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-              {set.code ?? "SET"}
-            </Text>
-          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function CommunitySetCardPreview({
+  entry,
+  cardPreviewWidth,
+  onExportCardImage,
+}: {
+  entry: CommunitySetCardPayload;
+  cardPreviewWidth: number;
+  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
+}) {
+  const cardName = entry.name || "Untitled Card";
+  const cardAspectRatio = getTypeFrameSpec(getPreviewTypeFrame(entry.card)).aspectRatio;
+
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={{ gap: 2 }}>
+        <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+          {cardName}
+        </Text>
+        <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
+          {entry.typeLine || "Community card"}
+        </Text>
+      </View>
+      <View
+        style={{
+          alignItems: "center",
+          backgroundColor: "transparent",
+        }}
+      >
+        <View
+          style={{
+            width: cardPreviewWidth,
+            height: cardPreviewWidth / cardAspectRatio,
+            borderRadius: 9,
+            overflow: "hidden",
+            backgroundColor: "#e7e9ee",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {entry.imageUrl ? (
+            <ExpoImage
+              source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
+              contentFit="contain"
+              transition={180}
+              cachePolicy="memory-disk"
+              recyclingKey={`set-${entry.id}`}
+              style={{ width: "100%", height: "100%" }}
+            />
+          ) : (
+            <CardPreview
+              card={entry.card}
+              activeSection={null}
+              width={cardPreviewWidth}
+              cornerRadius={9}
+              footerOwnerName={entry.authorName}
+              onSectionPress={noopCardPreviewHandler}
+              onChange={noopCardPreviewHandler}
+            />
+          )}
         </View>
-      ))}
+      </View>
+      <CommunityFeedActionButton
+        label={`Save rendered image for ${cardName}`}
+        icon={<Download size={18} color="#46505d" strokeWidth={2.5} />}
+        onPress={() => void onExportCardImage(entry.card, cardName, entry.authorName, entry.imageUrl)}
+      />
     </View>
   );
 }

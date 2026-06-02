@@ -23,6 +23,7 @@ export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
     version: "3.32.0",
     date: "2026-06-02",
     title: "Set viewer notifications",
+    branches: ["beta", "main"],
     bullets: [
       "Community follows now subscribe viewers to individual sets instead of creator accounts.",
       "The community set directory now shows viewer counts and lets signed-in users follow or stop viewing each set.",

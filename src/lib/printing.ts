@@ -38,7 +38,9 @@ export function getModernSetLanguageLine(card: CardDraft) {
 }
 
 export function getModernArtistLine(card: CardDraft) {
-  return fallbackText(card.artist, "Local Artist").toUpperCase();
+  const artist = fallbackText(card.artist, "Unknown Artist");
+
+  return (artist.toLowerCase() === "local artist" ? "Unknown Artist" : artist).toUpperCase();
 }
 
 export function getModernCopyrightLine(card: CardDraft) {

@@ -1,6 +1,6 @@
 {
   "name": "cardmagic",
-  "version": "3.32.1",
+  "version": "3.33.18",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --port 8082",
@@ -9,7 +9,7 @@
     "web": "expo start --web --port 8082",
     "clean:duplicates": "node scripts/clean-duplicate-artifacts.mjs",
     "export:web": "EXPO_USE_FAST_RESOLVER=0 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear",
-    "export:cloudflare": "npm run clean:duplicates && npm run export:web && npm run clean:duplicates && node scripts/prepare-cloudflare-pages.mjs",
+    "export:cloudflare": "npm run clean:duplicates && node scripts/clean-cloudflare-output.mjs && npm run export:web && npm run clean:duplicates && node scripts/prepare-cloudflare-pages.mjs",
     "release:verify": "node scripts/verify-release-notes.mjs",
     "release:metadata": "node scripts/update-release-metadata.mjs",
     "predeploy:web": "npm run export:web",

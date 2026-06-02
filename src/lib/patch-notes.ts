@@ -20,6 +20,250 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.33.18",
+    date: "2026-06-02",
+    title: "Set collaboration and render cache release",
+    branches: ["beta", "main"],
+    bullets: [
+      "Collaborative sets now load from a per-account local cache before Supabase revalidates them, so the Sets tab can show shared workspaces immediately after sign-in.",
+      "Set-card saves now render full-quality card images, upload them to canonical set/card Storage paths, and re-render when saved card data changes.",
+      "Public shared-set viewers can backfill missing card renders through set-scoped Storage and RPC authorization without creating duplicate per-viewer images.",
+    ],
+  },
+  {
+    version: "3.33.17",
+    date: "2026-06-02",
+    title: "Public set image backfill",
+    bullets: [
+      "Public shared-set viewers can now persist backfilled card renders to the canonical set/card Storage path.",
+      "Set-card image uploads now validate the Storage path against an actual card in that set before allowing the write.",
+      "The set-card image URL attach path now accepts authorized public backfills while still rejecting unrelated cards.",
+    ],
+  },
+  {
+    version: "3.33.16",
+    date: "2026-06-02",
+    title: "Canonical set renders",
+    bullets: [
+      "Set-card saves now render full-quality card images before uploading them for future set and feed viewing.",
+      "Shared-set backfills now upload to a canonical set/card Storage path instead of creating duplicate per-viewer images.",
+      "Editing and overwriting a saved set card clears the prior rendered image so the updated card is re-rendered and reattached.",
+    ],
+  },
+  {
+    version: "3.33.15",
+    date: "2026-06-02",
+    title: "Shared preview backfill",
+    bullets: [
+      "Shared set viewers can now backfill missing card preview thumbnails to Supabase through a set-scoped authorization path.",
+      "Set cards now probe saved thumbnail URLs concurrently before entering the expensive render queue.",
+      "Existing Storage thumbnail checks now inspect all legacy candidate IDs for a card in one bounded batch.",
+    ],
+  },
+  {
+    version: "3.33.14",
+    date: "2026-06-02",
+    title: "Shared set thumbnail reliability",
+    bullets: [
+      "Shared collaboration set card loads are now isolated per set so one failed card query does not block the rest of the shared set list.",
+      "Shared set thumbnails now resolve against the actual remote card row and card owner instead of the signed-in viewer account.",
+      "Cards from other collaborators now render local thumbnails without attempting unauthorized Supabase image_url writes.",
+    ],
+  },
+  {
+    version: "3.33.13",
+    date: "2026-06-02",
+    title: "Faster thumbnail URL checks",
+    bullets: [
+      "Set-card thumbnails now query the individual Supabase card image_url before waiting for full account-set hydration.",
+      "Thumbnail backfill now continues to the canonical Storage check and render fallback instead of stalling on a global sync gate.",
+      "Remote thumbnail check failures now fall through to local rendering instead of leaving set tiles stuck in a failed preflight state.",
+    ],
+  },
+  {
+    version: "3.33.12",
+    date: "2026-06-02",
+    title: "Storage thumbnail preflight",
+    bullets: [
+      "Set thumbnail backfill now checks the canonical Supabase Storage object before rendering a replacement image.",
+      "Existing Storage thumbnails are attached locally and used to repair the saved card image_url instead of being re-uploaded.",
+      "Set-card thumbnail tiles now retry after account-set hydration completes so Supabase image checks do not stall.",
+    ],
+  },
+  {
+    version: "3.33.11",
+    date: "2026-06-02",
+    title: "Post-save thumbnail readiness",
+    bullets: [
+      "Newly saved set cards now use the same Supabase thumbnail hydration gate as refreshed set cards before starting image backfill.",
+      "Signed-in thumbnail backfill now avoids getting stuck in the remote-checking state after saving a card when account sets are already hydrated.",
+    ],
+  },
+  {
+    version: "3.33.10",
+    date: "2026-06-02",
+    title: "Canonical set thumbnails",
+    bullets: [
+      "Saved set thumbnails now wait for Supabase image_url hydration before starting any fallback render.",
+      "Existing local thumbnail PNGs are now promoted directly to Supabase instead of being re-rendered after sign-in or refresh.",
+      "Set thumbnail uploads now use one canonical saved-card storage key, reducing duplicate Supabase image objects across set views.",
+    ],
+  },
+  {
+    version: "3.33.9",
+    date: "2026-06-02",
+    title: "Thumbnail refresh retention",
+    bullets: [
+      "Set thumbnail hydration now uses the Supabase card row update time so saved image URLs survive account-set merges after refresh.",
+      "Set-card merging now preserves a publishable rendered thumbnail URL separately from the freshest editable card JSON.",
+      "Queued thumbnail renders now stop before rasterizing when a saved thumbnail URL arrives while the card is waiting in the render queue.",
+    ],
+  },
+  {
+    version: "3.33.8",
+    date: "2026-06-02",
+    title: "Thumbnail upload memory cap",
+    bullets: [
+      "Set thumbnail backfill now caps active plus queued upload payloads at three to avoid retaining too many PNG blobs in mobile browsers.",
+      "The thumbnail renderer now waits for an upload payload slot before capturing another PNG when the upload pipeline is saturated.",
+      "Set thumbnail status now shows when a card is waiting for an upload slot instead of continuing to allocate more upload bodies.",
+    ],
+  },
+  {
+    version: "3.33.7",
+    date: "2026-06-02",
+    title: "Parallel thumbnail uploads",
+    bullets: [
+      "Set thumbnail rendering now continues after the local PNG is cached instead of waiting for Supabase upload and URL persistence.",
+      "Saved set thumbnails now upload and persist to Supabase through a bounded background worker pool with up to three concurrent network writes.",
+      "Background thumbnail uploads now skip stale saved-card snapshots so an older render cannot overwrite a newer card version.",
+    ],
+  },
+  {
+    version: "3.33.6",
+    date: "2026-06-02",
+    title: "Set thumbnail URL retention",
+    bullets: [
+      "Saved-card normalization now preserves rendered thumbnail URLs instead of erasing them after Supabase upload.",
+      "Set thumbnail tiles can now display the image URL carried by the render status while the saved-card snapshot state catches up.",
+      "Set thumbnail image load failures now show an explicit loader error instead of silently leaving the fallback card visible.",
+    ],
+  },
+  {
+    version: "3.33.5",
+    date: "2026-06-02",
+    title: "Set thumbnail render diagnostics",
+    bullets: [
+      "Set card placeholders now show live thumbnail render phases such as queued, loading assets, capturing PNG, uploading, persisting, or failed.",
+      "Thumbnail failures now surface a short diagnostic message in the tile instead of looking identical to a pending render.",
+      "Rendered thumbnail URLs now attach by stable saved-card identity instead of comparing the entire card JSON payload.",
+    ],
+  },
+  {
+    version: "3.33.4",
+    date: "2026-06-02",
+    title: "Shared set thumbnail backfill",
+    bullets: [
+      "First-load set thumbnail generation now writes the uploaded public image URL directly to the Supabase card row.",
+      "Local-only set thumbnails can now be promoted to shared public image URLs after sign-in instead of blocking future backfill.",
+      "Pending set-card tiles now issue a stable render request even when the set grid rerenders while the thumbnail is waiting.",
+    ],
+  },
+  {
+    version: "3.33.3",
+    date: "2026-06-02",
+    title: "Local set thumbnail persistence",
+    bullets: [
+      "Set thumbnail backfill now stores the rendered PNG locally first, so saved cards can display images without waiting for Supabase upload.",
+      "Local thumbnail references now resolve from IndexedDB before rendering through the image component.",
+      "Failed thumbnail renders are retryable instead of permanently blocking that card's backfill key.",
+    ],
+  },
+  {
+    version: "3.33.2",
+    date: "2026-06-02",
+    title: "Set thumbnail render backfill",
+    bullets: [
+      "Pending set cards now request a one-at-a-time thumbnail backfill when their tile becomes visible.",
+      "Saved set thumbnails now use a lightweight 320px render path instead of the export-quality 750px capture that could exhaust mobile browser memory.",
+      "Set thumbnail rendering now skips web export mask flattening so saving a card does not trigger the heaviest PNG export workflow.",
+    ],
+  },
+  {
+    version: "3.33.1",
+    date: "2026-06-02",
+    title: "Set thumbnail memory fix",
+    bullets: [
+      "Set grids now render saved-card thumbnails from cached PNG assets only, instead of falling back to live card previews while scrolling.",
+      "Saved set thumbnail URLs are prefetched once per URL and reused through the image cache to reduce repeated network decodes.",
+      "Cards without a generated thumbnail now show a lightweight Render pending placeholder until the saved-card render completes.",
+    ],
+  },
+  {
+    version: "3.33.0",
+    date: "2026-06-02",
+    title: "Rendered set card thumbnails",
+    bullets: [
+      "Cards saved to account sets now render and upload a cached PNG thumbnail while retaining the card JSON payload for editing.",
+      "Set grids now prefer the cached rendered card image and fall back to live card rendering only when no image has been generated yet.",
+      "Remote set persistence now preserves card image URLs instead of overwriting them with null during account synchronization.",
+    ],
+  },
+  {
+    version: "3.32.7",
+    date: "2026-06-02",
+    title: "Legacy artist fallback normalization",
+    bullets: [
+      "Cards that still carry the old Local Artist placeholder now render and export as Unknown Artist.",
+      "Random card generation now treats the old placeholder as a legacy default instead of preserving it.",
+    ],
+  },
+  {
+    version: "3.32.6",
+    date: "2026-06-02",
+    title: "Default artist attribution",
+    bullets: [
+      "New cards now default to Unknown Artist instead of Local Artist when no artist attribution has been provided.",
+      "Printed footer fallbacks also use Unknown Artist for cards with blank artist metadata.",
+    ],
+  },
+  {
+    version: "3.32.5",
+    date: "2026-06-02",
+    title: "Shared set loading crash fix",
+    bullets: [
+      "Shared sets now progressively render expanded cards in small batches instead of mounting every card preview at once.",
+      "Large public sets are less likely to exhaust mobile browser memory when opened from the Community Sets directory.",
+    ],
+  },
+  {
+    version: "3.32.4",
+    date: "2026-06-02",
+    title: "Community card loading stability",
+    bullets: [
+      "Community feed card rows now reserve the full card preview height before hosted card images finish decoding.",
+      "Expanded set card previews keep a full-size loading placeholder so card slots no longer collapse into a partial strip before the render appears.",
+    ],
+  },
+  {
+    version: "3.32.3",
+    date: "2026-06-02",
+    title: "Beta cache header correction",
+    bullets: [
+      "Static beta web assets keep immutable cache headers while the app HTML shell remains uncached.",
+      "Beta deploy verification now confirms stale entry bundles are removed from the Cloudflare payload before upload.",
+    ],
+  },
+  {
+    version: "3.32.2",
+    date: "2026-06-02",
+    title: "Beta crash hardening",
+    bullets: [
+      "Beta exports now clear the Cloudflare output directory before building so stale hashed web bundles are not redeployed.",
+      "The web app shell now uses no-store cache headers so mobile browsers fetch the latest beta HTML instead of reusing an older shell.",
+    ],
+  },
+  {
     version: "3.32.1",
     date: "2026-06-02",
     title: "Token title spacing",

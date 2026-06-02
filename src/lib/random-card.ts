@@ -336,7 +336,9 @@ export function createRandomCard(previous?: CardDraft): CardDraft {
     defense: battleFields?.defense ?? (previous?.typeFrame === "battle" ? previous?.defense : undefined),
     power: tokenFields?.power ?? (battleFields || isSplitFrame ? "" : plan.power),
     toughness: tokenFields?.toughness ?? (battleFields || isSplitFrame ? "" : plan.toughness),
-    artist: previous?.artist || "Local Artist",
+    artist: previous?.artist?.trim().toLowerCase() === "local artist"
+      ? "Unknown Artist"
+      : previous?.artist || "Unknown Artist",
     setCode: previous?.setCode || "CMG",
     collectorNumber: previous?.collectorNumber || "001",
     setSize: previous?.setSize || DEFAULT_CARD_SET_SIZE,

@@ -109,6 +109,7 @@ import {
   type AccountProfile,
 } from "@/lib/account-profile";
 import {
+  attachCollaborationSetCardImage,
   fetchCommunityCards,
   fetchCommunityCardComments,
   fetchCommunityFeaturedCard,
@@ -120,8 +121,13 @@ import {
   fetchCollaborationSetMembers,
   fetchCollaborationSetPendingInvites,
   fetchCollaborationSets,
+  findRemoteCardRenderedImageById,
+  findRemoteCardRenderedImage,
+  findExistingCommunityCardImageByPath,
+  findExistingCommunityCardImages,
   fetchRemoteCustomSetSymbols,
   fetchRemoteCardSets,
+  getCommunitySetCardImageStoragePath,
   markCommunityCardsSeen,
   markCommunityNotificationsRead,
   createCommunityPoll,
@@ -137,7 +143,9 @@ import {
   toggleCommunityCardLike,
   toggleCommunitySetFollow,
   updateCommunityDisplayName,
+  updateRemoteCardRenderedImage,
   uploadCommunityCardImage,
+  uploadCommunityCardImageToPath,
   uploadCommunityFeedbackScreenshot,
   type AccountCardSetPayload,
   type AccountCustomSetSymbolPayload,
@@ -243,7 +251,69 @@ const PACKAGE_METADATA = require("./package.json") as { version: string };
 const CARDMAGIC_APP_VERSION = PACKAGE_METADATA.version;
 const CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID = "cardmagic-single-export-preview";
 const CARDMAGIC_BATCH_EXPORT_PREVIEW_ID = "cardmagic-batch-export-preview";
-const CARDMAGIC_SET_THUMBNAIL_LAZY_ROOT_MARGIN = "720px 0px";
+const PREFETCHED_SET_THUMBNAIL_URLS = new Set<string>();
+const SET_CARD_RENDER_IMAGE_WIDTH = 750;
+const SET_CARD_RENDER_STATUS_MAX_ENTRIES = 120;
+const SET_CARD_IMAGE_UPLOAD_CONCURRENCY = 3;
+const SET_CARD_IMAGE_UPLOAD_PAYLOAD_LIMIT = 3;
+
+function isPublicRenderedCardImageUrl(imageUrl: string | undefined) {
+  return typeof imageUrl === "string" && /^https?:\/\//i.test(imageUrl);
+}
+
+function getSavedSetCardThumbnailUploadId(snapshotId: string) {
+  return `set-card-${snapshotId}-thumbnail`;
+}
+
+function withSavedSetCardThumbnailVersion(imageUrl: string, savedAt: string) {
+  if (!isPublicRenderedCardImageUrl(imageUrl)) {
+    return imageUrl;
+  }
+
+  try {
+    const url = new URL(imageUrl);
+    url.searchParams.set("v", savedAt);
+    return url.toString();
+  } catch {
+    const separator = imageUrl.includes("?") ? "&" : "?";
+    return `${imageUrl}${separator}v=${encodeURIComponent(savedAt)}`;
+  }
+}
+
+function getMergedRenderedImageUrl(
+  preferredImageUrl: string | undefined,
+  fallbackImageUrl: string | undefined,
+) {
+  if (isPublicRenderedCardImageUrl(preferredImageUrl)) {
+    return preferredImageUrl;
+  }
+
+  if (isPublicRenderedCardImageUrl(fallbackImageUrl)) {
+    return fallbackImageUrl;
+  }
+
+  return preferredImageUrl ?? fallbackImageUrl;
+}
+
+function mergeSetCardRenderedImageUrl(
+  preferredSnapshot: SetCardSnapshot,
+  fallbackSnapshot: SetCardSnapshot,
+) {
+  const renderedImageUrl = getMergedRenderedImageUrl(
+    preferredSnapshot.renderedImageUrl,
+    fallbackSnapshot.renderedImageUrl,
+  );
+
+  if (renderedImageUrl === preferredSnapshot.renderedImageUrl) {
+    return preferredSnapshot;
+  }
+
+  return {
+    ...preferredSnapshot,
+    renderedImageUrl,
+  };
+}
+
 type InspectorTab = "edit" | "keywords" | "sets" | "community";
 type VisibleInspectorTab = Exclude<InspectorTab, "keywords">;
 type MainScrollBoundaryHandler = (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
@@ -255,8 +325,65 @@ type MainScrollWindow = {
 type SetCardSnapshot = {
   id: string;
   savedAt: string;
+  renderedImageUrl?: string;
+  remoteCardId?: string;
+  remoteImageOwnerUserId?: string;
   card: CardDraft;
 };
+
+type SetCardImageRenderPhase =
+  | "checking-remote"
+  | "queued"
+  | "mounting"
+  | "loading-assets"
+  | "capturing"
+  | "saving-local"
+  | "ready-local"
+  | "promoting-local"
+  | "waiting-upload-slot"
+  | "upload-queued"
+  | "uploading"
+  | "persisting"
+  | "ready-remote"
+  | "failed";
+
+type SetCardImageRenderStatus = {
+  phase: SetCardImageRenderPhase;
+  label: string;
+  detail?: string;
+  imageUrl?: string;
+  updatedAt: number;
+};
+
+type SetCardImageRenderStatusDraft = Omit<SetCardImageRenderStatus, "updatedAt">;
+
+type SavedSetCardImageRequest = {
+  setId: string;
+  snapshot: SetCardSnapshot;
+  remoteCardId?: string;
+  remoteImageOwnerUserId?: string;
+  canPersistRemoteImage: boolean;
+};
+
+type SavedSetCardImageUploadRequest = {
+  renderKey: string;
+  request: SavedSetCardImageRequest;
+  user: SupabaseUser;
+  localImageUrl: string;
+  uploadBody: Blob | ArrayBuffer | Uint8Array;
+};
+
+function getSetCardImageRenderErrorDetail(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message.slice(0, 120);
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error.trim().slice(0, 120);
+  }
+
+  return "Check browser console for details";
+}
 
 type CardRecoverySnapshot = {
   id: string;
@@ -281,6 +408,13 @@ type CardSet = {
   setSymbolUri?: string;
   setSymbolUsesRarityTreatment?: boolean;
   cards: SetCardSnapshot[];
+};
+
+type StoredCollaborationSetCache = {
+  schemaVersion: 1;
+  userId: string;
+  cachedAt: string;
+  sets: CardSet[];
 };
 
 type ArtLibrarySource = "generated" | "added";
@@ -341,6 +475,7 @@ type FlatCardExportTarget =
       card: CardDraft;
       footerOwnerName?: string;
       artImageAspectRatio?: number | null;
+      renderWidth?: number;
       // Flatten masked layers (borderless pinline, rarity set symbol) into plain
       // raster images via offscreen canvas so the html2canvas capture renders
       // them faithfully. Set for web exports.
@@ -484,6 +619,7 @@ const CARD_ART_MAX_DIMENSION = 1280;
 const CARD_BACK_MAX_DIMENSION = 1536;
 const AUXILIARY_IMAGE_MAX_DIMENSION = 512;
 const CARD_SET_STORAGE_KEY = "cardmagic.savedSets.v1";
+const COLLABORATION_SET_CACHE_STORAGE_KEY_PREFIX = "cardmagic.collaborationSetsCache.v1";
 const DELETION_TOMBSTONE_STORAGE_KEY = "cardmagic.deletionTombstones.v1";
 const ACTIVE_CARD_STORAGE_KEY = "cardmagic.activeCard.v1";
 const CARD_RECOVERY_SNAPSHOT_STORAGE_KEY = "cardmagic.cardRecoverySnapshots.v1";
@@ -545,7 +681,6 @@ const GENERATED_SET_SYMBOL_MAX_ENTRIES = 48;
 const ART_LIBRARY_VISIBLE_THUMBNAIL_LIMIT = 32;
 const SET_GRID_INITIAL_CARD_LIMIT = 12;
 const SET_GRID_PAGE_SIZE = 12;
-const SET_GRID_COMPACT_EAGER_PREVIEW_COUNT = 2;
 const SET_CARD_THUMBNAIL_RADIUS = 5;
 const COLOR_IDENTITY_SORT_ORDER: ManaColor[] = ["W", "U", "B", "R", "G"];
 const ART_IMAGE_QUALITY_OPTIONS = [
@@ -2154,7 +2289,7 @@ function saveCardDraftIntoSet(
       const nextCards = updatesExistingSnapshot
         ? set.cards.map((setCard) =>
             setCard.id === overwriteSnapshotId
-              ? { ...setCard, card: cloneCardDraft(resolvedCard), savedAt: timestamp }
+              ? { ...setCard, card: cloneCardDraft(resolvedCard), savedAt: timestamp, renderedImageUrl: undefined }
               : setCard,
           )
         : [...set.cards, snapshot];
@@ -2276,8 +2411,12 @@ function mergeSetCardSnapshots(first: SetCardSnapshot[], second: SetCardSnapshot
     const snapshotTime = new Date(snapshot.savedAt).getTime();
     const existingTime = existing ? new Date(existing.savedAt).getTime() : Number.NEGATIVE_INFINITY;
 
-    if (!existing || snapshotTime >= existingTime) {
+    if (!existing) {
       snapshotsById.set(snapshot.id, snapshot);
+    } else if (snapshotTime >= existingTime) {
+      snapshotsById.set(snapshot.id, mergeSetCardRenderedImageUrl(snapshot, existing));
+    } else {
+      snapshotsById.set(snapshot.id, mergeSetCardRenderedImageUrl(existing, snapshot));
     }
   }
 
@@ -2450,8 +2589,12 @@ function mergeAccountCardSets(localSets: CardSet[], remoteSets: CardSet[]): Card
       const remoteIsNewer =
         !localSnapshot || new Date(snapshot.savedAt).getTime() >= new Date(localSnapshot.savedAt).getTime();
 
-      if (remoteIsNewer) {
+      if (!localSnapshot) {
         cardsById.set(snapshot.id, snapshot);
+      } else if (remoteIsNewer) {
+        cardsById.set(snapshot.id, mergeSetCardRenderedImageUrl(snapshot, localSnapshot));
+      } else {
+        cardsById.set(snapshot.id, mergeSetCardRenderedImageUrl(localSnapshot, snapshot));
       }
     }
 
@@ -2475,6 +2618,10 @@ function getOwnedAccountCardSets(sets: CardSet[], accountUserId: string): CardSe
   return normalizeCardSets(sets).filter((set) => isOwnedAccountCardSet(set, accountUserId));
 }
 
+function getSharedAccountCardSets(sets: CardSet[], accountUserId: string): CardSet[] {
+  return normalizeCardSets(sets).filter((set) => set.ownerUserId && set.ownerUserId !== accountUserId);
+}
+
 function getLocalPersistableCardSets(sets: CardSet[]): CardSet[] {
   return normalizeCardSets(sets).filter((set) => !set.ownerUserId);
 }
@@ -2485,7 +2632,17 @@ async function fetchSharedAccountCardSets(accountUserId: string): Promise<CardSe
 
   const hydratedSets = await Promise.all(
     sharedSets.map(async (set) => {
-      const cards = await fetchCollaborationSetCards(set.id);
+      let cards: CommunitySetCardPayload[] = [];
+
+      try {
+        cards = await fetchCollaborationSetCards(set.id);
+      } catch (error) {
+        console.warn("Unable to hydrate shared collaboration set cards.", {
+          setId: set.id,
+          ownerUserId: set.ownerUserId,
+          error,
+        });
+      }
 
       return normalizeCardSet({
         id: set.id,
@@ -2501,6 +2658,9 @@ async function fetchSharedAccountCardSets(accountUserId: string): Promise<CardSe
         cards: cards.map((card) => ({
           id: card.id,
           savedAt: card.updatedAt ?? card.createdAt,
+          renderedImageUrl: card.imageUrl,
+          remoteCardId: card.id,
+          remoteImageOwnerUserId: card.userId,
           card: card.card,
         })),
       });
@@ -3234,12 +3394,27 @@ function normalizeStoredCardDraft(value: unknown): CardDraft {
 function normalizeSetCardSnapshot(value: unknown, index: number): SetCardSnapshot {
   const source = isStoredRecord(value) ? value as Partial<SetCardSnapshot> : {};
   const cardSource = source.card ?? (looksLikeStoredCardRecord(value) ? value : undefined);
+  const renderedImageUrl =
+    typeof source.renderedImageUrl === "string" && source.renderedImageUrl.trim()
+      ? source.renderedImageUrl
+      : undefined;
+  const remoteCardId =
+    typeof source.remoteCardId === "string" && source.remoteCardId.trim()
+      ? source.remoteCardId
+      : undefined;
+  const remoteImageOwnerUserId =
+    typeof source.remoteImageOwnerUserId === "string" && source.remoteImageOwnerUserId.trim()
+      ? source.remoteImageOwnerUserId
+      : undefined;
 
   return {
     id: typeof source.id === "string" && source.id.trim() ? source.id : `card-${Date.now()}-${index}`,
     savedAt: typeof source.savedAt === "string" && source.savedAt.trim()
       ? source.savedAt
       : new Date(0).toISOString(),
+    ...(renderedImageUrl ? { renderedImageUrl } : null),
+    ...(remoteCardId ? { remoteCardId } : null),
+    ...(remoteImageOwnerUserId ? { remoteImageOwnerUserId } : null),
     card: normalizeStoredCardDraft(cardSource),
   };
 }
@@ -4020,6 +4195,79 @@ async function storeCardSets(sets: CardSet[]) {
     await (await getNativeStorageAdapter())?.setItem(CARD_SET_STORAGE_KEY, serializedSets);
   } catch (error) {
     console.warn("Unable to persist CardMagic sets.", error);
+  }
+}
+
+function getCollaborationSetCacheStorageKey(userId: string) {
+  return `${COLLABORATION_SET_CACHE_STORAGE_KEY_PREFIX}:${userId}`;
+}
+
+async function loadCachedCollaborationSets(userId: string): Promise<CardSet[] | null> {
+  try {
+    const storageKey = getCollaborationSetCacheStorageKey(userId);
+    const rawSets =
+      Platform.OS === "web" && typeof window !== "undefined"
+        ? await getWebStorageItem(storageKey)
+        : await (await getNativeStorageAdapter())?.getItem(storageKey);
+
+    if (!rawSets) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawSets) as unknown;
+    const candidateSets =
+      isStoredRecord(parsed) &&
+      (parsed as Partial<StoredCollaborationSetCache>).schemaVersion === 1 &&
+      (parsed as Partial<StoredCollaborationSetCache>).userId === userId
+        ? (parsed as Partial<StoredCollaborationSetCache>).sets
+        : parsed;
+    const repairedPayload = normalizeStoredCardSetsPayload({ sets: candidateSets });
+
+    if (!repairedPayload) {
+      logStorageWarning("Collaboration set cache did not match a repairable schema.", {
+        key: storageKey,
+        shape: describeStoredValue(parsed),
+      });
+      return null;
+    }
+
+    const sharedSets = getSharedAccountCardSets(repairedPayload.sets, userId);
+    const materializedSets = await materializeCardSetsImageDataUris(sharedSets);
+
+    logStorageInfo("Loaded cached collaboration sets.", {
+      key: storageKey,
+      ...(isStoredRecord(parsed) && typeof parsed.cachedAt === "string" ? { cachedAt: parsed.cachedAt } : null),
+      ...getCardSetStorageSummary(materializedSets),
+    });
+
+    return materializedSets.length > 0 ? materializedSets : null;
+  } catch (error) {
+    console.warn("Unable to load cached CardMagic collaboration sets.", error);
+    return null;
+  }
+}
+
+async function storeCachedCollaborationSets(userId: string, sets: CardSet[]) {
+  try {
+    const sharedSets = getSharedAccountCardSets(sets, userId);
+    const persistedSets = await persistCardSetsImageUris(sharedSets);
+    const cachePayload: StoredCollaborationSetCache = {
+      schemaVersion: 1,
+      userId,
+      cachedAt: new Date().toISOString(),
+      sets: persistedSets,
+    };
+    const serializedSets = JSON.stringify(cachePayload);
+    const storageKey = getCollaborationSetCacheStorageKey(userId);
+
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      await setWebStorageItem(storageKey, serializedSets);
+      return;
+    }
+
+    await (await getNativeStorageAdapter())?.setItem(storageKey, serializedSets);
+  } catch (error) {
+    console.warn("Unable to persist cached CardMagic collaboration sets.", error);
   }
 }
 
@@ -5784,6 +6032,13 @@ export default function App() {
   const [customKeywordDefinitions, setCustomKeywordDefinitions] = useState<KeywordDefinition[]>([]);
   const [cardSets, setCardSets] = useState<CardSet[]>(createDefaultCardSets);
   const cardSetsRef = useRef<CardSet[]>(cardSets);
+  const savedSetImageRenderQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const savedSetImageRenderKeysRef = useRef<Set<string>>(new Set());
+  const savedSetImageUploadQueueRef = useRef<SavedSetCardImageUploadRequest[]>([]);
+  const savedSetImageUploadKeysRef = useRef<Set<string>>(new Set());
+  const savedSetImageUploadActiveCountRef = useRef(0);
+  const savedSetImageUploadSlotWaitersRef = useRef<Array<() => void>>([]);
+  const [savedSetImageRenderStatuses, setSavedSetImageRenderStatuses] = useState<Record<string, SetCardImageRenderStatus>>({});
   const [deletionTombstones, setDeletionTombstones] = useState<DeletionTombstones>(createEmptyDeletionTombstones);
   const deletionTombstonesRef = useRef<DeletionTombstones>(deletionTombstones);
   const [artLibraryEntries, setArtLibraryEntries] = useState<ArtLibraryEntry[]>([]);
@@ -6703,11 +6958,29 @@ export default function App() {
       setAccountSetsHydrated(false);
 
       try {
-        const [remoteSymbols, remoteSets, sharedSets] = await Promise.all([
+        const remoteAccountSync = Promise.all([
           fetchRemoteCustomSetSymbols(accountUser.id),
           fetchRemoteCardSets(accountUser.id),
           fetchSharedAccountCardSets(accountUser.id),
         ]);
+        const cachedSharedSets = await loadCachedCollaborationSets(accountUser.id);
+
+        if (active && cachedSharedSets?.length) {
+          const cachedMergedSets = normalizeCardSets([
+            ...getOwnedAccountCardSets(cardSetsRef.current, accountUser.id),
+            ...cachedSharedSets,
+          ]);
+
+          if (!cardSetsEqual(cardSetsRef.current, cachedMergedSets)) {
+            cardSetsRef.current = cachedMergedSets;
+            setCardSets(cachedMergedSets);
+            setSelectedSetId((current) =>
+              cachedMergedSets.some((set) => set.id === current) ? current : cachedMergedSets[0].id,
+            );
+          }
+        }
+
+        const [remoteSymbols, remoteSets, sharedSets] = await remoteAccountSync;
 
         if (!active) {
           return;
@@ -6743,9 +7016,10 @@ export default function App() {
           ),
           deletionTombstonesRef.current,
         );
+        const resolvedSharedSets = resolveSetSymbolReferences(sharedSets, mergedSymbols);
         const mergedSets = normalizeCardSets([
           ...mergedOwnedSets,
-          ...resolveSetSymbolReferences(sharedSets, mergedSymbols),
+          ...resolvedSharedSets,
         ]);
 
         if (!cardSetsEqual(cardSetsRef.current, mergedSets)) {
@@ -6756,6 +7030,7 @@ export default function App() {
           );
         }
 
+        void storeCachedCollaborationSets(accountUser.id, resolvedSharedSets);
         await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
         await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedOwnedSets, accountUser.id));
       } catch (error) {
@@ -7443,9 +7718,10 @@ export default function App() {
           ),
           deletionTombstonesRef.current,
         );
+        const resolvedSharedSets = resolveSetSymbolReferences(sharedSets, mergedSymbols);
         const mergedSets = normalizeCardSets([
           ...mergedOwnedSets,
-          ...resolveSetSymbolReferences(sharedSets, mergedSymbols),
+          ...resolvedSharedSets,
         ]);
 
         cardSetsRef.current = mergedSets;
@@ -7453,6 +7729,7 @@ export default function App() {
         setSelectedSetId((current) =>
           mergedSets.some((set) => set.id === current) ? current : mergedSets[0].id,
         );
+        void storeCachedCollaborationSets(accountUser.id, resolvedSharedSets);
         await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
         await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedOwnedSets, accountUser.id));
       } catch (error) {
@@ -8612,6 +8889,10 @@ export default function App() {
       setCardHasUnsavedEdits(false);
     }
 
+    queueSavedSetCardImageRender(result.setId, result.snapshot, accountUser, {
+      remoteThumbnailsReady: !accountUser || accountSetsHydrated,
+    });
+
     recordProgressEvent("save-card");
 
     if (options?.notify) {
@@ -8830,7 +9111,7 @@ export default function App() {
 
     try {
       const communityCard = cloneCardDraft(previewCard);
-      const imageUrl = await renderCommunityCardImageForUpload(
+      const imageUrl = await renderCardImageForUpload(
         communityCard,
         accountFooterOwnerName,
         accountUser.id,
@@ -8857,22 +9138,31 @@ export default function App() {
     }
   };
 
-  const renderCommunityCardImageForUpload = useCallback(async (
+  const renderCardImageForUpload = useCallback(async (
     communityCard: CardDraft,
     footerOwnerName: string,
     userId: string,
     communityCardId: string,
+    options?: {
+      renderWidth?: number;
+      flattenMasksExport?: boolean;
+      showBusyIndicator?: boolean;
+    },
   ) => {
     const exportCard = cloneCardDraft(communityCard);
+    const flattenMasksExport = options?.flattenMasksExport ?? Platform.OS === "web";
     const exportTarget: FlatCardExportTarget = {
       kind: "card",
       card: exportCard,
       footerOwnerName,
       artImageAspectRatio: await getCardExportArtImageAspectRatio(exportCard),
-      flattenMasksExport: Platform.OS === "web",
+      renderWidth: options?.renderWidth,
+      flattenMasksExport,
     };
 
-    setWebPhotoExportBusy(Platform.OS === "web");
+    if (options?.showBusyIndicator !== false) {
+      setWebPhotoExportBusy(Platform.OS === "web");
+    }
     try {
       await applyExportRenderTargetUpdate(() => setSingleExportTarget(exportTarget));
       const exportPreview = await waitForExportPreviewRef(singleExportContainerRef, {
@@ -8880,7 +9170,7 @@ export default function App() {
         timeoutMs: 8000,
         errorMessage: "CardMagic could not find the rendered card preview.",
       });
-      if (Platform.OS === "web") {
+      if (Platform.OS === "web" && flattenMasksExport) {
         await waitForFlattenedFrameComposites();
       }
       await waitForExportPreviewImages(exportPreview);
@@ -8892,10 +9182,816 @@ export default function App() {
 
       return await uploadCommunityCardImage(userId, communityCardId, uploadBody);
     } finally {
-      setWebPhotoExportBusy(false);
+      if (options?.showBusyIndicator !== false) {
+        setWebPhotoExportBusy(false);
+      }
       setSingleExportTarget(null);
     }
   }, []);
+
+  const renderSetCardImage = useCallback(async (
+    savedCard: CardDraft,
+    footerOwnerName: string,
+    setId: string,
+    snapshotId: string,
+    onStatus?: (status: SetCardImageRenderStatusDraft) => void,
+  ) => {
+    const exportCard = cloneCardDraft(savedCard);
+    const exportTarget: FlatCardExportTarget = {
+      kind: "card",
+      card: exportCard,
+      footerOwnerName,
+      artImageAspectRatio: await getCardExportArtImageAspectRatio(exportCard),
+      renderWidth: SET_CARD_RENDER_IMAGE_WIDTH,
+      flattenMasksExport: Platform.OS === "web",
+    };
+
+    try {
+      onStatus?.({
+        phase: "mounting",
+        label: "Mounting render",
+        detail: "Preparing hidden card renderer",
+      });
+      await applyExportRenderTargetUpdate(() => setSingleExportTarget(exportTarget));
+      const exportPreview = await waitForExportPreviewRef(singleExportContainerRef, {
+        nativeID: CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID,
+        timeoutMs: 8000,
+        errorMessage: "CardMagic could not find the rendered set card preview.",
+      });
+      if (Platform.OS === "web") {
+        await waitForFlattenedFrameComposites();
+      }
+      onStatus?.({
+        phase: "loading-assets",
+        label: "Loading assets",
+        detail: "Waiting for frame and art images",
+      });
+      await waitForExportPreviewImages(exportPreview);
+      onStatus?.({
+        phase: "capturing",
+        label: "Capturing PNG",
+        detail: "Rasterizing full-quality set image",
+      });
+      const renderedPng = await captureCardMagicPng(exportPreview);
+      onStatus?.({
+        phase: "saving-local",
+        label: "Saving local PNG",
+        detail: "Caching full-quality image before upload",
+      });
+
+      if (Platform.OS === "web") {
+        const dataUri = normalizeWebPngExportUri(renderedPng);
+        const uploadBody = await webPngExportUriToBlob(dataUri);
+        const localImageUrl = await persistWebMediaUri(
+          dataUri,
+          getSavedSetCardThumbnailUploadId(snapshotId),
+          "image/png",
+        );
+
+        return { localImageUrl, uploadBody };
+      }
+
+      return {
+        localImageUrl: renderedPng,
+        uploadBody: await readPngCaptureBytes(renderedPng),
+      };
+    } finally {
+      setSingleExportTarget(null);
+    }
+  }, []);
+
+  function getSavedSetCardImageRenderKey(ownerKey: string, setId: string, snapshot: SetCardSnapshot) {
+    return `${ownerKey}:${setId}:${snapshot.id}:${snapshot.savedAt}`;
+  }
+
+  function setSavedSetCardImageRenderStatus(renderKey: string, status: SetCardImageRenderStatusDraft) {
+    setSavedSetImageRenderStatuses((current) => {
+      const next: Record<string, SetCardImageRenderStatus> = {
+        ...current,
+        [renderKey]: {
+          ...status,
+          updatedAt: Date.now(),
+        },
+      };
+      const keys = Object.keys(next);
+
+      if (keys.length <= SET_CARD_RENDER_STATUS_MAX_ENTRIES) {
+        return next;
+      }
+
+      keys
+        .sort((left, right) => next[left].updatedAt - next[right].updatedAt)
+        .slice(0, keys.length - SET_CARD_RENDER_STATUS_MAX_ENTRIES)
+        .forEach((key) => {
+          delete next[key];
+        });
+
+      return next;
+    });
+  }
+
+  function queueSavedSetCardImageRender(
+    setId: string,
+    snapshot: SetCardSnapshot,
+    user: SupabaseUser | null,
+    options?: {
+      remoteThumbnailsReady?: boolean;
+      remoteCardId?: string;
+      remoteImageOwnerUserId?: string;
+      canPersistRemoteImage?: boolean;
+    },
+  ) {
+    const existingImageUrl = snapshot.renderedImageUrl;
+    const ownerKey = user?.id ?? "local";
+    const renderKey = getSavedSetCardImageRenderKey(ownerKey, setId, snapshot);
+    const remoteThumbnailsReady = !user || options?.remoteThumbnailsReady === true;
+    const remoteImageOwnerUserId = options?.remoteImageOwnerUserId ?? snapshot.remoteImageOwnerUserId ?? user?.id;
+    const remoteCardId = options?.remoteCardId ?? snapshot.remoteCardId;
+    const canPersistRemoteImage = Boolean(
+      user &&
+      options?.canPersistRemoteImage !== false &&
+      (remoteImageOwnerUserId === user.id || remoteCardId)
+    );
+
+    if (!remoteThumbnailsReady) {
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "checking-remote",
+        label: "Checking Supabase",
+        detail: "Fast card-row lookup before full set hydration",
+      });
+    }
+
+    if (isPublicRenderedCardImageUrl(existingImageUrl) || (existingImageUrl && !user)) {
+      return;
+    }
+
+    if (savedSetImageRenderKeysRef.current.has(renderKey)) {
+      return;
+    }
+
+    savedSetImageRenderKeysRef.current.add(renderKey);
+
+    if (existingImageUrl && user && !canPersistRemoteImage) {
+      savedSetImageRenderKeysRef.current.delete(renderKey);
+      return;
+    }
+
+    if (existingImageUrl && user && canPersistRemoteImage) {
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "checking-remote",
+        label: "Checking Supabase",
+        detail: "Looking for canonical Storage image",
+        imageUrl: existingImageUrl,
+      });
+      const promotionSnapshot = {
+        ...snapshot,
+        card: cloneCardDraft(snapshot.card),
+      };
+
+      const request = {
+        setId,
+        snapshot: promotionSnapshot,
+        remoteCardId,
+        remoteImageOwnerUserId,
+        canPersistRemoteImage,
+      };
+
+      void (async () => {
+        let queuedRender = false;
+
+        try {
+          if (await attachExistingSavedSetCardSupabaseImage(request, user, renderKey, existingImageUrl)) {
+            return;
+          }
+
+          queuedRender = true;
+          enqueueSavedSetCardImageCapture(request, user, renderKey);
+        } finally {
+          if (!queuedRender) {
+            savedSetImageRenderKeysRef.current.delete(renderKey);
+          }
+        }
+      })();
+      return;
+    }
+
+    const renderSnapshot = {
+      ...snapshot,
+      card: cloneCardDraft(snapshot.card),
+    };
+    const request = {
+      setId,
+      snapshot: renderSnapshot,
+      remoteCardId,
+      remoteImageOwnerUserId,
+      canPersistRemoteImage,
+    };
+
+    if (user) {
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "checking-remote",
+        label: "Checking Supabase",
+        detail: "Looking for saved render URLs in parallel",
+      });
+
+      void (async () => {
+        let queuedRender = false;
+
+        try {
+          if (await attachExistingSavedSetCardSupabaseImage(request, user, renderKey)) {
+            return;
+          }
+
+          queuedRender = true;
+          enqueueSavedSetCardImageCapture(
+            request,
+            canPersistRemoteImage ? user : null,
+            renderKey,
+          );
+        } finally {
+          if (!queuedRender) {
+            savedSetImageRenderKeysRef.current.delete(renderKey);
+          }
+        }
+      })();
+      return;
+    }
+
+    enqueueSavedSetCardImageCapture(request, null, renderKey);
+  }
+
+  function enqueueSavedSetCardImageCapture(
+    request: SavedSetCardImageRequest,
+    user: SupabaseUser | null,
+    renderKey: string,
+  ) {
+    setSavedSetCardImageRenderStatus(renderKey, {
+      phase: "queued",
+      label: "Queued",
+      detail: user ? "Waiting for set image renderer" : "Waiting for local set image renderer",
+    });
+    savedSetImageRenderQueueRef.current = savedSetImageRenderQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await renderSavedSetCardImage(request, user, renderKey);
+        } finally {
+          savedSetImageRenderKeysRef.current.delete(renderKey);
+        }
+      });
+    void savedSetImageRenderQueueRef.current;
+  }
+
+  async function attachExistingSavedSetCardSupabaseImage(
+    request: SavedSetCardImageRequest,
+    user: SupabaseUser,
+    renderKey: string,
+    expectedCurrentImageUrl?: string,
+  ) {
+    try {
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "checking-remote",
+        label: "Checking Supabase",
+        detail: "Looking for saved card image_url",
+        imageUrl: expectedCurrentImageUrl,
+      });
+      const remoteCardImage = request.remoteCardId
+        ? await findRemoteCardRenderedImageById(request.remoteCardId)
+        : request.remoteImageOwnerUserId
+          ? await findRemoteCardRenderedImage(
+              request.remoteImageOwnerUserId,
+              getSavedSetCardRemoteLocalSnapshotId(request),
+            )
+          : null;
+
+      if (
+        remoteCardImage?.imageUrl &&
+        isPublicRenderedCardImageUrl(remoteCardImage.imageUrl) &&
+        !isStoredSavedSetCardImageStale(remoteCardImage.updatedAt, request.snapshot.savedAt)
+      ) {
+        const remoteImageUrl = withSavedSetCardThumbnailVersion(
+          remoteCardImage.imageUrl,
+          request.snapshot.savedAt,
+        );
+
+        if (!isSavedSetCardImageRequestCurrent(request, expectedCurrentImageUrl)) {
+          setSavedSetCardImageRenderStatus(renderKey, {
+            phase: "failed",
+            label: "Remote attach skipped",
+            detail: "Saved-card snapshot changed before image_url attach",
+            imageUrl: remoteImageUrl,
+          });
+          return true;
+        }
+
+        const attachedRemoteImage = attachSavedSetCardRenderedImage(
+          request,
+          remoteImageUrl,
+          expectedCurrentImageUrl,
+        );
+        setSavedSetCardImageRenderStatus(renderKey, {
+          phase: "ready-remote",
+          label: "Supabase image ready",
+          detail: attachedRemoteImage ? "Saved image_url attached" : "Saved image_url found, but tile state did not match",
+          imageUrl: remoteImageUrl,
+        });
+        return true;
+      }
+
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "checking-remote",
+        label: "Checking Supabase",
+        detail: "Looking for canonical Storage image",
+        imageUrl: expectedCurrentImageUrl,
+      });
+      const existingImage = await findExistingSavedSetCardSupabaseImage(request, user);
+
+      if (!existingImage) {
+        return false;
+      }
+
+      if (isStoredSavedSetCardImageStale(existingImage.lastModified, request.snapshot.savedAt)) {
+        setSavedSetCardImageRenderStatus(renderKey, {
+          phase: "queued",
+          label: "Storage image stale",
+          detail: "Rendering current set image",
+          imageUrl: expectedCurrentImageUrl,
+        });
+        return false;
+      }
+
+      const remoteImageUrl = withSavedSetCardThumbnailVersion(
+        existingImage.publicUrl,
+        request.snapshot.savedAt,
+      );
+
+      if (!isSavedSetCardImageRequestCurrent(request, expectedCurrentImageUrl)) {
+        setSavedSetCardImageRenderStatus(renderKey, {
+          phase: "failed",
+          label: "Remote attach skipped",
+          detail: "Saved-card snapshot changed before Storage image attach",
+          imageUrl: remoteImageUrl,
+        });
+        return true;
+      }
+
+      const attachedRemoteImage = attachSavedSetCardRenderedImage(
+        request,
+        remoteImageUrl,
+        expectedCurrentImageUrl,
+      );
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "persisting",
+        label: "Repairing image URL",
+        detail: "Writing existing Storage image URL to Supabase",
+        imageUrl: remoteImageUrl,
+      });
+      if (request.canPersistRemoteImage) {
+        await persistSavedSetCardRemoteImageUrl(request, user, remoteImageUrl);
+      }
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "ready-remote",
+        label: "Supabase image ready",
+        detail: attachedRemoteImage
+          ? request.canPersistRemoteImage
+            ? "Existing Storage image attached"
+            : "Existing shared Storage image attached"
+          : "Storage URL found, but tile state did not match",
+        imageUrl: remoteImageUrl,
+      });
+      return true;
+    } catch (error) {
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "failed",
+        label: "Storage check failed",
+        detail: getSetCardImageRenderErrorDetail(error),
+        imageUrl: expectedCurrentImageUrl,
+      });
+      console.warn("Unable to attach existing saved set card image from Supabase Storage.", error);
+      return false;
+    }
+  }
+
+  function isStoredSavedSetCardImageStale(lastModified: string | undefined, savedAt: string) {
+    const modifiedAtTime = lastModified ? new Date(lastModified).getTime() : NaN;
+    const savedAtTime = new Date(savedAt).getTime();
+
+    return Number.isFinite(modifiedAtTime) &&
+      Number.isFinite(savedAtTime) &&
+      modifiedAtTime + 1000 < savedAtTime;
+  }
+
+  async function findExistingSavedSetCardSupabaseImage(
+    request: SavedSetCardImageRequest,
+    user?: SupabaseUser,
+  ) {
+    const canonicalStoragePath = getSavedSetCardCanonicalStoragePath(request);
+
+    if (canonicalStoragePath) {
+      const existingImage = await findExistingCommunityCardImageByPath(canonicalStoragePath);
+
+      if (existingImage) {
+        return existingImage;
+      }
+    }
+
+    const lookupImageIds = getSavedSetCardThumbnailLookupSnapshotIds(request)
+      .map(getSavedSetCardThumbnailUploadId);
+
+    if (lookupImageIds.length === 0) {
+      return null;
+    }
+
+    for (const userId of getSavedSetCardThumbnailLookupUserIds(request, user)) {
+      const existingImages = await findExistingCommunityCardImages(userId, lookupImageIds);
+
+      for (const imageId of lookupImageIds) {
+        const existingImage = existingImages.get(imageId);
+
+        if (existingImage) {
+          return existingImage;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function getSavedSetCardThumbnailLookupSnapshotIds(request: SavedSetCardImageRequest) {
+    return Array.from(new Set([
+      getSavedSetCardRemoteLocalSnapshotId(request),
+      request.snapshot.id,
+      request.remoteCardId,
+    ].filter((value): value is string => Boolean(value))));
+  }
+
+  function getSavedSetCardRemoteLocalSnapshotId(request: SavedSetCardImageRequest) {
+    if (
+      request.remoteCardId &&
+      request.remoteImageOwnerUserId &&
+      request.remoteCardId.startsWith(`${request.remoteImageOwnerUserId}:`)
+    ) {
+      return request.remoteCardId.slice(request.remoteImageOwnerUserId.length + 1);
+    }
+
+    return request.snapshot.id;
+  }
+
+  function getSavedSetCardThumbnailLookupUserIds(
+    request: SavedSetCardImageRequest,
+    user?: SupabaseUser,
+  ) {
+    return Array.from(new Set([
+      request.remoteImageOwnerUserId,
+      user?.id,
+    ].filter((value): value is string => Boolean(value))));
+  }
+
+  function getSavedSetCardCanonicalStoragePath(request: SavedSetCardImageRequest) {
+    if (!request.remoteCardId) {
+      return null;
+    }
+
+    try {
+      return getCommunitySetCardImageStoragePath(request.setId, request.remoteCardId);
+    } catch {
+      return null;
+    }
+  }
+
+  async function renderSavedSetCardImage(
+    request: SavedSetCardImageRequest,
+    user: SupabaseUser | null,
+    renderKey: string,
+  ) {
+    try {
+      if (skipSavedSetCardImageRenderIfImageExists(request, user, renderKey)) {
+        return;
+      }
+
+      if (user) {
+        await waitForSavedSetCardImageUploadPayloadSlot(renderKey);
+
+        if (skipSavedSetCardImageRenderIfImageExists(request, user, renderKey)) {
+          return;
+        }
+
+        if (!isSavedSetCardImageRequestCurrent(request)) {
+          setSavedSetCardImageRenderStatus(renderKey, {
+            phase: "failed",
+            label: "Render skipped",
+            detail: "Saved-card snapshot changed before image capture",
+          });
+          return;
+        }
+      }
+
+      const { localImageUrl, uploadBody } = await renderSetCardImage(
+        request.snapshot.card,
+        accountFooterOwnerName,
+        request.setId,
+        request.snapshot.id,
+        (status) => setSavedSetCardImageRenderStatus(renderKey, status),
+      );
+
+      const attachedLocalImage = attachSavedSetCardRenderedImage(request, localImageUrl);
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "ready-local",
+        label: "Local image ready",
+        detail: attachedLocalImage ? "Cached set image attached" : "Rendered, but tile state did not match",
+        imageUrl: localImageUrl,
+      });
+
+      if (!user) {
+        return;
+      }
+
+      enqueueSavedSetCardImageUpload({
+        renderKey,
+        request,
+        user,
+        localImageUrl,
+        uploadBody,
+      });
+    } catch (error) {
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "failed",
+        label: "Render failed",
+        detail: getSetCardImageRenderErrorDetail(error),
+      });
+      console.warn("Unable to render saved set card image.", error);
+    }
+  }
+
+  function getCurrentSavedSetCardImageSnapshot(request: SavedSetCardImageRequest) {
+    const currentSet = cardSetsRef.current.find((set) => set.id === request.setId);
+
+    return currentSet?.cards.find((snapshot) =>
+      snapshot.id === request.snapshot.id &&
+      snapshot.savedAt === request.snapshot.savedAt
+    );
+  }
+
+  function skipSavedSetCardImageRenderIfImageExists(
+    request: SavedSetCardImageRequest,
+    user: SupabaseUser | null,
+    renderKey: string,
+  ) {
+    const currentSnapshot = getCurrentSavedSetCardImageSnapshot(request);
+
+    if (!currentSnapshot) {
+      setSavedSetCardImageRenderStatus(renderKey, {
+        phase: "failed",
+        label: "Render skipped",
+        detail: "Saved-card snapshot changed before image capture",
+      });
+      return true;
+    }
+
+    const currentImageUrl = currentSnapshot.renderedImageUrl;
+
+    if (!currentImageUrl || (user && !isPublicRenderedCardImageUrl(currentImageUrl))) {
+      return false;
+    }
+
+    setSavedSetCardImageRenderStatus(renderKey, {
+      phase: isPublicRenderedCardImageUrl(currentImageUrl) ? "ready-remote" : "ready-local",
+      label: isPublicRenderedCardImageUrl(currentImageUrl) ? "Supabase image ready" : "Local image ready",
+      detail: "Existing rendered image URL found before rerender",
+      imageUrl: currentImageUrl,
+    });
+    return true;
+  }
+
+  function getSavedSetCardImageUploadPayloadCount() {
+    return savedSetImageUploadActiveCountRef.current + savedSetImageUploadQueueRef.current.length;
+  }
+
+  async function waitForSavedSetCardImageUploadPayloadSlot(renderKey: string) {
+    if (getSavedSetCardImageUploadPayloadCount() < SET_CARD_IMAGE_UPLOAD_PAYLOAD_LIMIT) {
+      return;
+    }
+
+    setSavedSetCardImageRenderStatus(renderKey, {
+      phase: "waiting-upload-slot",
+      label: "Waiting upload slot",
+      detail: "Three rendered image uploads are already active or queued",
+    });
+
+    while (getSavedSetCardImageUploadPayloadCount() >= SET_CARD_IMAGE_UPLOAD_PAYLOAD_LIMIT) {
+      await new Promise<void>((resolve) => {
+        savedSetImageUploadSlotWaitersRef.current.push(resolve);
+      });
+    }
+  }
+
+  function notifySavedSetCardImageUploadPayloadSlot() {
+    if (getSavedSetCardImageUploadPayloadCount() >= SET_CARD_IMAGE_UPLOAD_PAYLOAD_LIMIT) {
+      return;
+    }
+
+    const nextWaiter = savedSetImageUploadSlotWaitersRef.current.shift();
+    nextWaiter?.();
+  }
+
+  function enqueueSavedSetCardImageUpload(uploadRequest: SavedSetCardImageUploadRequest) {
+    if (savedSetImageUploadKeysRef.current.has(uploadRequest.renderKey)) {
+      return;
+    }
+
+    savedSetImageUploadKeysRef.current.add(uploadRequest.renderKey);
+    savedSetImageUploadQueueRef.current.push(uploadRequest);
+    setSavedSetCardImageRenderStatus(uploadRequest.renderKey, {
+      phase: "upload-queued",
+      label: "Upload queued",
+      detail: "Renderer is moving to the next card",
+      imageUrl: uploadRequest.localImageUrl,
+    });
+    drainSavedSetCardImageUploadQueue();
+  }
+
+  function drainSavedSetCardImageUploadQueue() {
+    while (
+      savedSetImageUploadActiveCountRef.current < SET_CARD_IMAGE_UPLOAD_CONCURRENCY &&
+      savedSetImageUploadQueueRef.current.length > 0
+    ) {
+      const uploadRequest = savedSetImageUploadQueueRef.current.shift();
+
+      if (!uploadRequest) {
+        return;
+      }
+
+      savedSetImageUploadActiveCountRef.current += 1;
+      void persistSavedSetCardImageUpload(uploadRequest)
+        .catch((error) => {
+          setSavedSetCardImageRenderStatus(uploadRequest.renderKey, {
+            phase: "failed",
+            label: "Upload failed",
+            detail: getSetCardImageRenderErrorDetail(error),
+            imageUrl: uploadRequest.localImageUrl,
+          });
+          console.warn("Unable to upload saved set card image.", error);
+        })
+        .finally(() => {
+          savedSetImageUploadActiveCountRef.current = Math.max(0, savedSetImageUploadActiveCountRef.current - 1);
+          savedSetImageUploadKeysRef.current.delete(uploadRequest.renderKey);
+          drainSavedSetCardImageUploadQueue();
+          notifySavedSetCardImageUploadPayloadSlot();
+        });
+    }
+  }
+
+  async function persistSavedSetCardImageUpload(uploadRequest: SavedSetCardImageUploadRequest) {
+    if (!isSavedSetCardImageRequestCurrent(uploadRequest.request, uploadRequest.localImageUrl)) {
+      setSavedSetCardImageRenderStatus(uploadRequest.renderKey, {
+        phase: "failed",
+        label: "Upload skipped",
+        detail: "Saved-card snapshot changed before upload",
+        imageUrl: uploadRequest.localImageUrl,
+      });
+      return;
+    }
+
+    setSavedSetCardImageRenderStatus(uploadRequest.renderKey, {
+      phase: "uploading",
+      label: "Uploading",
+      detail: "Saving rendered card image to Supabase Storage",
+      imageUrl: uploadRequest.localImageUrl,
+    });
+
+    const canonicalStoragePath = getSavedSetCardCanonicalStoragePath(uploadRequest.request);
+    const uploadedImageUrl = canonicalStoragePath
+      ? await uploadCommunityCardImageToPath(canonicalStoragePath, uploadRequest.uploadBody)
+      : await uploadCommunityCardImage(
+          uploadRequest.user.id,
+          getSavedSetCardThumbnailUploadId(getSavedSetCardRemoteLocalSnapshotId(uploadRequest.request)),
+          uploadRequest.uploadBody,
+        );
+    const remoteImageUrl = withSavedSetCardThumbnailVersion(
+      uploadedImageUrl,
+      uploadRequest.request.snapshot.savedAt,
+    );
+
+    if (!isSavedSetCardImageRequestCurrent(uploadRequest.request, uploadRequest.localImageUrl)) {
+      setSavedSetCardImageRenderStatus(uploadRequest.renderKey, {
+        phase: "failed",
+        label: "Persist skipped",
+        detail: "Saved-card snapshot changed after upload",
+        imageUrl: uploadRequest.localImageUrl,
+      });
+      return;
+    }
+
+    setSavedSetCardImageRenderStatus(uploadRequest.renderKey, {
+      phase: "persisting",
+      label: "Persisting URL",
+      detail: "Writing public image_url to Supabase",
+      imageUrl: remoteImageUrl,
+    });
+    await persistSavedSetCardRemoteImageUrl(uploadRequest.request, uploadRequest.user, remoteImageUrl);
+
+    const attachedRemoteImage = attachSavedSetCardRenderedImage(
+      uploadRequest.request,
+      remoteImageUrl,
+      uploadRequest.localImageUrl,
+    );
+    setSavedSetCardImageRenderStatus(uploadRequest.renderKey, {
+      phase: "ready-remote",
+      label: "Supabase image ready",
+      detail: attachedRemoteImage ? "Shared rendered image URL attached" : "Uploaded, but tile state did not match",
+      imageUrl: remoteImageUrl,
+    });
+  }
+
+  async function persistSavedSetCardRemoteImageUrl(
+    request: SavedSetCardImageRequest,
+    user: SupabaseUser,
+    imageUrl: string,
+  ) {
+    if (request.remoteCardId) {
+      await attachCollaborationSetCardImage({
+        setId: request.setId,
+        cardId: request.remoteCardId,
+        imageUrl,
+      });
+      return;
+    }
+
+    await updateRemoteCardRenderedImage({
+      userId: user.id,
+      localSnapshotId: getSavedSetCardRemoteLocalSnapshotId(request),
+      card: request.snapshot.card,
+      imageUrl,
+    });
+  }
+
+  function isSavedSetCardImageRequestCurrent(
+    request: SavedSetCardImageRequest,
+    expectedCurrentImageUrl?: string,
+  ) {
+    return cardSetsRef.current.some((set) => {
+      if (set.id !== request.setId) {
+        return false;
+      }
+
+      return set.cards.some((snapshot) => {
+        if (snapshot.id !== request.snapshot.id || snapshot.savedAt !== request.snapshot.savedAt) {
+          return false;
+        }
+
+        return !expectedCurrentImageUrl ||
+          !snapshot.renderedImageUrl ||
+          snapshot.renderedImageUrl === expectedCurrentImageUrl;
+      });
+    });
+  }
+
+  function attachSavedSetCardRenderedImage(
+    request: SavedSetCardImageRequest,
+    imageUrl: string,
+    expectedCurrentImageUrl?: string,
+  ) {
+    const canAttach = isSavedSetCardImageRequestCurrent(request, expectedCurrentImageUrl);
+
+    if (!canAttach) {
+      return false;
+    }
+
+    setCardSets((current) => {
+      let attached = false;
+      const nextSets = normalizeCardSets(
+        current.map((set) => {
+          if (set.id !== request.setId) {
+            return set;
+          }
+
+          const nextCards = set.cards.map((snapshot) => {
+            if (snapshot.id !== request.snapshot.id || snapshot.savedAt !== request.snapshot.savedAt) {
+              return snapshot;
+            }
+
+            if (
+              expectedCurrentImageUrl !== undefined &&
+              snapshot.renderedImageUrl &&
+              snapshot.renderedImageUrl !== expectedCurrentImageUrl
+            ) {
+              return snapshot;
+            }
+
+            attached = true;
+            return { ...snapshot, renderedImageUrl: imageUrl };
+          });
+
+          return normalizeCardSet({ ...set, cards: nextCards });
+        }),
+      );
+
+      return attached ? nextSets : current;
+    });
+
+    return true;
+  }
 
   const exportCurrentCard = async () => {
     setCardActionMenuOpen(false);
@@ -10228,14 +11324,40 @@ export default function App() {
                     onGenerateSetSymbol={(setId) => openSetSymbolGenerator(setId)}
                     customCardBacks={customCardBacks}
                     generatedSetSymbols={generatedSetSymbols}
-                    footerOwnerName={accountFooterOwnerName}
                     canRefreshSets={Boolean(accountUser)}
                     setsRefreshing={accountSyncBusy}
+                    setCardImageRemoteHydrated={!accountUser || accountSetsHydrated}
                     onRefreshSets={() => void syncRemoteUserProgress()}
                     canInviteSetCollaborators={Boolean(accountUser)}
                     onFetchSetCollaborators={fetchCollaborationSetMembers}
                     onFetchPendingInvites={fetchCollaborationSetPendingInvites}
                     onInviteSetCollaborator={inviteSetCollaborator}
+                    getSetCardImageRenderStatus={(setId, snapshot) =>
+                      savedSetImageRenderStatuses[
+                        getSavedSetCardImageRenderKey(accountUser?.id ?? "local", setId, snapshot)
+                      ]
+                    }
+                    onEnsureSetCardImage={(setId, snapshot) => {
+                      const targetSet = cardSetsRef.current.find((set) => set.id === setId);
+                      const remoteImageOwnerUserId =
+                        snapshot.remoteImageOwnerUserId ??
+                        targetSet?.ownerUserId ??
+                        accountUser?.id;
+                      const canPersistRemoteImage = Boolean(
+                        accountUser &&
+                        (
+                          remoteImageOwnerUserId === accountUser.id ||
+                          snapshot.remoteCardId
+                        ),
+                      );
+
+                      queueSavedSetCardImageRender(setId, snapshot, accountUser, {
+                        remoteThumbnailsReady: !accountUser || accountSetsHydrated,
+                        remoteCardId: snapshot.remoteCardId,
+                        remoteImageOwnerUserId,
+                        canPersistRemoteImage,
+                      });
+                    }}
                   />
                 </TabScreen>
               ) : null}
@@ -12342,7 +13464,7 @@ function FlatCardExportRenderHost({
     return null;
   }
 
-  const renderWidth = 750;
+  const renderWidth = target.kind === "card" ? target.renderWidth ?? 750 : 750;
   const aspectRatio =
     target.kind === "back"
       ? CARD_BACK_PREVIEW_ASPECT_RATIO
@@ -13435,144 +14557,199 @@ class TabContentErrorBoundary extends Component<TabContentErrorBoundaryProps, Ta
   }
 }
 
-type SafeCardThumbnailProps = {
+type SetCardImageThumbnailProps = {
   card: CardDraft;
   width: number;
   cornerRadius: number;
-  footerOwnerName?: string;
+  renderedImageUrl?: string;
+  renderStatus?: SetCardImageRenderStatus;
+  renderReadinessKey?: string;
+  onRequestRender?: () => void;
 };
 
-type LazySafeCardThumbnailProps = SafeCardThumbnailProps & {
-  deferFullPreview?: boolean;
-};
-
-function LazySafeCardThumbnail({
+const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
   card,
   width,
   cornerRadius,
-  footerOwnerName,
-  deferFullPreview = false,
-}: LazySafeCardThumbnailProps) {
+  renderedImageUrl,
+  renderStatus,
+  renderReadinessKey,
+  onRequestRender,
+}: SetCardImageThumbnailProps) {
   const nativeIdRef = useRef(`cardmagic-set-thumbnail-${Math.random().toString(36).slice(2, 10)}`);
-  const [shouldMountFullPreview, setShouldMountFullPreview] = useState(!deferFullPreview);
+  const height = width / CARD_BACK_PREVIEW_ASPECT_RATIO;
+  const requestRenderRef = useRef(onRequestRender);
+  const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
+  const [imageResolutionError, setImageResolutionError] = useState<string | null>(null);
+  const effectiveRenderedImageUrl = renderedImageUrl ?? renderStatus?.imageUrl;
+  const imageSource = useMemo(
+    () => {
+      if (!resolvedImageUrl || imageResolutionError) {
+        return null;
+      }
+
+      return {
+        uri: getResizedCommunityImageUrl(resolvedImageUrl, width) ?? resolvedImageUrl,
+      };
+    },
+    [imageResolutionError, resolvedImageUrl, width],
+  );
+  const statusLabel = imageResolutionError
+    ? "Image load failed"
+    : effectiveRenderedImageUrl && !resolvedImageUrl
+      ? "Resolving image"
+      : renderStatus?.label ?? "Render pending";
+  const statusDetail = imageResolutionError ?? renderStatus?.detail;
+  const showImageStatusOverlay = Boolean(
+    imageSource &&
+    renderStatus &&
+    renderStatus.phase !== "ready-remote",
+  );
 
   useEffect(() => {
-    if (!deferFullPreview) {
-      setShouldMountFullPreview(true);
-      return;
-    }
-
-    setShouldMountFullPreview(false);
-  }, [card, deferFullPreview]);
+    requestRenderRef.current = onRequestRender;
+  }, [onRequestRender]);
 
   useEffect(() => {
-    if (
-      shouldMountFullPreview ||
-      !deferFullPreview ||
-      Platform.OS !== "web" ||
-      typeof document === "undefined" ||
-      typeof IntersectionObserver === "undefined"
-    ) {
-      return;
+    let cancelled = false;
+
+    if (!effectiveRenderedImageUrl) {
+      setResolvedImageUrl(null);
+      setImageResolutionError(null);
+      return () => {
+        cancelled = true;
+      };
     }
 
-    const element = document.getElementById(nativeIdRef.current);
-
-    if (!element) {
-      setShouldMountFullPreview(true);
-      return;
+    if (!isWebMediaReference(effectiveRenderedImageUrl)) {
+      setImageResolutionError(null);
+      setResolvedImageUrl(effectiveRenderedImageUrl);
+      return () => {
+        cancelled = true;
+      };
     }
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setShouldMountFullPreview(true);
-          observer.disconnect();
+    setImageResolutionError(null);
+    setResolvedImageUrl(null);
+    void resolveWebMediaUri(effectiveRenderedImageUrl, "image/png")
+      .then((uri) => {
+        if (!cancelled) {
+          setImageResolutionError(null);
+          setResolvedImageUrl(uri);
         }
-      },
-      { root: null, rootMargin: CARDMAGIC_SET_THUMBNAIL_LAZY_ROOT_MARGIN, threshold: 0.01 },
-    );
-
-    observer.observe(element);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setImageResolutionError(getSetCardImageRenderErrorDetail(error));
+        }
+        console.warn("Unable to resolve saved set card thumbnail.", error);
+      });
 
     return () => {
-      observer.disconnect();
+      cancelled = true;
     };
-  }, [deferFullPreview, shouldMountFullPreview]);
+  }, [effectiveRenderedImageUrl, renderReadinessKey]);
+
+  useEffect(() => {
+    if (!resolvedImageUrl || PREFETCHED_SET_THUMBNAIL_URLS.has(resolvedImageUrl)) {
+      return;
+    }
+
+    PREFETCHED_SET_THUMBNAIL_URLS.add(resolvedImageUrl);
+    void ExpoImage.prefetch(resolvedImageUrl, "memory-disk").catch((error) => {
+      console.warn("Unable to prefetch saved set card thumbnail.", error);
+    });
+  }, [resolvedImageUrl]);
+
+  useEffect(() => {
+    if (effectiveRenderedImageUrl || !requestRenderRef.current) {
+      return;
+    }
+
+    const requestTimer = setTimeout(() => requestRenderRef.current?.(), 200);
+
+    return () => {
+      clearTimeout(requestTimer);
+    };
+  }, [effectiveRenderedImageUrl, renderReadinessKey]);
 
   return (
-    <View nativeID={nativeIdRef.current}>
-      {shouldMountFullPreview ? (
-        <SafeCardThumbnail
-          card={card}
-          width={width}
-          cornerRadius={cornerRadius}
-          footerOwnerName={footerOwnerName}
-        />
+    <View
+      nativeID={nativeIdRef.current}
+      style={{
+        width,
+        height,
+        borderRadius: cornerRadius,
+        borderCurve: "continuous",
+        backgroundColor: "#f4f6f9",
+        overflow: "hidden",
+      }}
+    >
+      {imageSource ? (
+        <>
+          <ExpoImage
+            source={imageSource}
+            style={{ width: "100%", height: "100%" }}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            transition={0}
+            onLoad={() => {
+              setImageResolutionError(null);
+            }}
+            onError={() => {
+              setResolvedImageUrl(null);
+              setImageResolutionError("Image component could not load the thumbnail URL.");
+            }}
+          />
+          {showImageStatusOverlay ? (
+            <View
+              style={{
+                position: "absolute",
+                left: 6,
+                right: 6,
+                bottom: 6,
+                borderRadius: 6,
+                backgroundColor: "rgba(16, 24, 38, 0.82)",
+                paddingHorizontal: 7,
+                paddingVertical: 5,
+              }}
+            >
+              <Text selectable={false} numberOfLines={1} style={{ color: "#ffffff", fontSize: Math.max(7, width * 0.064), fontWeight: "900", textTransform: "uppercase" }}>
+                {renderStatus?.label}
+              </Text>
+              {renderStatus?.detail ? (
+                <Text selectable={false} numberOfLines={1} style={{ color: "rgba(255, 255, 255, 0.78)", fontSize: Math.max(6, width * 0.052), fontWeight: "800" }}>
+                  {renderStatus.detail}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+        </>
       ) : (
         <CardThumbnailFallback
           card={card}
           width={width}
           cornerRadius={cornerRadius}
-          statusLabel="Preview loading"
+          statusLabel={statusLabel}
+          statusDetail={statusDetail}
         />
       )}
     </View>
   );
-}
-
-class SafeCardThumbnail extends Component<SafeCardThumbnailProps, TabContentErrorBoundaryState> {
-  state: TabContentErrorBoundaryState = { failed: false, autoRepairAttempted: false };
-
-  static getDerivedStateFromError(state: TabContentErrorBoundaryState): TabContentErrorBoundaryState {
-    return { ...state, failed: true };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.warn("CardMagic card thumbnail render failed.", error, errorInfo.componentStack);
-  }
-
-  componentDidUpdate(previousProps: SafeCardThumbnailProps) {
-    if (previousProps.card !== this.props.card && this.state.failed) {
-      this.setState({ failed: false, autoRepairAttempted: false });
-    }
-  }
-
-  render() {
-    if (this.state.failed) {
-      return (
-        <CardThumbnailFallback
-          card={this.props.card}
-          width={this.props.width}
-          cornerRadius={this.props.cornerRadius}
-        />
-      );
-    }
-
-    return (
-      <CardPreview
-        card={this.props.card}
-        activeSection={null}
-        width={this.props.width}
-        cornerRadius={this.props.cornerRadius}
-        footerOwnerName={this.props.footerOwnerName}
-        onSectionPress={noopCardPreviewHandler}
-        onChange={noopCardPreviewHandler}
-      />
-    );
-  }
-}
+});
 
 function CardThumbnailFallback({
   card,
   width,
   cornerRadius,
   statusLabel = "Preview repaired",
+  statusDetail,
 }: {
   card: CardDraft;
   width: number;
   cornerRadius: number;
   statusLabel?: string;
+  statusDetail?: string;
 }) {
   const height = width / CARD_BACK_PREVIEW_ASPECT_RATIO;
   const face = getEditableCardFace(card);
@@ -13600,9 +14777,16 @@ function CardThumbnailFallback({
           {face.typeLine || "Card"}
         </Text>
       </View>
-      <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: Math.max(6, width * 0.065), fontWeight: "900", textTransform: "uppercase" }}>
-        {statusLabel}
-      </Text>
+      <View style={{ gap: 2 }}>
+        <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: Math.max(6, width * 0.065), fontWeight: "900", textTransform: "uppercase" }}>
+          {statusLabel}
+        </Text>
+        {statusDetail ? (
+          <Text selectable={false} numberOfLines={2} style={{ color: "#747d8f", fontSize: Math.max(6, width * 0.052), lineHeight: Math.max(8, width * 0.068), fontWeight: "800" }}>
+            {statusDetail}
+          </Text>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -14744,9 +15928,9 @@ function SetsPanel({
   newSetName,
   customCardBacks,
   generatedSetSymbols,
-  footerOwnerName,
   canRefreshSets,
   setsRefreshing,
+  setCardImageRemoteHydrated,
   canInviteSetCollaborators,
   onRefreshSets,
   onChangeNewSetName,
@@ -14765,15 +15949,17 @@ function SetsPanel({
   onFetchSetCollaborators,
   onFetchPendingInvites,
   onInviteSetCollaborator,
+  getSetCardImageRenderStatus,
+  onEnsureSetCardImage,
 }: {
   sets: CardSet[];
   selectedSetId: string;
   newSetName: string;
   customCardBacks: CustomCardBackEntry[];
   generatedSetSymbols: GeneratedSetSymbolEntry[];
-  footerOwnerName: string;
   canRefreshSets: boolean;
   setsRefreshing: boolean;
+  setCardImageRemoteHydrated: boolean;
   canInviteSetCollaborators: boolean;
   onRefreshSets: () => void;
   onChangeNewSetName: (name: string) => void;
@@ -14795,9 +15981,10 @@ function SetsPanel({
   onFetchSetCollaborators: (setId: string) => Promise<CollaborationSetMemberPayload[]>;
   onFetchPendingInvites: (setId: string) => Promise<CollaborationPendingInvitePayload[]>;
   onInviteSetCollaborator: (setId: string, inviteIdentifier: string) => Promise<void>;
+  getSetCardImageRenderStatus: (setId: string, snapshot: SetCardSnapshot) => SetCardImageRenderStatus | undefined;
+  onEnsureSetCardImage: (setId: string, snapshot: SetCardSnapshot) => void;
 }) {
   const { width: viewportWidth } = useWindowDimensions();
-  const compactWebViewport = Platform.OS === "web" && viewportWidth <= 700;
   const [expandedSetIds, setExpandedSetIds] = useState<Set<string>>(() => new Set([selectedSetId]));
   const [editingSetId, setEditingSetId] = useState<string | null>(null);
   const [editingSetDefaultsPanel, setEditingSetDefaultsPanel] = useState<"cardBack" | "setSymbol" | null>(null);
@@ -16108,7 +17295,7 @@ function SetsPanel({
                     >
                       <Plus size={32} color="#68707d" strokeWidth={2.6} />
                     </Pressable>
-                    {visibleSetCards.map((snapshot, index) => {
+                    {visibleSetCards.map((snapshot) => {
                       const setCard = getSafeSetCardPreviewCard(snapshot, set);
 
                       return (
@@ -16124,12 +17311,14 @@ function SetsPanel({
                           }}
                         >
                           <View pointerEvents="none" style={{ alignItems: "center" }}>
-                            <LazySafeCardThumbnail
+                            <SetCardImageThumbnail
                               card={setCard}
                               width={previewWidth}
                               cornerRadius={SET_CARD_THUMBNAIL_RADIUS}
-                              footerOwnerName={footerOwnerName}
-                              deferFullPreview={compactWebViewport && index >= SET_GRID_COMPACT_EAGER_PREVIEW_COUNT}
+                              renderedImageUrl={snapshot.renderedImageUrl}
+                              renderStatus={getSetCardImageRenderStatus(set.id, snapshot)}
+                              renderReadinessKey={setCardImageRemoteHydrated ? "remote-ready" : "remote-pending"}
+                              onRequestRender={() => onEnsureSetCardImage(set.id, snapshot)}
                             />
                           </View>
                           {isEditingSet ? (
@@ -16215,6 +17404,9 @@ const COMMUNITY_CARD_PAGE_SIZE = 8;
 const COMMUNITY_INITIAL_RENDERED_CARD_COUNT = 3;
 const COMMUNITY_AUTO_LOAD_MORE_THRESHOLD = 420;
 const COMMUNITY_SCROLL_WINDOW_UPDATE_THRESHOLD = 96;
+const COMMUNITY_FEED_CARD_ROW_CHROME_HEIGHT = 150;
+const COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT = 4;
+const COMMUNITY_SET_RENDERED_CARD_BATCH_SIZE = 4;
 const COMMUNITY_FEED_OVERSCAN_PX = 1200;
 const COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT = 690;
 
@@ -16240,6 +17432,7 @@ function CommunityPanel({
   const [communitySetCardsBySetId, setCommunitySetCardsBySetId] = useState<Record<string, CommunitySetCardPayload[]>>({});
   const [communitySetCardsLoadingId, setCommunitySetCardsLoadingId] = useState<string | null>(null);
   const [communitySetCardsErrorBySetId, setCommunitySetCardsErrorBySetId] = useState<Record<string, string>>({});
+  const [visibleCommunitySetCardCountsBySetId, setVisibleCommunitySetCardCountsBySetId] = useState<Record<string, number>>({});
   const [featuredCard, setFeaturedCard] = useState<CommunityCardPayload | null>(null);
   const [communityBusy, setCommunityBusy] = useState(false);
   const [communitySetsLoaded, setCommunitySetsLoaded] = useState(false);
@@ -16533,6 +17726,10 @@ function CommunityPanel({
   const openCommunitySet = useCallback((set: CommunitySetPayload) => {
     const nextSelectedSetId = selectedCommunitySetId === set.id ? null : set.id;
     setSelectedCommunitySetId(nextSelectedSetId);
+    setVisibleCommunitySetCardCountsBySetId((current) => ({
+      ...current,
+      [set.id]: current[set.id] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT,
+    }));
 
     if (!nextSelectedSetId || communitySetCardsBySetId[set.id] || communitySetCardsLoadingId === set.id) {
       return;
@@ -16551,6 +17748,10 @@ function CommunityPanel({
           ...current,
           [set.id]: cards,
         }));
+        setVisibleCommunitySetCardCountsBySetId((current) => ({
+          ...current,
+          [set.id]: current[set.id] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT,
+        }));
       })
       .catch((error) => {
         setCommunitySetCardsErrorBySetId((current) => ({
@@ -16563,6 +17764,13 @@ function CommunityPanel({
       });
   }, [communitySetCardsBySetId, communitySetCardsLoadingId, selectedCommunitySetId]);
 
+  const showMoreCommunitySetCards = useCallback((setId: string) => {
+    setVisibleCommunitySetCardCountsBySetId((current) => ({
+      ...current,
+      [setId]: (current[setId] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT) + COMMUNITY_SET_RENDERED_CARD_BATCH_SIZE,
+    }));
+  }, []);
+
   useEffect(() => {
     void loadCommunityCards();
   }, [accountUser?.id, loadCommunityCards]);
@@ -16574,6 +17782,7 @@ function CommunityPanel({
     setCommunitySetCardsBySetId({});
     setCommunitySetCardsErrorBySetId({});
     setCommunitySetCardsLoadingId(null);
+    setVisibleCommunitySetCardCountsBySetId({});
   }, [accountUser?.id]);
 
   useEffect(() => {
@@ -16865,8 +18074,10 @@ function CommunityPanel({
             cardsBySetId={communitySetCardsBySetId}
             loadingSetId={communitySetCardsLoadingId}
             errorBySetId={communitySetCardsErrorBySetId}
+            visibleCardCountsBySetId={visibleCommunitySetCardCountsBySetId}
             onOpenSet={openCommunitySet}
             onToggleSetFollow={handleToggleCommunitySetFollow}
+            onShowMoreSetCards={showMoreCommunitySetCards}
             onExportCardImage={onExportCardImage}
           />
         )}
@@ -18539,6 +19750,12 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
   const cardName = entry.name || "Untitled Card";
   const label = entry.typeLine || "Community card";
   const cardAspectRatio = getTypeFrameSpec(getPreviewTypeFrame(entry.card)).aspectRatio;
+  const cardPreviewHeight = cardPreviewWidth / cardAspectRatio;
+  const [imageLoaded, setImageLoaded] = useState(false);
+
+  useEffect(() => {
+    setImageLoaded(false);
+  }, [entry.id, entry.imageUrl, cardPreviewWidth]);
 
   return (
     <View
@@ -18547,6 +19764,7 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
         borderBottomColor: "#eceef2",
         paddingVertical: 14,
         gap: 12,
+        minHeight: cardPreviewHeight + COMMUNITY_FEED_CARD_ROW_CHROME_HEIGHT,
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
@@ -18582,27 +19800,36 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
         <View
           style={{
             width: cardPreviewWidth,
-            height: cardPreviewWidth / cardAspectRatio,
+            height: cardPreviewHeight,
+            minHeight: cardPreviewHeight,
             borderRadius: 9,
             overflow: "hidden",
             backgroundColor: "#e7e9ee",
             alignItems: "center",
             justifyContent: "center",
+            position: "relative",
           }}
         >
           {entry.imageUrl ? (
-            // expo-image: memory + disk caching, lazy decode, and the source is a
-            // Supabase image-transform URL (right-sized, WebP) rather than the
-            // full-res export PNG. The fixed aspect-ratio box above prevents
-            // layout shift while it loads.
-            <ExpoImage
-              source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
-              contentFit="contain"
-              transition={180}
-              cachePolicy="memory-disk"
-              recyclingKey={entry.id}
-              style={{ width: "100%", height: "100%" }}
-            />
+            <>
+              {!imageLoaded ? <CommunityCardImagePlaceholder /> : null}
+              <ExpoImage
+                source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
+                contentFit="contain"
+                transition={180}
+                cachePolicy="memory-disk"
+                recyclingKey={entry.id}
+                onLoad={() => setImageLoaded(true)}
+                onError={() => setImageLoaded(true)}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  opacity: imageLoaded ? 1 : 0,
+                }}
+              />
+            </>
           ) : (
             <CardPreview
               card={entry.card}
@@ -18764,6 +19991,23 @@ function CommunityFeedActionButton({
   );
 }
 
+function CommunityCardImagePlaceholder() {
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        inset: 0,
+        backgroundColor: "#e7e9ee",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <ActivityIndicator color="#0b7180" size="small" />
+    </View>
+  );
+}
+
 function CommunitySetsPreview({
   sets,
   viewerUserId,
@@ -18771,8 +20015,10 @@ function CommunitySetsPreview({
   cardsBySetId,
   loadingSetId,
   errorBySetId,
+  visibleCardCountsBySetId,
   onOpenSet,
   onToggleSetFollow,
+  onShowMoreSetCards,
   onExportCardImage,
 }: {
   sets: CommunitySetPayload[];
@@ -18781,8 +20027,10 @@ function CommunitySetsPreview({
   cardsBySetId: Record<string, CommunitySetCardPayload[]>;
   loadingSetId: string | null;
   errorBySetId: Record<string, string>;
+  visibleCardCountsBySetId: Record<string, number>;
   onOpenSet: (set: CommunitySetPayload) => void;
   onToggleSetFollow: (setId: string, followed: boolean) => void;
+  onShowMoreSetCards: (setId: string) => void;
   onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
@@ -18806,6 +20054,11 @@ function CommunitySetsPreview({
       {sets.map((set) => {
         const expanded = selectedSetId === set.id;
         const setCards = cardsBySetId[set.id] ?? [];
+        const visibleCardCount = Math.min(
+          setCards.length,
+          visibleCardCountsBySetId[set.id] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT,
+        );
+        const visibleSetCards = setCards.slice(0, visibleCardCount);
         const loading = loadingSetId === set.id;
         const error = errorBySetId[set.id];
         const viewerOwnsSet = Boolean(viewerUserId && viewerUserId === set.userId);
@@ -18950,14 +20203,38 @@ function CommunitySetsPreview({
                     No public cards are available for this set.
                   </Text>
                 ) : (
-                  setCards.map((entry) => (
-                    <CommunitySetCardPreview
-                      key={entry.id}
-                      entry={entry}
-                      cardPreviewWidth={cardPreviewWidth}
-                      onExportCardImage={onExportCardImage}
-                    />
-                  ))
+                  <>
+                    {visibleSetCards.map((entry) => (
+                      <CommunitySetCardPreview
+                        key={entry.id}
+                        entry={entry}
+                        cardPreviewWidth={cardPreviewWidth}
+                        onExportCardImage={onExportCardImage}
+                      />
+                    ))}
+                    {visibleCardCount < setCards.length ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Load more cards from ${set.name}`}
+                        onPress={() => onShowMoreSetCards(set.id)}
+                        style={({ pressed }) => ({
+                          minHeight: 42,
+                          borderRadius: 999,
+                          borderWidth: 1,
+                          borderColor: "#d8dbe2",
+                          backgroundColor: pressed ? "#eef1f5" : "#ffffff",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          paddingHorizontal: 12,
+                          opacity: pressed ? 0.78 : 1,
+                        })}
+                      >
+                        <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 12, fontWeight: "900" }}>
+                          Load {Math.min(COMMUNITY_SET_RENDERED_CARD_BATCH_SIZE, setCards.length - visibleCardCount)} more cards
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </>
                 )}
               </View>
             ) : null}
@@ -18979,6 +20256,12 @@ function CommunitySetCardPreview({
 }) {
   const cardName = entry.name || "Untitled Card";
   const cardAspectRatio = getTypeFrameSpec(getPreviewTypeFrame(entry.card)).aspectRatio;
+  const cardPreviewHeight = cardPreviewWidth / cardAspectRatio;
+  const [imageLoaded, setImageLoaded] = useState(false);
+
+  useEffect(() => {
+    setImageLoaded(false);
+  }, [entry.id, entry.imageUrl, cardPreviewWidth]);
 
   return (
     <View style={{ gap: 8 }}>
@@ -18999,23 +20282,36 @@ function CommunitySetCardPreview({
         <View
           style={{
             width: cardPreviewWidth,
-            height: cardPreviewWidth / cardAspectRatio,
+            height: cardPreviewHeight,
+            minHeight: cardPreviewHeight,
             borderRadius: 9,
             overflow: "hidden",
             backgroundColor: "#e7e9ee",
             alignItems: "center",
             justifyContent: "center",
+            position: "relative",
           }}
         >
           {entry.imageUrl ? (
-            <ExpoImage
-              source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
-              contentFit="contain"
-              transition={180}
-              cachePolicy="memory-disk"
-              recyclingKey={`set-${entry.id}`}
-              style={{ width: "100%", height: "100%" }}
-            />
+            <>
+              {!imageLoaded ? <CommunityCardImagePlaceholder /> : null}
+              <ExpoImage
+                source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
+                contentFit="contain"
+                transition={180}
+                cachePolicy="memory-disk"
+                recyclingKey={`set-${entry.id}`}
+                onLoad={() => setImageLoaded(true)}
+                onError={() => setImageLoaded(true)}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  opacity: imageLoaded ? 1 : 0,
+                }}
+              />
+            </>
           ) : (
             <CardPreview
               card={entry.card}

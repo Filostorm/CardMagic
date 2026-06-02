@@ -6,6 +6,7 @@
 - Use existing MSE/source-pack assets as the authoritative source for frame textures, pinlines, masks, and blend assets.
 - After every code patch, update the beta Cloudflare Pages deployment when credentials and environment allow it. The automatic agent deployment target is the `beta` Pages branch; use `npm run deploy:cloudflare`.
 - Do not update the production Cloudflare Pages deployment automatically. Production is a manual promotion target; use `npm run deploy:cloudflare:production` only when the user explicitly asks to update the normal production page.
+- Only run `git push` when deploying to the main production site. Beta deployments may be built and deployed from local commits or local working-tree state, but they should not push repository changes unless the user explicitly requests a main/production deployment.
 - Always update the in-app patch notes opened from the header version number for every user-visible change before deploying. The latest app version must have a matching entry in `CARDMAGIC_PATCH_NOTES` before running either `npm run deploy:cloudflare` or `npm run deploy:cloudflare:production`.
 - Patch-note branch scope is part of release correctness: unscoped `CARDMAGIC_PATCH_NOTES` entries are beta-only. A production release note must include `branches: ["main"]` or `branches: ["beta", "main"]`.
 - Do not bypass `npm run release:verify -- beta` or `npm run release:verify -- main`; the Cloudflare deploy scripts run these checks before export and update Supabase release metadata after a successful deploy.

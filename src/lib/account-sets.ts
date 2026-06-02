@@ -29,6 +29,7 @@ export type AccountCustomSetSymbolPayload = {
 export type AccountCardSnapshotPayload = {
   id: string;
   savedAt?: string;
+  renderedImageUrl?: string;
   card: CardDraft;
 };
 
@@ -390,10 +391,14 @@ type CardSetMembershipRow = {
   cards: {
     id: string;
     local_snapshot_id: string | null;
+    image_url: string | null;
+    updated_at: string;
     card: unknown;
   } | Array<{
     id: string;
     local_snapshot_id: string | null;
+    image_url: string | null;
+    updated_at: string;
     card: unknown;
   }> | null;
 };
@@ -704,17 +709,119 @@ export async function publishCommunityCard({
   }
 }
 
+export async function updateRemoteCardRenderedImage({
+  userId,
+  localSnapshotId,
+  card,
+  imageUrl,
+}: {
+  userId: string;
+  localSnapshotId: string;
+  card: CardDraft;
+  imageUrl: string;
+}): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const publishableImageUrl = getPublishableRenderedImageUrl(imageUrl);
+
+  if (!publishableImageUrl) {
+    throw new Error("Only public HTTP(S) rendered card images can be saved to Supabase.");
+  }
+
+  const remoteCardId = getRemoteCardId(userId, localSnapshotId);
+  const { data: updatedRows, error: updateError } = await supabase
+    .from("cards")
+    .update({ image_url: publishableImageUrl })
+    .eq("id", remoteCardId)
+    .eq("user_id", userId)
+    .select("id");
+
+  if (updateError) {
+    throw new Error(updateError.message);
+  }
+
+  if ((updatedRows ?? []).length > 0) {
+    return;
+  }
+
+  const persistedCard = await persistRemoteCardDraftMedia(
+    card,
+    { kind: "account", userId },
+    `set-card-${localSnapshotId}`,
+  );
+  const faceCard = getPrimaryFaceCard(persistedCard);
+  const { error: upsertError } = await supabase.from("cards").upsert({
+    id: remoteCardId,
+    user_id: userId,
+    local_snapshot_id: localSnapshotId,
+    name: faceCard.name ?? "",
+    type_line: faceCard.typeLine ?? "",
+    rarity: persistedCard.rarity ?? null,
+    colors: persistedCard.frameColors ?? [],
+    frame_treatment: persistedCard.frameTreatment ?? null,
+    image_url: publishableImageUrl,
+    card: compactCardForPublish(persistedCard),
+    visibility: "public",
+  }, {
+    onConflict: "id",
+  });
+
+  if (upsertError) {
+    throw new Error(upsertError.message);
+  }
+}
+
+export async function attachCollaborationSetCardImage({
+  setId,
+  cardId,
+  imageUrl,
+}: {
+  setId: string;
+  cardId: string;
+  imageUrl: string;
+}): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const publishableImageUrl = getPublishableRenderedImageUrl(imageUrl);
+
+  if (!publishableImageUrl) {
+    throw new Error("Only public HTTP(S) rendered card images can be saved to Supabase.");
+  }
+
+  const { error } = await supabase.rpc("attach_collaboration_set_card_image", {
+    p_set_id: setId,
+    p_card_id: cardId,
+    p_image_url: publishableImageUrl,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
 export async function uploadCommunityCardImage(
   userId: string,
   cardId: string,
+  image: Blob | ArrayBuffer | Uint8Array,
+): Promise<string> {
+  return uploadCommunityCardImageToPath(
+    getCommunityCardImageStoragePath(userId, cardId, `${Date.now()}`),
+    image,
+  );
+}
+
+export async function uploadCommunityCardImageToPath(
+  path: string,
   image: Blob | ArrayBuffer | Uint8Array,
 ): Promise<string> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
   }
 
-  const safeCardId = cardId.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 160);
-  const path = `${userId}/${safeCardId || Date.now()}.png`;
   const { error } = await supabase.storage
     .from("community-card-images")
     .upload(path, image, {
@@ -728,6 +835,232 @@ export async function uploadCommunityCardImage(
 
   const { data } = supabase.storage.from("community-card-images").getPublicUrl(path);
   return data.publicUrl || `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/community-card-images/${path}`;
+}
+
+export type ExistingCommunityCardImage = {
+  publicUrl: string;
+  lastModified?: string;
+};
+
+export type RemoteCardRenderedImage = {
+  imageUrl: string;
+  updatedAt?: string;
+};
+
+export async function findRemoteCardRenderedImageById(
+  cardId: string,
+): Promise<RemoteCardRenderedImage | null> {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("cards")
+    .select("image_url, updated_at")
+    .eq("id", cardId)
+    .maybeSingle<{
+      image_url: string | null;
+      updated_at: string | null;
+    }>();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data?.image_url) {
+    return null;
+  }
+
+  return {
+    imageUrl: data.image_url,
+    updatedAt: data.updated_at ?? undefined,
+  };
+}
+
+export async function findRemoteCardRenderedImage(
+  userId: string,
+  localSnapshotId: string,
+): Promise<RemoteCardRenderedImage | null> {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("cards")
+    .select("image_url, updated_at")
+    .eq("id", getRemoteCardId(userId, localSnapshotId))
+    .eq("user_id", userId)
+    .maybeSingle<{
+      image_url: string | null;
+      updated_at: string | null;
+    }>();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data?.image_url) {
+    return null;
+  }
+
+  return {
+    imageUrl: data.image_url,
+    updatedAt: data.updated_at ?? undefined,
+  };
+}
+
+function getSafeCommunityCardImageId(cardId: string) {
+  return cardId.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 160);
+}
+
+function getCommunityCardImageStoragePath(userId: string, cardId: string, fallbackCardId?: string) {
+  const safeCardId = getSafeCommunityCardImageId(cardId) || fallbackCardId;
+
+  if (!safeCardId) {
+    throw new Error("Card image storage path requires a card id.");
+  }
+
+  return `${userId}/${safeCardId}.png`;
+}
+
+export function getCommunitySetCardImageStoragePath(setId: string, cardId: string) {
+  const safeSetId = getSafeCommunityCardImageId(setId);
+  const safeCardId = getSafeCommunityCardImageId(cardId);
+
+  if (!safeSetId || !safeCardId) {
+    throw new Error("Set card image storage path requires a set id and card id.");
+  }
+
+  return `sets/${safeSetId}/cards/${safeCardId}.png`;
+}
+
+export function getCommunityCardImagePublicUrl(userId: string, cardId: string): string | null {
+  if (!supabase) {
+    return null;
+  }
+
+  const path = getCommunityCardImageStoragePath(userId, cardId);
+  return getCommunityCardImagePublicUrlForPath(path);
+}
+
+export function getCommunityCardImagePublicUrlForPath(path: string): string | null {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data } = supabase.storage.from("community-card-images").getPublicUrl(path);
+
+  return data.publicUrl || `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/community-card-images/${path}`;
+}
+
+type PublicImageProbeResult =
+  | { kind: "exists"; lastModified?: string }
+  | { kind: "missing" }
+  | { kind: "unknown" };
+
+export async function findExistingCommunityCardImage(
+  userId: string,
+  cardId: string,
+): Promise<ExistingCommunityCardImage | null> {
+  return findExistingCommunityCardImageByPath(getCommunityCardImageStoragePath(userId, cardId));
+}
+
+export async function findExistingCommunityCardImageByPath(
+  path: string,
+): Promise<ExistingCommunityCardImage | null> {
+  const publicUrl = getCommunityCardImagePublicUrlForPath(path);
+
+  if (!publicUrl) {
+    return null;
+  }
+
+  const headProbe = await probePublicCommunityCardImage(publicUrl, "HEAD");
+
+  if (headProbe.kind === "exists") {
+    return {
+      publicUrl,
+      lastModified: headProbe.lastModified,
+    };
+  }
+
+  if (headProbe.kind === "missing") {
+    return null;
+  }
+
+  const getProbe = await probePublicCommunityCardImage(publicUrl, "GET");
+
+  if (getProbe.kind !== "exists") {
+    return null;
+  }
+
+  return {
+    publicUrl,
+    lastModified: getProbe.lastModified,
+  };
+}
+
+export async function findExistingCommunityCardImages(
+  userId: string,
+  cardIds: string[],
+  concurrency = 8,
+): Promise<Map<string, ExistingCommunityCardImage>> {
+  const uniqueCardIds = Array.from(new Set(cardIds.filter((cardId) => cardId.trim())));
+  const results = new Map<string, ExistingCommunityCardImage>();
+  let nextIndex = 0;
+
+  async function probeNextImage() {
+    while (nextIndex < uniqueCardIds.length) {
+      const cardId = uniqueCardIds[nextIndex];
+      nextIndex += 1;
+
+      const existingImage = await findExistingCommunityCardImage(userId, cardId);
+
+      if (existingImage) {
+        results.set(cardId, existingImage);
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, concurrency), uniqueCardIds.length) },
+      () => probeNextImage(),
+    ),
+  );
+
+  return results;
+}
+
+async function probePublicCommunityCardImage(
+  publicUrl: string,
+  method: "HEAD" | "GET",
+): Promise<PublicImageProbeResult> {
+  try {
+    const response = await fetch(withCommunityCardImageCacheProbe(publicUrl), {
+      method,
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      return {
+        kind: "exists",
+        lastModified: response.headers.get("last-modified") ?? undefined,
+      };
+    }
+
+    if (response.status === 404) {
+      return { kind: "missing" };
+    }
+
+    return method === "HEAD" ? { kind: "unknown" } : { kind: "missing" };
+  } catch {
+    return { kind: "unknown" };
+  }
+}
+
+function withCommunityCardImageCacheProbe(publicUrl: string) {
+  const separator = publicUrl.includes("?") ? "&" : "?";
+  return `${publicUrl}${separator}cm_probe=${Date.now()}`;
 }
 
 async function replaceLegacyRemoteCardSets(userId: string, sets: AccountCardSetPayload[]) {
@@ -764,7 +1097,7 @@ async function hydrateRemoteSetCards(userId: string, sets: AccountCardSetPayload
 
   const { data, error } = await supabase
     .from("card_set_cards")
-    .select("set_id, position, created_at, cards(id, local_snapshot_id, card)")
+    .select("set_id, position, created_at, cards(id, local_snapshot_id, image_url, updated_at, card)")
     .eq("user_id", userId)
     .order("position", { ascending: true })
     .returns<CardSetMembershipRow[]>();
@@ -789,7 +1122,8 @@ async function hydrateRemoteSetCards(userId: string, sets: AccountCardSetPayload
     const snapshots = cardsBySetId.get(row.set_id) ?? [];
     snapshots.push({
       id: relatedCard.local_snapshot_id ?? relatedCard.id,
-      savedAt: row.created_at ?? undefined,
+      savedAt: relatedCard.updated_at ?? row.created_at ?? undefined,
+      renderedImageUrl: relatedCard.image_url ?? undefined,
       card: relatedCard.card,
     });
     cardsBySetId.set(row.set_id, snapshots);
@@ -2089,6 +2423,7 @@ async function replaceRemoteCards(userId: string, sets: AccountCardSetPayload[])
     set.cards.map((snapshot) => {
       const card = snapshot.card;
       const faceCard = getPrimaryFaceCard(card);
+      const renderedImageUrl = getPublishableRenderedImageUrl(snapshot.renderedImageUrl);
 
       return {
         id: getRemoteCardId(userId, snapshot.id),
@@ -2099,8 +2434,8 @@ async function replaceRemoteCards(userId: string, sets: AccountCardSetPayload[])
         rarity: card.rarity ?? null,
         colors: card.frameColors ?? [],
         frame_treatment: card.frameTreatment ?? null,
-        image_url: null,
-        card,
+        image_url: renderedImageUrl,
+        card: renderedImageUrl ? compactCardForPublish(card) : card,
         visibility: "public",
       };
     }),
@@ -2238,6 +2573,7 @@ function normalizeAccountCardSnapshots(value: unknown): AccountCardSnapshotPaylo
     return [{
       id: record.id,
       savedAt: typeof record.savedAt === "string" ? record.savedAt : undefined,
+      renderedImageUrl: typeof record.renderedImageUrl === "string" ? record.renderedImageUrl : undefined,
       card: record.card,
     }];
   });
@@ -2245,6 +2581,10 @@ function normalizeAccountCardSnapshots(value: unknown): AccountCardSnapshotPaylo
 
 function getRemoteCardId(userId: string, localSnapshotId: string) {
   return `${userId}:${localSnapshotId}`;
+}
+
+function getPublishableRenderedImageUrl(imageUrl: string | undefined) {
+  return typeof imageUrl === "string" && /^https?:\/\//i.test(imageUrl) ? imageUrl : null;
 }
 
 function getPrimaryFaceCard(card: CardDraft) {

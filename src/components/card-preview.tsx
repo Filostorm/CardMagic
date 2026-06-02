@@ -198,6 +198,14 @@ type CoordinateRect = {
   height: number;
 };
 
+function getDisplayArtistName(artist: string | undefined) {
+  const trimmedArtist = artist?.trim();
+
+  return !trimmedArtist || trimmedArtist.toLowerCase() === "local artist"
+    ? "Unknown Artist"
+    : trimmedArtist;
+}
+
 type SplitFrameSources = {
   left: ImageSourcePropType;
   right: ImageSourcePropType;
@@ -1333,7 +1341,7 @@ function ModernPrintingFooter({
     const setCodeWidth = 40 * scale;
     const artistTop = 475 - FUTURESHIFTED_TREATMENT_LAYOUT.footer.y;
     const copyrightTop = 488 - FUTURESHIFTED_TREATMENT_LAYOUT.footer.y;
-    const artist = card.artist?.trim() || "Local Artist";
+    const artist = getDisplayArtistName(card.artist);
     const artistTextWidth = Math.max(58, Math.min(170, artist.length * 5.6)) * scale;
     const artistRight = (rightBound - FUTURESHIFTED_TREATMENT_LAYOUT.footer.x) * scale;
     const paintbrushWidth = 40 * scale;
@@ -1631,7 +1639,7 @@ function ModernPrintingFooter({
 }
 
 function RetroPrintingFooter({ card, scale, footerOwnerName }: { card: CardDraft; scale: number; footerOwnerName?: string }) {
-  const artist = card.artist?.trim() || "Local Artist";
+  const artist = getDisplayArtistName(card.artist);
   const legalLine = `${getCardMagicFooterCopyrightLine(card, footerOwnerName)}  ${getModernCollectorLine(card)}`;
 
   return (

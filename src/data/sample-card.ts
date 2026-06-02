@@ -20,7 +20,7 @@ export const INITIAL_CARD: CardDraft = {
   defense: "3",
   power: "2",
   toughness: "4",
-  artist: "Local Artist",
+  artist: "Unknown Artist",
   setCode: "CMG",
   collectorNumber: "001",
   setSize: DEFAULT_CARD_SET_SIZE,

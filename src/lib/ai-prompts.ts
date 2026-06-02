@@ -1152,7 +1152,6 @@ function buildArtFromTextColorPrompt(card: CardDraft, rulesContext: string, visu
 
 function buildRandomCardPrompt(card: CardDraft): string {
   const colorInstruction = describeColorIdentity(getEditableCardFace(card));
-  const frameIdentity = FRAME_IDENTITY_LABELS[inferFrameIdentity(getEditableCardFace(card))];
 
   return [
     "Generate one original, balanced custom trading card for a modern fantasy trading-card game.",

@@ -4,7 +4,7 @@ import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
-import { ArrowDown, ArrowUp, BookOpen, Bug, Check, ChevronDown, ChevronUp, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, Users, X } from "lucide-react-native";
+import { ArrowDown, ArrowUp, BookOpen, Bug, Check, ChevronDown, ChevronUp, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, UserPlus, Users, X } from "lucide-react-native";
 import { Component, memo, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -32,8 +32,7 @@ import {
 } from "react-native";
 import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
-import { captureRef as nativeViewShotCaptureRef } from "react-native-view-shot/src/index.js";
-import RNViewShotWeb from "react-native-view-shot/src/RNViewShot.web.js";
+import { captureRef as nativeViewShotCaptureRef } from "react-native-view-shot";
 import Animated, {
   Easing,
   runOnJS,
@@ -65,6 +64,9 @@ import {
   type LevelUpToastItem,
   type XpFloatingNumber,
 } from "@/components/progression-hud";
+import { EarlyAccessCodeModal } from "@/components/early-access-code-modal";
+import { GenerationButtonLabel } from "@/components/generation-button-label";
+import { PatchNotesModal } from "@/components/patch-notes-modal";
 import { KeywordLibraryPanel, SectionEditorModal, type GeneratedSetSymbolEntry } from "@/components/section-editor-modal";
 import { SET_SYMBOL_PRESETS, SetSymbolMark } from "@/components/set-symbol";
 import { DEFAULT_CARD_BACK_ID, getCardBackOption, type CustomCardBackEntry } from "@/data/card-backs";
@@ -91,6 +93,18 @@ import {
   getDefaultArtGeneratorRequest,
 } from "@/lib/ai-prompts";
 import {
+  useMobileBrowserBottomInset,
+  useMobileWebInputZoomGuard,
+  useWebTextSelectionGuard,
+} from "@/hooks/browser-guards";
+import {
+  getWebStorageItem,
+  isWebMediaReference,
+  persistWebMediaUri,
+  resolveWebMediaUri,
+  setWebStorageItem,
+} from "@/lib/web-media-store";
+import {
   fetchAccountProfile,
   type AccountProfile,
 } from "@/lib/account-profile";
@@ -101,14 +115,20 @@ import {
   fetchCommunityPolls,
   fetchCommunitySetCards,
   fetchCommunitySets,
+  fetchCollaborationSetCards,
+  fetchCollaborationSetMembers,
+  fetchCollaborationSetPendingInvites,
+  fetchCollaborationSets,
   fetchRemoteCustomSetSymbols,
   fetchRemoteCardSets,
   markCommunityCardsSeen,
   createCommunityPoll,
+  inviteCollaborationSetMember,
   publishCommunityCard,
   replaceRemoteCustomSetSymbols,
   replaceRemoteCardSets,
   saveCommunityCardComment,
+  searchCollaborationInviteProfiles,
   setCommunityPollStatus,
   submitCommunityFeedback,
   submitCommunityPollVote,
@@ -123,17 +143,22 @@ import {
   type CommunityCardPagePayload,
   type CommunityCardCommentPayload,
   type CommunityCardPayload,
+  type CollaborationSetPayload,
   type CommunityFeedbackType,
   type CommunityPollPayload,
   type CommunityPollSelectionType,
   type CommunitySetCardPayload,
   type CommunitySetPayload,
+  type CollaborationInviteProfileSuggestion,
+  type CollaborationPendingInvitePayload,
+  type CollaborationSetMemberPayload,
 } from "@/lib/account-sets";
 import {
   fixRulesTextViaEdge,
   generateAiImageEditViaEdge,
   generateAiImageViaEdge,
   generateSubjectMatteViaEdge,
+  type AiCreditProgressResponse,
   type AiImageGenerationOptions,
   SubjectMatteProviderError,
   type SubjectMatteDiagnostics,
@@ -149,11 +174,14 @@ import {
 } from "@/lib/commerce";
 import { getResizedCommunityImageUrl } from "@/lib/community-image";
 import {
+  CARDMAGIC_RELEASE_BRANCH,
+  CARDMAGIC_VISIBLE_PATCH_NOTES,
+} from "@/lib/patch-notes";
+import {
   FRAME_SELECTION_LABELS,
   FRAME_TREATMENT_LABELS,
   getFrameColors,
   inferFrameIdentity,
-  inferFrameStyle,
   normalizeManaInput,
 } from "@/lib/card-style";
 import {
@@ -165,7 +193,6 @@ import {
   toDfcFacePatch,
 } from "@/lib/dfc";
 import { createRandomCard } from "@/lib/random-card";
-import { getModernCollectorLine } from "@/lib/printing";
 import {
   applyProgressEvent,
   canSpendCredits,
@@ -182,6 +209,7 @@ import {
   type ProgressEventType,
   type UserProgressProfile,
 } from "@/lib/progression";
+import { fetchCardMagicReleaseDeployment, type CardMagicReleaseDeployment } from "@/lib/release-metadata";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { getSplitHalf, getSplitLayout, isSplitTypeFrame, toSplitHalfCard } from "@/lib/split-card";
 import {
@@ -208,183 +236,18 @@ import {
 } from "@/types/card";
 
 const BORDERLESS_TREATMENT_PREVIEW_SOURCE = require("./assets/card-assets/basic-m15/mse-renderer/treatments/borderless/mask-frame.png");
-const TRANSPARENT_BORDERLESS_TREATMENT_PREVIEW_SOURCE = require(
-  "./assets/card-assets/basic-m15/source-pack/data/magic-m15-altered.mse-style/transparent_borderless.png",
-);
 const PACKAGE_METADATA = require("./package.json") as { version: string };
 const CARDMAGIC_APP_VERSION = PACKAGE_METADATA.version;
 const CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID = "cardmagic-single-export-preview";
 const CARDMAGIC_BATCH_EXPORT_PREVIEW_ID = "cardmagic-batch-export-preview";
-
-type PatchNoteEntry = {
-  version: string;
-  date: string;
-  title: string;
-  bullets: PatchNoteBullet[];
-};
-
-type PatchNoteBullet =
-  | string
-  | {
-      text: string;
-      linkLabel: string;
-      linkUrl: string;
-    };
-
-const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
-  {
-    version: "3.24.14",
-    date: "May 31, 2026",
-    title: "Community set preview polish",
-    bullets: [
-      "Flavor text now uses the same computed font size and line height as rules text across normal, split, and battle card previews.",
-      "Community set card previews no longer add the extra wrapper bands above and below rendered cards.",
-    ],
-  },
-  {
-    version: "3.24.13",
-    date: "May 31, 2026",
-    title: "Community set browsing",
-    bullets: [
-      "Community set rows now expand on tap so users can inspect the public cards inside each set.",
-      "Set detail loading uses a dedicated public Supabase RPC with card previews and rendered-image export actions.",
-    ],
-  },
-  {
-    version: "3.24.12",
-    date: "May 31, 2026",
-    title: "Beta link",
-    bullets: [
-      {
-        text: "Current beta build:",
-        linkLabel: "beta.cardmagic-5dy.pages.dev",
-        linkUrl: "https://beta.cardmagic-5dy.pages.dev",
-      },
-    ],
-  },
-  {
-    version: "3.24.11",
-    date: "May 31, 2026",
-    title: "Rules keyword chips",
-    bullets: [
-      "Rules-sheet keyword ability lines now save as persisted keyword chips below the rules editor.",
-      "Toggling a keyword chip now controls whether that keyword's reminder text appears on card previews and exports.",
-    ],
-  },
-  {
-    version: "3.24.10",
-    date: "May 31, 2026",
-    title: "Community, showcase, and editor fixes",
-    bullets: [
-      "Community feed loading is faster and more resilient, with card art fallbacks and clearer Supabase/RPC diagnostics.",
-      "Eternal Night, Stained Glass, Stellar Sights, and Vehicle rendering were tightened across preview and exported PNG output.",
-      "The floating toolbar palette now positions from the toolbar viewport and uses a three-style base grid width.",
-      "Subtype editing in the sheet now uses the same type-line autocomplete as manual type lines.",
-      "Rules reminder text in parentheses now renders in italics on card previews and exports.",
-    ],
-  },
-  {
-    version: "3.24.9",
-    date: "May 31, 2026",
-    title: "Stellar Sights text fit",
-    bullets: [
-      "Stellar Sights rules text now uses a tighter text measure and bottom alignment so rules copy wraps more naturally near the flavor divider.",
-      "Community feed errors now display normalized diagnostic text instead of raw object strings.",
-    ],
-  },
-  {
-    version: "3.24.8",
-    date: "May 31, 2026",
-    title: "Vehicle PT boxes",
-    bullets: [
-      "Vehicle cards now render a power/toughness box when the type line uses Vehicle as an artifact subtype.",
-    ],
-  },
-  {
-    version: "3.24.7",
-    date: "May 31, 2026",
-    title: "Adaptive toolbar palette",
-    bullets: [
-      "The floating toolbar palette menu now repositions and resizes from the toolbar's current viewport position, with a three-style base grid width.",
-    ],
-  },
-  {
-    version: "3.24.6",
-    date: "May 31, 2026",
-    title: "Stained Glass export art",
-    bullets: [
-      "Stained Glass exports now flatten the MSE art mask before capture so the illustration appears in the saved PNG.",
-    ],
-  },
-  {
-    version: "3.24.5",
-    date: "May 31, 2026",
-    title: "Eternal Night PT alignment",
-    bullets: [
-      "Eternal Night creature power/toughness text now uses the frame's MSE-aligned text box so exported stats sit centered in the badge.",
-    ],
-  },
-  {
-    version: "3.24.4",
-    date: "May 31, 2026",
-    title: "Community art fallback",
-    bullets: [
-      "Community feed cards without a hosted render now fall back to their original saved art instead of showing empty artwork.",
-    ],
-  },
-  {
-    version: "3.24.3",
-    date: "May 31, 2026",
-    title: "Community and export fixes",
-    bullets: [
-      "Community feed now includes existing public cards that were published before rendered feed images were stored separately.",
-      "Eternal Night and Stained Glass showcase frames now preserve their masked frame layers in exported PNGs.",
-    ],
-  },
-  {
-    version: "3.24.1",
-    date: "May 30, 2026",
-    title: "Leaner community publishing",
-    bullets: [
-      "Published cards no longer store heavy embedded art data, keeping the community feed fast.",
-      "Saving a community card image now downloads the finished render directly instead of rebuilding it.",
-    ],
-  },
-  {
-    version: "3.24.0",
-    date: "May 30, 2026",
-    title: "Faster community feed",
-    bullets: [
-      "Community card feed loads noticeably faster and more consistently.",
-      "Feed cards now use right-sized, cached images in modern formats (WebP/AVIF) instead of full-resolution renders.",
-      "Images fade in within a fixed frame, so the feed no longer jumps around while loading.",
-    ],
-  },
-  {
-    version: "3.23.1",
-    date: "May 29, 2026",
-    title: "Mask responsiveness",
-    bullets: [
-      "Targeted mask segmentation now has explicit timeout behavior instead of waiting indefinitely on slow SAM inference.",
-      "Prompted mask requests use a smaller transport image while preserving source-resolution mask normalization.",
-      "Mask status messages now explain when a targeted mask is taking too long and suggest a simpler visible object.",
-    ],
-  },
-  {
-    version: "3.23.0",
-    date: "May 29, 2026",
-    title: "Production release notes",
-    bullets: [
-      "Version label now opens in-app patch notes so users can inspect the current production release.",
-      "Targeted mask prompts split compound subjects like “bow and arrow” into separate SAM segmentation concepts.",
-      "Targeted mask failures now show user-friendly guidance while keeping technical diagnostics in logs.",
-      "Subject mask components are saved with card data and restored when cards are loaded.",
-    ],
-  },
-];
-
+const CARDMAGIC_SET_THUMBNAIL_LAZY_ROOT_MARGIN = "720px 0px";
 type InspectorTab = "edit" | "keywords" | "sets" | "community";
 type VisibleInspectorTab = Exclude<InspectorTab, "keywords">;
+type MainScrollBoundaryHandler = (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+type MainScrollWindow = {
+  offsetY: number;
+  viewportHeight: number;
+};
 
 type SetCardSnapshot = {
   id: string;
@@ -392,10 +255,23 @@ type SetCardSnapshot = {
   card: CardDraft;
 };
 
+type CardRecoverySnapshot = {
+  id: string;
+  savedAt: string;
+  reason: "tab-switch" | "autosave";
+  setId: string;
+  setName: string;
+  activeSetCardId: string | null;
+  card: CardDraft;
+};
+
 type CardSet = {
   id: string;
   name: string;
   code: string;
+  ownerUserId?: string;
+  ownerName?: string;
+  collaborationRole?: CollaborationSetPayload["role"];
   cardBackId?: CardBackId;
   setSymbolPreset?: string;
   setSymbolId?: string;
@@ -421,186 +297,6 @@ type AchievementPopup = AchievementDefinition & {
 
 const XP_FLOAT_COLORS = ["#0b7180", "#6b4fc4", "#c58b17", "#228555", "#d45a2a"] as const;
 
-type FrameTemplateData = {
-  typeFrame?: TypeFrame;
-  dfcMode?: CardDraft["dfcMode"];
-  splitLayout?: SplitCardLayout;
-  frameSelection?: FrameSelection;
-  frameColors?: ManaColor[];
-  backFrameSelection?: FrameSelection;
-  backFrameColors?: ManaColor[];
-  frameTreatment?: FrameTreatment;
-  showcaseFrame?: ShowcaseFrameId;
-  frameCustomization?: FrameCustomization;
-};
-
-// Ticks elapsed whole-seconds while `active` is true (resets to 0 when it goes
-// false). Drives the live generation timers shown across every AI flow.
-function useElapsedSeconds(active: boolean): number {
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    if (!active) {
-      setElapsed(0);
-      return;
-    }
-
-    const startedAt = Date.now();
-    setElapsed(0);
-    const intervalId = setInterval(() => {
-      setElapsed(Math.max(0, Math.round((Date.now() - startedAt) / 1000)));
-    }, 1000);
-
-    return () => clearInterval(intervalId);
-  }, [active]);
-
-  return elapsed;
-}
-
-// Appends a live "(Ns)" timer to a generation label while busy.
-function withElapsedLabel(label: string, elapsedSeconds: number, active: boolean): string {
-  return active && elapsedSeconds > 0 ? `${label} (${elapsedSeconds}s)` : label;
-}
-
-// Shared generate-button label that shows a live elapsed timer while busy.
-function GenerationButtonLabel({
-  busy,
-  idleLabel,
-  busyLabel = "Generating",
-}: {
-  busy: boolean;
-  idleLabel: string;
-  busyLabel?: string;
-}) {
-  const elapsed = useElapsedSeconds(busy);
-
-  return (
-    <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "900" }}>
-      {busy ? withElapsedLabel(busyLabel, elapsed, true) : idleLabel}
-    </Text>
-  );
-}
-
-function useMobileWebInputZoomGuard() {
-  useEffect(() => {
-    if (Platform.OS !== "web" || typeof document === "undefined") {
-      return;
-    }
-
-    const existingViewport = document.querySelector('meta[name="viewport"]');
-    const viewportMeta = existingViewport ?? document.createElement("meta");
-    const previousContent = viewportMeta.getAttribute("content");
-    const createdViewportMeta = existingViewport === null;
-
-    if (createdViewportMeta) {
-      viewportMeta.setAttribute("name", "viewport");
-      document.head.appendChild(viewportMeta);
-    }
-
-    viewportMeta.setAttribute(
-      "content",
-      "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no",
-    );
-
-    return () => {
-      if (createdViewportMeta) {
-        viewportMeta.remove();
-        return;
-      }
-
-      if (previousContent !== null) {
-        viewportMeta.setAttribute("content", previousContent);
-      }
-    };
-  }, []);
-}
-
-function useMobileBrowserBottomInset(viewportWidth: number) {
-  const [bottomInset, setBottomInset] = useState(0);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined") {
-      setBottomInset(0);
-      return;
-    }
-
-    const visualViewport = window.visualViewport;
-    const isCompactViewport = viewportWidth <= 700;
-    const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
-    const isMobileBrowser = /\b(iPhone|iPod|Android|Mobile)\b/i.test(userAgent);
-    const fallbackInset = isCompactViewport && isMobileBrowser ? 6 : 0;
-
-    const updateInset = () => {
-      const measuredInset = visualViewport
-        ? Math.max(0, window.innerHeight - visualViewport.height - visualViewport.offsetTop)
-        : 0;
-      const nextInset = Math.min(12, Math.round(Math.max(measuredInset * 0.12, fallbackInset)));
-
-      setBottomInset((current) => (current === nextInset ? current : nextInset));
-    };
-
-    updateInset();
-    visualViewport?.addEventListener("resize", updateInset);
-    visualViewport?.addEventListener("scroll", updateInset);
-    window.addEventListener("resize", updateInset);
-    window.addEventListener("orientationchange", updateInset);
-
-    return () => {
-      visualViewport?.removeEventListener("resize", updateInset);
-      visualViewport?.removeEventListener("scroll", updateInset);
-      window.removeEventListener("resize", updateInset);
-      window.removeEventListener("orientationchange", updateInset);
-    };
-  }, [viewportWidth]);
-
-  return bottomInset;
-}
-
-function useWebTextSelectionGuard() {
-  useEffect(() => {
-    if (Platform.OS !== "web" || typeof document === "undefined") {
-      return;
-    }
-
-    const styleElement = document.createElement("style");
-
-    styleElement.setAttribute("data-cardmagic-selection-guard", "true");
-    styleElement.textContent = `
-      html,
-      body,
-      #root,
-      #root *:not(input):not(textarea):not([contenteditable="true"]):not([contenteditable="true"] *) {
-        -webkit-touch-callout: none !important;
-        -webkit-user-select: none !important;
-        user-select: none !important;
-      }
-
-      #root input,
-      #root textarea,
-      #root [contenteditable="true"],
-      #root [contenteditable="true"] *,
-      #root [role="textbox"] {
-        -webkit-touch-callout: default !important;
-        -webkit-user-select: text !important;
-        user-select: text !important;
-      }
-    `;
-    document.head.appendChild(styleElement);
-
-    return () => {
-      styleElement.remove();
-    };
-  }, []);
-}
-
-type CardFrameTemplate = {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  data: FrameTemplateData;
-};
-
 type CardMagicExport =
   | {
       schemaVersion: 1;
@@ -613,18 +309,6 @@ type CardMagicExport =
       kind: "set";
       exportedAt: string;
       set: CardSet;
-    }
-  | {
-      schemaVersion: 1;
-      kind: "frame-template";
-      exportedAt: string;
-      template: CardFrameTemplate;
-    }
-  | {
-      schemaVersion: 1;
-      kind: "frame-templates";
-      exportedAt: string;
-      templates: CardFrameTemplate[];
     };
 
 type CardMagicStorageAdapter = {
@@ -724,6 +408,7 @@ type DeleteUndoState =
 type WebFileSystemWritableFileStream = {
   write: (data: Blob) => Promise<void>;
   close: () => Promise<void>;
+  abort?: () => Promise<void>;
 };
 
 type WebFileSystemFileHandle = {
@@ -744,6 +429,44 @@ type WindowWithSaveFilePicker = Window & {
   showSaveFilePicker?: (options?: WebSaveFilePickerOptions) => Promise<WebFileSystemFileHandle>;
 };
 
+type JsZipStreamHelper = {
+  on: (
+    event: "data" | "error" | "end",
+    callback: ((chunk: Uint8Array) => void) | ((error: unknown) => void) | (() => void),
+  ) => JsZipStreamHelper;
+  pause: () => JsZipStreamHelper;
+  resume: () => JsZipStreamHelper;
+};
+
+type JsZipArchiveLike = {
+  generateAsync(options: { type: "uint8array"; streamFiles?: boolean }): Promise<Uint8Array>;
+  generateAsync(options: { type: "blob"; streamFiles?: boolean }): Promise<Blob>;
+  generateInternalStream: (options: { type: "uint8array"; streamFiles?: boolean }) => JsZipStreamHelper;
+};
+type JsZipFilePayload = string | Uint8Array | Blob;
+type JsZipFolderLike = {
+  file: (name: string, payload: JsZipFilePayload) => unknown;
+};
+type JsZipMutableArchiveLike = JsZipArchiveLike &
+  JsZipFolderLike & {
+    folder: (name: string) => JsZipFolderLike | null;
+  };
+
+type WebStreamingZipEntry = {
+  fileNameBytes: Uint8Array;
+  crc32: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  localHeaderOffset: number;
+  modifiedAt: Date;
+};
+
+type WebStreamingZipWriter = {
+  addFile: (fileName: string, data: string | Uint8Array) => Promise<void>;
+  close: () => Promise<void>;
+  abort: () => Promise<void>;
+};
+
 type FrameMenuOption =
   | {
       kind: "treatment";
@@ -760,7 +483,8 @@ const AUXILIARY_IMAGE_MAX_DIMENSION = 512;
 const CARD_SET_STORAGE_KEY = "cardmagic.savedSets.v1";
 const DELETION_TOMBSTONE_STORAGE_KEY = "cardmagic.deletionTombstones.v1";
 const ACTIVE_CARD_STORAGE_KEY = "cardmagic.activeCard.v1";
-const FRAME_TEMPLATE_STORAGE_KEY = "cardmagic.frameTemplates.v1";
+const CARD_RECOVERY_SNAPSHOT_STORAGE_KEY = "cardmagic.cardRecoverySnapshots.v1";
+const CARD_RECOVERY_SNAPSHOT_LIMIT = 24;
 const ART_LIBRARY_STORAGE_KEY = "cardmagic.artLibrary.v1";
 const CUSTOM_CARD_BACK_STORAGE_KEY = "cardmagic.customCardBacks.v1";
 const DEFAULT_CARD_BACK_RESKIN_ID = "custom:card-back-default-reskin" as CardBackId;
@@ -776,12 +500,7 @@ const PROMOTIONAL_CREDIT_CODES: Record<string, number> = {
   CHILLIN1000: 1000,
   EARLYACCESS100: 100,
 };
-const OPENAI_API_KEY_STORAGE_KEY = "cardmagic.openAiApiKey.v1";
-const WEB_STORAGE_DB_NAME = "cardmagic-storage";
-const WEB_STORAGE_STORE_NAME = "keyValue";
 const STORAGE_LOG_PREFIX = "[CardMagic storage]";
-const OPENAI_IMAGE_GENERATION_URL = "https://api.openai.com/v1/images/generations";
-const OPENAI_IMAGE_MODELS = ["gpt-image-1.5", "gpt-image-1"] as const;
 const OPENAI_CARD_ART_IMAGE_BASE_OPTIONS = {
   size: "1536x1024",
 } as const;
@@ -789,8 +508,6 @@ const OPENAI_AUXILIARY_IMAGE_OPTIONS = {
   size: "1024x1024",
   quality: "medium",
 } as const;
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const OPENAI_RULES_TEXT_MODELS = ["gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1"] as const;
 const PREVIEW_ACTION_BUTTON_SIZE = 44;
 const PREVIEW_ACTION_BUTTON_GAP = 10;
 const PREVIEW_ACTION_TOOLBAR_PADDING = 7;
@@ -825,6 +542,7 @@ const GENERATED_SET_SYMBOL_MAX_ENTRIES = 48;
 const ART_LIBRARY_VISIBLE_THUMBNAIL_LIMIT = 32;
 const SET_GRID_INITIAL_CARD_LIMIT = 12;
 const SET_GRID_PAGE_SIZE = 12;
+const SET_GRID_COMPACT_EAGER_PREVIEW_COUNT = 2;
 const SET_CARD_THUMBNAIL_RADIUS = 5;
 const COLOR_IDENTITY_SORT_ORDER: ManaColor[] = ["W", "U", "B", "R", "G"];
 const ART_IMAGE_QUALITY_OPTIONS = [
@@ -846,57 +564,21 @@ type ArtImageQuality = (typeof ART_IMAGE_QUALITY_OPTIONS)[number]["value"];
 type CardBackGeneratorMode = "reskin" | "custom";
 
 type PickedImageAsset = Pick<ImagePicker.ImagePickerAsset, "uri" | "width" | "height">;
-type MaskBrushMode = "add" | "erase" | "smartAdd" | "smartErase";
 type ArtAdjustmentInitialMode = "crop" | "mask";
-
-type MaskEditDisplayLayout = {
-  cropWidth: number;
-  cropHeight: number;
-  imageLeft: number;
-  imageTop: number;
-  imageWidth: number;
-  imageHeight: number;
-  offsetX: number;
-  offsetY: number;
-  scale: number;
-  coordinateScale: number;
-};
 
 type StoredActiveCardDraft = {
   schemaVersion: 1;
   card: CardDraft;
 };
 
-type OpenAiImageGenerationResponse = {
-  data?: Array<{
-    b64_json?: string;
-    url?: string;
-  }>;
-  error?: {
-    message?: string;
-  };
-};
-
-type OpenAiImageGenerationOptions = {
-  size: "1024x1024" | "1536x1024" | "1024x1536";
-  quality: "medium" | "high";
+type StoredCardRecoverySnapshots = {
+  schemaVersion: 1;
+  snapshots: CardRecoverySnapshot[];
 };
 
 function getArtImageQualitySpendCategory(quality: ArtImageQuality): CreditSpendCategory {
   return quality === "high" ? "artImageHigh" : "artImage";
 }
-
-type OpenAiResponsesResponse = {
-  output_text?: string;
-  output?: Array<{
-    content?: Array<{
-      text?: string;
-    }>;
-  }>;
-  error?: {
-    message?: string;
-  };
-};
 
 function hasNativeModule(...moduleNames: string[]) {
   return moduleNames.some((moduleName) => Boolean(NativeModules[moduleName]));
@@ -1035,6 +717,10 @@ async function materializeExternalImageUri(uri: string, prefix: string) {
 }
 
 async function materializeImageUri(uri: string, prefix: string) {
+  if (Platform.OS === "web" && isWebMediaReference(uri)) {
+    return resolveWebMediaUri(uri, `image/${getImageUriExtension(uri)}`);
+  }
+
   const dataUriParts = getImageDataUriParts(uri);
 
   if (dataUriParts) {
@@ -1247,6 +933,191 @@ async function materializeCustomCardBackImageDataUris(
   return materializedEntries;
 }
 
+async function persistImageUri(uri: string, prefix: string) {
+  if (Platform.OS === "web") {
+    return persistWebMediaUri(uri, prefix, `image/${getImageUriExtension(uri)}`);
+  }
+
+  return materializeImageUri(uri, prefix);
+}
+
+async function persistCardDraftImageUris(card: CardDraft, prefix: string): Promise<CardDraft> {
+  const imageKeys = ["artUri", "artSubjectMaskUri", "backArtUri", "backArtSubjectMaskUri", "setSymbolUri", "watermarkUri"] as const;
+  let nextCard = card;
+
+  for (const key of imageKeys) {
+    const uri = nextCard[key];
+
+    if (!uri) {
+      continue;
+    }
+
+    let persistedUri = uri;
+
+    try {
+      persistedUri = await persistImageUri(uri, `${prefix}-${key}`);
+    } catch (error) {
+      logStorageWarning("Unable to persist card media URI; preserving original URI.", {
+        prefix,
+        field: key,
+        uri: getImageUriLogDescriptor(uri),
+        error,
+      });
+      continue;
+    }
+
+    if (persistedUri !== uri) {
+      nextCard = {
+        ...nextCard,
+        [key]: persistedUri,
+      };
+    }
+  }
+
+  const persistSubjectMaskComponents = async (
+    key: "artSubjectMaskComponents" | "backArtSubjectMaskComponents",
+  ) => {
+    const components = nextCard[key];
+
+    if (!components || components.length === 0) {
+      return;
+    }
+
+    let changed = false;
+    const nextComponents: SubjectMaskComponent[] = [];
+
+    for (let index = 0; index < components.length; index += 1) {
+      const component = components[index];
+      let cutoutUrl = component.cutoutUrl;
+
+      try {
+        cutoutUrl = await persistImageUri(component.cutoutUrl, `${prefix}-${key}-${index}`);
+      } catch (error) {
+        logStorageWarning("Unable to persist subject-mask component media; preserving original URI.", {
+          prefix,
+          field: key,
+          concept: component.concept,
+          uri: getImageUriLogDescriptor(component.cutoutUrl),
+          error,
+        });
+      }
+
+      if (cutoutUrl !== component.cutoutUrl) {
+        changed = true;
+      }
+
+      nextComponents.push({
+        ...component,
+        cutoutUrl,
+      });
+    }
+
+    if (changed) {
+      nextCard = {
+        ...nextCard,
+        [key]: nextComponents,
+      };
+    }
+  };
+
+  await persistSubjectMaskComponents("artSubjectMaskComponents");
+  await persistSubjectMaskComponents("backArtSubjectMaskComponents");
+
+  return nextCard;
+}
+
+async function persistCardSetImageUris(set: CardSet): Promise<CardSet> {
+  let changed = false;
+  let setSymbolUri = set.setSymbolUri;
+  const cards: SetCardSnapshot[] = [];
+
+  if (setSymbolUri) {
+    try {
+      const persistedSetSymbolUri = await persistImageUri(setSymbolUri, `set-${set.id}-default-set-symbol`);
+
+      if (persistedSetSymbolUri !== setSymbolUri) {
+        setSymbolUri = persistedSetSymbolUri;
+        changed = true;
+      }
+    } catch (error) {
+      logStorageWarning("Unable to persist set default symbol media; preserving original URI.", {
+        setId: set.id,
+        uri: getImageUriLogDescriptor(setSymbolUri),
+        error,
+      });
+    }
+  }
+
+  for (const snapshot of set.cards) {
+    const card = await persistCardDraftImageUris(snapshot.card, `set-${set.id}-${snapshot.id}`);
+
+    if (card !== snapshot.card) {
+      changed = true;
+      cards.push({ ...snapshot, card });
+    } else {
+      cards.push(snapshot);
+    }
+  }
+
+  return changed ? { ...set, setSymbolUri, cards } : set;
+}
+
+async function persistCardSetsImageUris(sets: CardSet[]): Promise<CardSet[]> {
+  const persistedSets: CardSet[] = [];
+
+  for (const set of sets) {
+    persistedSets.push(await persistCardSetImageUris(set));
+  }
+
+  return persistedSets;
+}
+
+async function persistArtLibraryImageUris(entries: ArtLibraryEntry[]): Promise<ArtLibraryEntry[]> {
+  const persistedEntries: ArtLibraryEntry[] = [];
+
+  for (const entry of entries) {
+    let uri = entry.uri;
+
+    try {
+      uri = await persistImageUri(entry.uri, `art-library-${entry.id}`);
+    } catch (error) {
+      console.warn("Unable to persist art-library media; keeping original URI.", error);
+    }
+
+    persistedEntries.push(uri === entry.uri ? entry : { ...entry, uri });
+  }
+
+  return persistedEntries;
+}
+
+async function persistGeneratedSetSymbolImageUris(
+  entries: GeneratedSetSymbolEntry[],
+): Promise<GeneratedSetSymbolEntry[]> {
+  const persistedEntries: GeneratedSetSymbolEntry[] = [];
+
+  for (const entry of entries) {
+    const uri = await persistImageUri(entry.uri, `set-symbol-${entry.id}`);
+
+    persistedEntries.push(uri === entry.uri ? entry : { ...entry, uri });
+  }
+
+  return persistedEntries;
+}
+
+async function persistCustomCardBackImageUris(
+  entries: CustomCardBackEntry[],
+): Promise<CustomCardBackEntry[]> {
+  const persistedEntries: CustomCardBackEntry[] = [];
+
+  for (const entry of entries) {
+    const uri = await persistImageUri(entry.uri, `card-back-${entry.id.replace(/^custom:/, "")}`);
+
+    persistedEntries.push(uri === entry.uri ? entry : { ...entry, uri });
+  }
+
+  return persistedEntries;
+}
+
 function getConstrainedImageSize(asset: PickedImageAsset, maxDimension: number) {
   const width = asset.width || 0;
   const height = asset.height || 0;
@@ -1329,15 +1200,58 @@ function createPendingStripeCheckoutPopup() {
   popup.document.body.style.margin = "0";
   popup.document.body.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
   popup.document.body.style.background = "#f7f8fb";
-  popup.document.body.innerHTML = `
-    <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;color:#111820;">
-      <section style="max-width:320px;text-align:center;">
-        <div style="width:42px;height:42px;border-radius:21px;background:#111820;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:900;margin-bottom:14px;">CM</div>
-        <h1 style="font-size:20px;line-height:1.2;margin:0 0 8px;font-weight:900;">Opening Stripe Checkout</h1>
-        <p style="font-size:14px;line-height:1.45;margin:0;color:#5f6570;font-weight:700;">CardMagic is creating a secure checkout session.</p>
-      </section>
-    </main>
-  `;
+
+  const document = popup.document;
+  const main = document.createElement("main");
+  const section = document.createElement("section");
+  const badge = document.createElement("div");
+  const heading = document.createElement("h1");
+  const copy = document.createElement("p");
+
+  Object.assign(main.style, {
+    minHeight: "100vh",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "24px",
+    color: "#111820",
+  });
+  Object.assign(section.style, {
+    maxWidth: "320px",
+    textAlign: "center",
+  });
+  Object.assign(badge.style, {
+    width: "42px",
+    height: "42px",
+    borderRadius: "21px",
+    background: "#111820",
+    color: "#ffffff",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: "900",
+    marginBottom: "14px",
+  });
+  Object.assign(heading.style, {
+    fontSize: "20px",
+    lineHeight: "1.2",
+    margin: "0 0 8px",
+    fontWeight: "900",
+  });
+  Object.assign(copy.style, {
+    fontSize: "14px",
+    lineHeight: "1.45",
+    margin: "0",
+    color: "#5f6570",
+    fontWeight: "700",
+  });
+
+  badge.textContent = "CM";
+  heading.textContent = "Opening Stripe Checkout";
+  copy.textContent = "CardMagic is creating a secure checkout session.";
+  section.append(badge, heading, copy);
+  main.append(section);
+  popup.document.body.replaceChildren(main);
   popup.focus();
 
   return popup;
@@ -1861,219 +1775,6 @@ function getRectDistance(
   return Math.hypot(xGap, yGap);
 }
 
-async function editWebSubjectMaskAtPoint({
-  artUri,
-  maskUri,
-  layout,
-  point,
-  mode,
-  brushSize,
-}: {
-  artUri: string;
-  maskUri: string;
-  layout: MaskEditDisplayLayout;
-  point: { x: number; y: number };
-  mode: MaskBrushMode;
-  brushSize: number;
-}) {
-  if (typeof document === "undefined") {
-    return maskUri;
-  }
-
-  const maskImage = await loadWebImageElement(maskUri);
-  const width = maskImage.naturalWidth || maskImage.width || 1024;
-  const height = maskImage.naturalHeight || maskImage.height || 1024;
-  const sourcePoint = getMaskEditSourcePoint(point, layout, width, height);
-
-  if (!sourcePoint) {
-    return maskUri;
-  }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-
-  if (!context) {
-    return maskUri;
-  }
-
-  context.clearRect(0, 0, width, height);
-  context.drawImage(maskImage, 0, 0, width, height);
-  const imageData = context.getImageData(0, 0, width, height);
-
-  if (mode === "smartAdd" || mode === "smartErase") {
-    await applySmartMaskSelection({
-      artUri,
-      maskData: imageData.data,
-      width,
-      height,
-      seed: sourcePoint,
-      add: mode === "smartAdd",
-    });
-  } else {
-    applyMaskBrushStroke({
-      maskData: imageData.data,
-      width,
-      height,
-      center: sourcePoint,
-      radius: Math.max(3, Math.round((brushSize / layout.scale) * (width / Math.max(1, layout.imageWidth)))),
-      add: mode === "add",
-    });
-  }
-
-  for (let index = 0; index < imageData.data.length; index += 4) {
-    imageData.data[index] = 255;
-    imageData.data[index + 1] = 255;
-    imageData.data[index + 2] = 255;
-  }
-
-  context.putImageData(imageData, 0, 0);
-
-  return canvas.toDataURL("image/png");
-}
-
-function getMaskEditSourcePoint(
-  point: { x: number; y: number },
-  layout: MaskEditDisplayLayout,
-  sourceWidth: number,
-  sourceHeight: number,
-) {
-  const imageCenterX = layout.imageLeft + layout.imageWidth / 2 + layout.offsetX * layout.coordinateScale;
-  const imageCenterY = layout.imageTop + layout.imageHeight / 2 + layout.offsetY * layout.coordinateScale;
-  const localX = (point.x - imageCenterX) / layout.scale + layout.imageWidth / 2;
-  const localY = (point.y - imageCenterY) / layout.scale + layout.imageHeight / 2;
-
-  if (localX < 0 || localX > layout.imageWidth || localY < 0 || localY > layout.imageHeight) {
-    return null;
-  }
-
-  return {
-    x: Math.round((localX / layout.imageWidth) * sourceWidth),
-    y: Math.round((localY / layout.imageHeight) * sourceHeight),
-  };
-}
-
-function applyMaskBrushStroke({
-  maskData,
-  width,
-  height,
-  center,
-  radius,
-  add,
-}: {
-  maskData: Uint8ClampedArray;
-  width: number;
-  height: number;
-  center: { x: number; y: number };
-  radius: number;
-  add: boolean;
-}) {
-  const radiusSquared = radius * radius;
-  const minX = Math.max(0, center.x - radius);
-  const maxX = Math.min(width - 1, center.x + radius);
-  const minY = Math.max(0, center.y - radius);
-  const maxY = Math.min(height - 1, center.y + radius);
-
-  for (let y = minY; y <= maxY; y += 1) {
-    for (let x = minX; x <= maxX; x += 1) {
-      const distanceSquared = (x - center.x) ** 2 + (y - center.y) ** 2;
-
-      if (distanceSquared > radiusSquared) {
-        continue;
-      }
-
-      const falloff = 1 - Math.sqrt(distanceSquared) / Math.max(1, radius);
-      const alphaIndex = (y * width + x) * 4 + 3;
-      const targetAlpha = add ? 255 : 0;
-      const currentAlpha = maskData[alphaIndex];
-      maskData[alphaIndex] = Math.round(currentAlpha + (targetAlpha - currentAlpha) * clamp(falloff * 1.8, 0, 1));
-    }
-  }
-}
-
-async function applySmartMaskSelection({
-  artUri,
-  maskData,
-  width,
-  height,
-  seed,
-  add,
-}: {
-  artUri: string;
-  maskData: Uint8ClampedArray;
-  width: number;
-  height: number;
-  seed: { x: number; y: number };
-  add: boolean;
-}) {
-  const artImage = await loadWebImageElement(artUri);
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-
-  if (!context) {
-    return;
-  }
-
-  context.drawImage(artImage, 0, 0, width, height);
-  const artData = context.getImageData(0, 0, width, height).data;
-  const seedX = clamp(seed.x, 0, width - 1);
-  const seedY = clamp(seed.y, 0, height - 1);
-  const seedIndex = (seedY * width + seedX) * 4;
-  const seedColor = [artData[seedIndex], artData[seedIndex + 1], artData[seedIndex + 2]];
-  const visited = new Uint8Array(width * height);
-  const stack = new Int32Array(width * height);
-  const colorTolerance = 72;
-  const maxSelectionPixels = Math.max(256, Math.round(width * height * 0.18));
-  let stackLength = 0;
-  let selectedCount = 0;
-
-  stack[stackLength] = seedY * width + seedX;
-  stackLength += 1;
-  visited[seedY * width + seedX] = 1;
-
-  while (stackLength > 0 && selectedCount < maxSelectionPixels) {
-    stackLength -= 1;
-    const pixelIndex = stack[stackLength];
-    const x = pixelIndex % width;
-    const y = Math.floor(pixelIndex / width);
-    const artIndex = pixelIndex * 4;
-    const colorDistance = Math.hypot(
-      artData[artIndex] - seedColor[0],
-      artData[artIndex + 1] - seedColor[1],
-      artData[artIndex + 2] - seedColor[2],
-    );
-    const alphaIndex = artIndex + 3;
-    const existingAlpha = maskData[alphaIndex];
-    const acceptsMaskNeighbor = add ? existingAlpha > 18 : existingAlpha > 0;
-
-    if (colorDistance <= colorTolerance || acceptsMaskNeighbor) {
-      selectedCount += 1;
-      maskData[alphaIndex] = add ? Math.max(maskData[alphaIndex], 232) : 0;
-
-      for (const offset of [-width, width, -1, 1]) {
-        const nextIndex = pixelIndex + offset;
-
-        if (
-          nextIndex < 0 ||
-          nextIndex >= width * height ||
-          visited[nextIndex] ||
-          (offset === -1 && x === 0) ||
-          (offset === 1 && x === width - 1)
-        ) {
-          continue;
-        }
-
-        visited[nextIndex] = 1;
-        stack[stackLength] = nextIndex;
-        stackLength += 1;
-      }
-    }
-  }
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -2189,12 +1890,11 @@ function getFrameTreatmentPreviewSource(treatment: FrameTreatment, frameIdentity
 }
 
 const DEFAULT_MAIN_SET_NAME = "Main Set";
+const DEFAULT_MAIN_SET_ID = "00000000-0000-4000-8000-000000000001";
 
 function createDefaultCardSets(): CardSet[] {
   return [createDefaultCardSet(DEFAULT_MAIN_SET_NAME, DEFAULT_MAIN_SET_ID)];
 }
-
-const DEFAULT_MAIN_SET_ID = createUuid();
 
 function createDefaultCardSet(name: string, id = createUuid()): CardSet {
   return {
@@ -2382,11 +2082,45 @@ function findDuplicateSetCardSnapshot(
   );
 }
 
+function getCardNameSaveKey(card: CardDraft) {
+  return normalizeCardDuplicateField(getEditableCardFace(card).name);
+}
+
+function findNamedSetCardSnapshot(
+  set: CardSet | undefined,
+  card: CardDraft,
+  excludedSnapshotId: string | null,
+) {
+  if (!set) {
+    return null;
+  }
+
+  const nameKey = getCardNameSaveKey(card);
+
+  if (!nameKey) {
+    return null;
+  }
+
+  return (
+    set.cards.find((snapshot) => {
+      if (snapshot.id === excludedSnapshotId) {
+        return false;
+      }
+
+      return getCardNameSaveKey(snapshot.card) === nameKey;
+    }) ?? null
+  );
+}
+
 function saveCardDraftIntoSet(
   sets: CardSet[],
   selectedSetId: string,
   card: CardDraft,
   activeSetCardId: string | null,
+  options?: {
+    saveMode?: "auto" | "new" | "overwrite";
+    overwriteSnapshotId?: string | null;
+  },
 ) {
   const selectedSet = sets.find((set) => set.id === selectedSetId) ?? sets[0];
 
@@ -2405,12 +2139,18 @@ function saveCardDraftIntoSet(
         return set;
       }
 
-      const updatesActiveSnapshot =
-        activeSetCardId !== null && set.cards.some((setCard) => setCard.id === activeSetCardId);
-      const savedSnapshotId = updatesActiveSnapshot ? activeSetCardId : snapshot.id;
-      const nextCards = updatesActiveSnapshot
+      const overwriteSnapshotId =
+        options?.saveMode === "overwrite"
+          ? options.overwriteSnapshotId ?? activeSetCardId
+          : options?.saveMode === "new"
+            ? null
+            : activeSetCardId;
+      const updatesExistingSnapshot =
+        overwriteSnapshotId !== null && set.cards.some((setCard) => setCard.id === overwriteSnapshotId);
+      const savedSnapshotId = updatesExistingSnapshot ? overwriteSnapshotId : snapshot.id;
+      const nextCards = updatesExistingSnapshot
         ? set.cards.map((setCard) =>
-            setCard.id === activeSetCardId
+            setCard.id === overwriteSnapshotId
               ? { ...setCard, card: cloneCardDraft(resolvedCard), savedAt: timestamp }
               : setCard,
           )
@@ -2482,7 +2222,7 @@ function getSetNumberedPreviewCard(
 }
 
 function normalizeCardSets(sets: CardSet[]): CardSet[] {
-  return coalesceDuplicateDefaultMainSets(sets.map(normalizeCardSet));
+  return coalesceCardSetsById(sets.map(normalizeCardSet));
 }
 
 function normalizeCardSet(set: CardSet): CardSet {
@@ -2495,6 +2235,15 @@ function normalizeCardSet(set: CardSet): CardSet {
     id: normalizeSetId(rawSet.id),
     name,
     code,
+    ownerUserId: typeof rawSet.ownerUserId === "string" && rawSet.ownerUserId.trim()
+      ? rawSet.ownerUserId
+      : undefined,
+    ownerName: typeof rawSet.ownerName === "string" && rawSet.ownerName.trim()
+      ? rawSet.ownerName
+      : undefined,
+    collaborationRole: rawSet.collaborationRole === "owner" || rawSet.collaborationRole === "editor"
+      ? rawSet.collaborationRole
+      : undefined,
     cardBackId: rawSet.cardBackId ?? DEFAULT_CARD_BACK_ID,
     setSymbolPreset: typeof rawSet.setSymbolPreset === "string" ? rawSet.setSymbolPreset : SET_SYMBOL_PRESETS[0].id,
     setSymbolId: typeof rawSet.setSymbolId === "string" ? rawSet.setSymbolId : undefined,
@@ -2505,14 +2254,6 @@ function normalizeCardSet(set: CardSet): CardSet {
         : undefined,
     cards: normalizeSetCardOrder(Array.isArray(rawSet.cards) ? rawSet.cards : [], code),
   };
-}
-
-function getSetNameKey(name: string) {
-  return name.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function isDefaultMainSetName(name: string) {
-  return getSetNameKey(name) === getSetNameKey(DEFAULT_MAIN_SET_NAME);
 }
 
 function getSetMergeScore(set: CardSet) {
@@ -2540,7 +2281,7 @@ function mergeSetCardSnapshots(first: SetCardSnapshot[], second: SetCardSnapshot
   return normalizeSetCardOrder(Array.from(snapshotsById.values()), setCode);
 }
 
-function mergeCardSetsByDefaultIdentity(first: CardSet, second: CardSet): CardSet {
+function mergeCardSetsById(first: CardSet, second: CardSet): CardSet {
   const preferred = getSetMergeScore(second) > getSetMergeScore(first) ? second : first;
   const fallback = preferred === first ? second : first;
   const code = normalizeSetCode(preferred.code, preferred.name);
@@ -2563,35 +2304,25 @@ function mergeCardSetsByDefaultIdentity(first: CardSet, second: CardSet): CardSe
   });
 }
 
-function coalesceDuplicateDefaultMainSets(sets: CardSet[]): CardSet[] {
-  let canonicalMainSet: CardSet | null = null;
+function coalesceCardSetsById(sets: CardSet[]): CardSet[] {
+  const coalescedSetsById = new Map<string, CardSet>();
   const coalescedSets: CardSet[] = [];
 
   for (const set of sets) {
-    if (!isDefaultMainSetName(set.name)) {
+    const existingSet = coalescedSetsById.get(set.id);
+
+    if (!existingSet) {
+      coalescedSetsById.set(set.id, set);
       coalescedSets.push(set);
       continue;
     }
 
-    if (!canonicalMainSet) {
-      canonicalMainSet = set;
-      coalescedSets.push(canonicalMainSet);
-      continue;
-    }
+    const mergedSet = mergeCardSetsById(existingSet, set);
+    coalescedSetsById.set(mergedSet.id, mergedSet);
+    const existingIndex = coalescedSets.findIndex((candidate) => candidate.id === mergedSet.id);
 
-    canonicalMainSet = mergeCardSetsByDefaultIdentity(canonicalMainSet, set);
-    const canonicalIndex = coalescedSets.findIndex((candidate) => candidate.id === canonicalMainSet?.id);
-
-    if (canonicalIndex >= 0) {
-      coalescedSets[canonicalIndex] = canonicalMainSet;
-    } else {
-      const previousMainIndex = coalescedSets.findIndex((candidate) => isDefaultMainSetName(candidate.name));
-
-      if (previousMainIndex >= 0) {
-        coalescedSets[previousMainIndex] = canonicalMainSet;
-      } else {
-        coalescedSets.push(canonicalMainSet);
-      }
+    if (existingIndex >= 0) {
+      coalescedSets[existingIndex] = mergedSet;
     }
   }
 
@@ -2731,6 +2462,49 @@ function mergeAccountCardSets(localSets: CardSet[], remoteSets: CardSet[]): Card
   const mergedSets = Array.from(mergedById.values());
 
   return normalizeCardSets(mergedSets.length > 0 ? mergedSets : createDefaultCardSets());
+}
+
+function isOwnedAccountCardSet(set: CardSet, accountUserId: string) {
+  return !set.ownerUserId || set.ownerUserId === accountUserId;
+}
+
+function getOwnedAccountCardSets(sets: CardSet[], accountUserId: string): CardSet[] {
+  return normalizeCardSets(sets).filter((set) => isOwnedAccountCardSet(set, accountUserId));
+}
+
+function getLocalPersistableCardSets(sets: CardSet[]): CardSet[] {
+  return normalizeCardSets(sets).filter((set) => !set.ownerUserId);
+}
+
+async function fetchSharedAccountCardSets(accountUserId: string): Promise<CardSet[]> {
+  const collaborationSets = await fetchCollaborationSets();
+  const sharedSets = collaborationSets.filter((set) => set.ownerUserId && set.ownerUserId !== accountUserId);
+
+  const hydratedSets = await Promise.all(
+    sharedSets.map(async (set) => {
+      const cards = await fetchCollaborationSetCards(set.id);
+
+      return normalizeCardSet({
+        id: set.id,
+        name: set.name,
+        code: set.code ?? generateSetCode(set.name),
+        ownerUserId: set.ownerUserId,
+        ownerName: set.ownerName,
+        collaborationRole: set.role,
+        cardBackId: set.cardBackId as CardBackId | undefined,
+        setSymbolPreset: set.setSymbolPreset,
+        setSymbolUri: set.setSymbolUri,
+        setSymbolUsesRarityTreatment: set.setSymbolUsesRarityTreatment,
+        cards: cards.map((card) => ({
+          id: card.id,
+          savedAt: card.updatedAt ?? card.createdAt,
+          card: card.card,
+        })),
+      });
+    }),
+  );
+
+  return normalizeCardSets(hydratedSets);
 }
 
 function createEmptyDeletionTombstones(): DeletionTombstones {
@@ -2904,8 +2678,10 @@ function userProgressProfilesEqual(first: UserProgressProfile, second: UserProgr
   return JSON.stringify(normalizeUserProgressProfile(first)) === JSON.stringify(normalizeUserProgressProfile(second));
 }
 
-function toAccountCardSetPayloads(sets: CardSet[]): AccountCardSetPayload[] {
-  return normalizeCardSets(sets).map((set) => ({
+function toAccountCardSetPayloads(sets: CardSet[], accountUserId?: string): AccountCardSetPayload[] {
+  const accountSets = accountUserId ? getOwnedAccountCardSets(sets, accountUserId) : normalizeCardSets(sets);
+
+  return accountSets.map((set) => ({
     id: set.id,
     name: set.name,
     code: set.code,
@@ -2940,6 +2716,26 @@ function mergeCustomSetSymbols(
       createdAt: symbol.createdAt ?? new Date().toISOString(),
     })),
   ]);
+}
+
+function generatedSetSymbolEntriesEqual(
+  left: GeneratedSetSymbolEntry[],
+  right: GeneratedSetSymbolEntry[],
+) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((leftSymbol, index) => {
+    const rightSymbol = right[index];
+
+    return (
+      leftSymbol.id === rightSymbol.id &&
+      leftSymbol.label === rightSymbol.label &&
+      leftSymbol.uri === rightSymbol.uri &&
+      leftSymbol.createdAt === rightSymbol.createdAt
+    );
+  });
 }
 
 function resolveSetSymbolReferences(sets: CardSet[], symbols: GeneratedSetSymbolEntry[]): CardSet[] {
@@ -3262,7 +3058,7 @@ function normalizeFrameTextColorOverridesWithLegacyFallback({
   }
 
   const legacyColor = getOptionalEnumField(legacyValue, TEXT_COLOR_OPTIONS);
-  const frameTreatment = getOptionalEnumField(treatment, FRAME_TREATMENT_OPTIONS) ?? "standard";
+  const frameTreatment = getOptionalFrameTreatmentField(treatment) ?? "standard";
 
   return legacyColor ? { [frameTreatment]: legacyColor } : undefined;
 }
@@ -3312,10 +3108,21 @@ const DFC_MODE_OPTIONS: readonly DfcMode[] = ["transform", "modal", "dayNight"];
 const DFC_FACE_OPTIONS: readonly DfcFace[] = ["front", "back"];
 const SPLIT_LAYOUT_OPTIONS: readonly SplitCardLayout[] = ["split", "fuse", "aftermath"];
 const FRAME_SELECTION_OPTIONS: readonly FrameSelection[] = ["auto", "white", "blue", "black", "red", "green", "gold", "artifact", "land", "colorless"];
-const FRAME_TREATMENT_OPTIONS: readonly FrameTreatment[] = ["standard", "fullArt", "extendedArt", "borderless", "transparentBorderless", "promo", "showcase", "textless", "retro", "etchedFoil"];
+const FRAME_TREATMENT_OPTIONS: readonly FrameTreatment[] = ["standard", "fullArt", "extendedArt", "borderless", "promo", "showcase", "textless", "retro", "etchedFoil"];
+const LEGACY_FRAME_TREATMENT_ALIASES: Readonly<Record<string, FrameTreatment>> = {
+  transparentBorderless: "borderless",
+};
 const TYPE_FRAME_OPTIONS: readonly TypeFrame[] = ["standard", "token", "saga", "planeswalker", "battle", "dfc", "adventure", "split", "fuse", "aftermath"];
 const TEXT_COLOR_OPTIONS: readonly CardTextColorPreset[] = ["black", "white"];
 const SHOWCASE_FRAME_OPTIONS: readonly ShowcaseFrameId[] = SHOWCASE_FRAME_ORDER;
+
+function getOptionalFrameTreatmentField(value: unknown): FrameTreatment | undefined {
+  if (typeof value === "string" && value in LEGACY_FRAME_TREATMENT_ALIASES) {
+    return LEGACY_FRAME_TREATMENT_ALIASES[value];
+  }
+
+  return getOptionalEnumField(value, FRAME_TREATMENT_OPTIONS);
+}
 
 function normalizeStoredCardDraft(value: unknown): CardDraft {
   const source: StoredCardRecord = isStoredRecord(value) ? value : {};
@@ -3394,6 +3201,8 @@ function normalizeStoredCardDraft(value: unknown): CardDraft {
   normalized.splitRight = normalizeSplitHalfField(source.splitRight);
   normalized.artTransform = normalizeArtTransformField(source.artTransform);
   normalized.backArtTransform = normalizeArtTransformField(source.backArtTransform);
+  normalized.artSubjectMaskDisabled = getOptionalBooleanField(source, "artSubjectMaskDisabled");
+  normalized.backArtSubjectMaskDisabled = getOptionalBooleanField(source, "backArtSubjectMaskDisabled");
   normalized.artSubjectMaskComponents = normalizeSubjectMaskComponentsField(source.artSubjectMaskComponents);
   normalized.backArtSubjectMaskComponents = normalizeSubjectMaskComponentsField(source.backArtSubjectMaskComponents);
   normalized.setSymbolUsesRarityTreatment = getOptionalBooleanField(source, "setSymbolUsesRarityTreatment");
@@ -3403,9 +3212,9 @@ function normalizeStoredCardDraft(value: unknown): CardDraft {
   normalized.frameColors = getManaColorsField(source.frameColors);
   normalized.backFrameSelection = getOptionalEnumField(source.backFrameSelection, FRAME_SELECTION_OPTIONS);
   normalized.backFrameColors = getManaColorsField(source.backFrameColors);
-  normalized.backFrameTreatment = getOptionalEnumField(source.backFrameTreatment, FRAME_TREATMENT_OPTIONS);
+  normalized.backFrameTreatment = getOptionalFrameTreatmentField(source.backFrameTreatment);
   normalized.backShowcaseFrame = getOptionalEnumField(source.backShowcaseFrame, SHOWCASE_FRAME_OPTIONS);
-  normalized.frameTreatment = getOptionalEnumField(source.frameTreatment, FRAME_TREATMENT_OPTIONS);
+  normalized.frameTreatment = getOptionalFrameTreatmentField(source.frameTreatment);
   normalized.showcaseFrame = getOptionalEnumField(source.showcaseFrame, SHOWCASE_FRAME_OPTIONS);
   normalized.typeFrame = getOptionalEnumField(source.typeFrame, TYPE_FRAME_OPTIONS);
   normalized.frameCustomization = normalizeFrameCustomizationField(source.frameCustomization);
@@ -3680,51 +3489,6 @@ function getCollectorSortName(card: CardDraft) {
   return (cardName || baseCardName || "Untitled Card").trim().toLocaleLowerCase();
 }
 
-function cloneFrameTemplate(template: CardFrameTemplate): CardFrameTemplate {
-  return JSON.parse(JSON.stringify(template)) as CardFrameTemplate;
-}
-
-function createFrameTemplateFromCard(card: CardDraft): CardFrameTemplate {
-  const faceCard = getEditableCardFace(card);
-  const frameLabel = inferFrameStyle(faceCard).label;
-  const treatment = card.frameTreatment ?? "standard";
-  const timestamp = new Date().toISOString();
-
-  return {
-    id: `frame-template-${Date.now()}`,
-    name: `${frameLabel} ${FRAME_TREATMENT_LABELS[treatment]}`,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    data: {
-      typeFrame: card.typeFrame,
-      dfcMode: card.dfcMode,
-      splitLayout: card.splitLayout,
-      frameSelection: card.frameSelection,
-      frameColors: card.frameColors ? [...card.frameColors] : undefined,
-      backFrameSelection: card.backFrameSelection,
-      backFrameColors: card.backFrameColors ? [...card.backFrameColors] : undefined,
-      frameTreatment: card.frameTreatment,
-      showcaseFrame: card.showcaseFrame,
-      frameCustomization: card.frameCustomization ? { ...card.frameCustomization } : undefined,
-    },
-  };
-}
-
-function getFrameTemplatePatch(template: CardFrameTemplate): Partial<CardDraft> {
-  return {
-    typeFrame: template.data.typeFrame,
-    dfcMode: template.data.dfcMode,
-    splitLayout: template.data.splitLayout,
-    frameSelection: template.data.frameSelection,
-    frameColors: template.data.frameColors ? [...template.data.frameColors] : undefined,
-    backFrameSelection: template.data.backFrameSelection,
-    backFrameColors: template.data.backFrameColors ? [...template.data.backFrameColors] : undefined,
-    frameTreatment: template.data.frameTreatment,
-    showcaseFrame: template.data.showcaseFrame,
-    frameCustomization: template.data.frameCustomization ? { ...template.data.frameCustomization } : undefined,
-  };
-}
-
 function isCardDraft(value: unknown): value is CardDraft {
   return (
     Boolean(value) &&
@@ -3736,23 +3500,6 @@ function isCardDraft(value: unknown): value is CardDraft {
     typeof (value as CardDraft).flavorText === "string" &&
     typeof (value as CardDraft).rarity === "string"
   );
-}
-
-function isCardFrameTemplate(value: unknown): value is CardFrameTemplate {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as CardFrameTemplate).id === "string" &&
-    typeof (value as CardFrameTemplate).name === "string" &&
-    typeof (value as CardFrameTemplate).createdAt === "string" &&
-    typeof (value as CardFrameTemplate).updatedAt === "string" &&
-    Boolean((value as CardFrameTemplate).data) &&
-    typeof (value as CardFrameTemplate).data === "object"
-  );
-}
-
-function isCardFrameTemplateArray(value: unknown): value is CardFrameTemplate[] {
-  return Array.isArray(value) && value.every(isCardFrameTemplate);
 }
 
 function isArtLibraryEntry(value: unknown): value is ArtLibraryEntry {
@@ -3816,85 +3563,6 @@ async function getNativeStorageAdapter(): Promise<CardMagicStorageAdapter | null
   } catch (error) {
     console.warn("CardMagic native storage adapter is unavailable.", error);
     return null;
-  }
-}
-
-function openWebStorageDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined" || !window.indexedDB) {
-      reject(new Error("IndexedDB is unavailable."));
-      return;
-    }
-
-    const request = window.indexedDB.open(WEB_STORAGE_DB_NAME, 1);
-
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore(WEB_STORAGE_STORE_NAME);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed."));
-  });
-}
-
-async function getWebStorageItem(key: string): Promise<string | null> {
-  if (Platform.OS !== "web" || typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    const database = await openWebStorageDatabase();
-
-    return await new Promise<string | null>((resolve, reject) => {
-      const transaction = database.transaction(WEB_STORAGE_STORE_NAME, "readonly");
-      const store = transaction.objectStore(WEB_STORAGE_STORE_NAME);
-      const request = store.get(key);
-
-      request.onsuccess = () => {
-        resolve(typeof request.result === "string" ? request.result : window.localStorage.getItem(key));
-        database.close();
-      };
-      request.onerror = () => {
-        reject(request.error ?? new Error("IndexedDB read failed."));
-        database.close();
-      };
-    });
-  } catch (error) {
-    console.warn("CardMagic IndexedDB read unavailable; falling back to localStorage.", error);
-    return window.localStorage.getItem(key);
-  }
-}
-
-async function setWebStorageItem(key: string, value: string): Promise<void> {
-  if (Platform.OS !== "web" || typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    const database = await openWebStorageDatabase();
-
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(WEB_STORAGE_STORE_NAME, "readwrite");
-      const store = transaction.objectStore(WEB_STORAGE_STORE_NAME);
-      const request = store.put(value, key);
-
-      transaction.oncomplete = () => {
-        resolve();
-        database.close();
-      };
-      transaction.onerror = () => {
-        reject(transaction.error ?? request.error ?? new Error("IndexedDB write failed."));
-        database.close();
-      };
-      transaction.onabort = () => {
-        reject(transaction.error ?? request.error ?? new Error("IndexedDB write aborted."));
-        database.close();
-      };
-    });
-
-    return;
-  } catch (error) {
-    console.warn("CardMagic IndexedDB write unavailable; falling back to localStorage.", error);
-    window.localStorage.setItem(key, value);
   }
 }
 
@@ -4010,23 +3678,72 @@ async function loadStoredActiveCardDraft(): Promise<CardDraft | null> {
   }
 }
 
-async function loadStoredFrameTemplates(): Promise<CardFrameTemplate[] | null> {
-  try {
-    const rawTemplates =
-      Platform.OS === "web" && typeof window !== "undefined"
-        ? window.localStorage.getItem(FRAME_TEMPLATE_STORAGE_KEY)
-        : await (await getNativeStorageAdapter())?.getItem(FRAME_TEMPLATE_STORAGE_KEY);
+function normalizeCardRecoverySnapshot(value: unknown): CardRecoverySnapshot | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
 
-    if (!rawTemplates) {
-      return null;
+  const rawSnapshot = value as Partial<CardRecoverySnapshot>;
+
+  if (
+    typeof rawSnapshot.id !== "string" ||
+    typeof rawSnapshot.savedAt !== "string" ||
+    typeof rawSnapshot.setId !== "string" ||
+    typeof rawSnapshot.setName !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    id: rawSnapshot.id,
+    savedAt: rawSnapshot.savedAt,
+    reason: rawSnapshot.reason === "tab-switch" ? "tab-switch" : "autosave",
+    setId: rawSnapshot.setId,
+    setName: rawSnapshot.setName,
+    activeSetCardId: typeof rawSnapshot.activeSetCardId === "string" ? rawSnapshot.activeSetCardId : null,
+    card: normalizeStoredCardDraft(rawSnapshot.card),
+  };
+}
+
+async function loadStoredCardRecoverySnapshots(): Promise<CardRecoverySnapshot[]> {
+  try {
+    const rawValue =
+      Platform.OS === "web" && typeof window !== "undefined"
+        ? await getWebStorageItem(CARD_RECOVERY_SNAPSHOT_STORAGE_KEY)
+        : await (await getNativeStorageAdapter())?.getItem(CARD_RECOVERY_SNAPSHOT_STORAGE_KEY);
+
+    if (!rawValue) {
+      return [];
     }
 
-    const parsed = JSON.parse(rawTemplates) as unknown;
+    const parsed = JSON.parse(rawValue) as unknown;
+    const candidates =
+      Boolean(parsed) &&
+      typeof parsed === "object" &&
+      (parsed as StoredCardRecoverySnapshots).schemaVersion === 1 &&
+      Array.isArray((parsed as StoredCardRecoverySnapshots).snapshots)
+        ? (parsed as StoredCardRecoverySnapshots).snapshots
+        : Array.isArray(parsed)
+          ? parsed
+          : [];
+    const snapshots = candidates
+      .map(normalizeCardRecoverySnapshot)
+      .filter((snapshot): snapshot is CardRecoverySnapshot => Boolean(snapshot))
+      .sort((first, second) => new Date(second.savedAt).getTime() - new Date(first.savedAt).getTime())
+      .slice(0, CARD_RECOVERY_SNAPSHOT_LIMIT);
+    const materializedSnapshots: CardRecoverySnapshot[] = [];
 
-    return isCardFrameTemplateArray(parsed) ? parsed : null;
+    for (const snapshot of snapshots) {
+      materializedSnapshots.push({
+        ...snapshot,
+        card: await materializeCardDraftImageDataUris(snapshot.card, `recovery-${snapshot.id}`),
+      });
+    }
+
+    return materializedSnapshots;
   } catch (error) {
-    console.warn("Unable to load CardMagic frame templates.", error);
-    return null;
+    console.warn("Unable to load CardMagic recovery snapshots.", error);
+    return [];
   }
 }
 
@@ -4289,8 +4006,8 @@ async function storeRedeemedCreditCodes(codes: Set<string>) {
 
 async function storeCardSets(sets: CardSet[]) {
   try {
-    const materializedSets = await materializeCardSetsImageDataUris(normalizeCardSets(sets));
-    const serializedSets = JSON.stringify(materializedSets);
+    const persistedSets = await persistCardSetsImageUris(getLocalPersistableCardSets(sets));
+    const serializedSets = JSON.stringify(persistedSets);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
       await setWebStorageItem(CARD_SET_STORAGE_KEY, serializedSets);
@@ -4320,10 +4037,10 @@ async function storeDeletionTombstones(tombstones: DeletionTombstones) {
 
 async function storeActiveCardDraft(card: CardDraft) {
   try {
-    const materializedCard = await materializeCardDraftImageDataUris(cloneCardDraft(card), "active-card");
+    const persistedCard = await persistCardDraftImageUris(cloneCardDraft(card), "active-card");
     const serializedCard = JSON.stringify({
       schemaVersion: 1,
-      card: materializedCard,
+      card: persistedCard,
     } satisfies StoredActiveCardDraft);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -4337,25 +4054,42 @@ async function storeActiveCardDraft(card: CardDraft) {
   }
 }
 
-async function storeFrameTemplates(templates: CardFrameTemplate[]) {
+async function storeCardRecoverySnapshots(snapshots: CardRecoverySnapshot[]) {
   try {
-    const serializedTemplates = JSON.stringify(templates);
+    const normalizedSnapshots = snapshots
+      .map(normalizeCardRecoverySnapshot)
+      .filter((snapshot): snapshot is CardRecoverySnapshot => Boolean(snapshot))
+      .sort((first, second) => new Date(second.savedAt).getTime() - new Date(first.savedAt).getTime())
+      .slice(0, CARD_RECOVERY_SNAPSHOT_LIMIT);
+    const persistedSnapshots: CardRecoverySnapshot[] = [];
+
+    for (const snapshot of normalizedSnapshots) {
+      persistedSnapshots.push({
+        ...snapshot,
+        card: await persistCardDraftImageUris(snapshot.card, `recovery-${snapshot.id}`),
+      });
+    }
+
+    const serializedSnapshots = JSON.stringify({
+      schemaVersion: 1,
+      snapshots: persistedSnapshots,
+    } satisfies StoredCardRecoverySnapshots);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
-      window.localStorage.setItem(FRAME_TEMPLATE_STORAGE_KEY, serializedTemplates);
+      await setWebStorageItem(CARD_RECOVERY_SNAPSHOT_STORAGE_KEY, serializedSnapshots);
       return;
     }
 
-    await (await getNativeStorageAdapter())?.setItem(FRAME_TEMPLATE_STORAGE_KEY, serializedTemplates);
+    await (await getNativeStorageAdapter())?.setItem(CARD_RECOVERY_SNAPSHOT_STORAGE_KEY, serializedSnapshots);
   } catch (error) {
-    console.warn("Unable to persist CardMagic frame templates.", error);
+    console.warn("Unable to persist CardMagic recovery snapshots.", error);
   }
 }
 
 async function storeArtLibrary(entries: ArtLibraryEntry[]) {
   try {
-    const materializedEntries = await materializeArtLibraryImageDataUris(normalizeArtLibraryEntries(entries));
-    const serializedEntries = JSON.stringify(materializedEntries);
+    const persistedEntries = await persistArtLibraryImageUris(normalizeArtLibraryEntries(entries));
+    const serializedEntries = JSON.stringify(persistedEntries);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
       await setWebStorageItem(ART_LIBRARY_STORAGE_KEY, serializedEntries);
@@ -4370,10 +4104,10 @@ async function storeArtLibrary(entries: ArtLibraryEntry[]) {
 
 async function storeGeneratedSetSymbols(entries: GeneratedSetSymbolEntry[]) {
   try {
-    const materializedEntries = await materializeGeneratedSetSymbolImageDataUris(
+    const persistedEntries = await persistGeneratedSetSymbolImageUris(
       normalizeGeneratedSetSymbolEntries(entries),
     );
-    const serializedEntries = JSON.stringify(materializedEntries);
+    const serializedEntries = JSON.stringify(persistedEntries);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
       await setWebStorageItem(GENERATED_SET_SYMBOL_STORAGE_KEY, serializedEntries);
@@ -4388,10 +4122,10 @@ async function storeGeneratedSetSymbols(entries: GeneratedSetSymbolEntry[]) {
 
 async function storeCustomCardBacks(entries: CustomCardBackEntry[]) {
   try {
-    const materializedEntries = await materializeCustomCardBackImageDataUris(
+    const persistedEntries = await persistCustomCardBackImageUris(
       normalizeCustomCardBackEntries(entries),
     );
-    const serializedEntries = JSON.stringify(materializedEntries);
+    const serializedEntries = JSON.stringify(persistedEntries);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
       await setWebStorageItem(CUSTOM_CARD_BACK_STORAGE_KEY, serializedEntries);
@@ -4416,33 +4150,6 @@ async function storeUserProgress(profile: UserProgressProfile) {
     await (await getNativeStorageAdapter())?.setItem(USER_PROGRESS_STORAGE_KEY, serializedProfile);
   } catch (error) {
     console.warn("Unable to persist CardMagic user progression.", error);
-  }
-}
-
-async function loadStoredOpenAiApiKey(): Promise<string> {
-  try {
-    const rawKey =
-      Platform.OS === "web" && typeof window !== "undefined"
-        ? window.localStorage.getItem(OPENAI_API_KEY_STORAGE_KEY)
-        : await (await getNativeStorageAdapter())?.getItem(OPENAI_API_KEY_STORAGE_KEY);
-
-    return rawKey ?? "";
-  } catch (error) {
-    console.warn("Unable to load stored OpenAI API key.", error);
-    return "";
-  }
-}
-
-async function storeOpenAiApiKey(apiKey: string) {
-  try {
-    if (Platform.OS === "web" && typeof window !== "undefined") {
-      window.localStorage.setItem(OPENAI_API_KEY_STORAGE_KEY, apiKey);
-      return;
-    }
-
-    await (await getNativeStorageAdapter())?.setItem(OPENAI_API_KEY_STORAGE_KEY, apiKey);
-  } catch (error) {
-    console.warn("Unable to persist OpenAI API key.", error);
   }
 }
 
@@ -4786,18 +4493,6 @@ async function getCardExportArtImageAspectRatio(card: CardDraft): Promise<number
   });
 }
 
-function blurActiveWebElement() {
-  if (Platform.OS !== "web" || typeof document === "undefined") {
-    return;
-  }
-
-  const activeElement = document.activeElement;
-
-  if (activeElement && "blur" in activeElement && typeof activeElement.blur === "function") {
-    activeElement.blur();
-  }
-}
-
 async function applyExportRenderTargetUpdate(update: () => void) {
   if (Platform.OS === "web") {
     const reactDom = await import("react-dom");
@@ -4850,8 +4545,57 @@ function loadViewShotCaptureRef() {
   return nativeViewShotCaptureRef;
 }
 
+type WebViewShotOptions = {
+  width?: number;
+  height?: number;
+  format?: "png" | "jpg";
+  quality?: number;
+  result?: "tmpfile" | "base64" | "data-uri" | "blob";
+};
+
+async function captureWebRefWithHtml2Canvas(view: HTMLElement, options: WebViewShotOptions) {
+  if (options.result === "tmpfile") {
+    console.warn(
+      "Tmpfile is not implemented for web. Try base64 or data-uri. For compatibility, it currently returns the same result as data-uri.",
+    );
+  }
+
+  const { default: html2canvas } = await import("html2canvas");
+  let renderedCanvas = await html2canvas(view);
+
+  if (options.width && options.height) {
+    const resizedCanvas = document.createElement("canvas");
+    const resizedContext = resizedCanvas.getContext("2d");
+
+    resizedCanvas.height = options.height;
+    resizedCanvas.width = options.width;
+    resizedContext?.drawImage(renderedCanvas, 0, 0, resizedCanvas.width, resizedCanvas.height);
+    renderedCanvas = resizedCanvas;
+  }
+
+  if (options.result === "blob") {
+    return await new Promise<Blob>((resolve, reject) => {
+      renderedCanvas.toBlob(
+        (blob) => {
+          blob ? resolve(blob) : reject(new Error("CardMagic could not encode the rendered canvas as a PNG blob."));
+        },
+        `image/${options.format ?? "png"}`,
+        options.quality ?? 1,
+      );
+    });
+  }
+
+  const dataUrl = renderedCanvas.toDataURL(`image/${options.format ?? "png"}`, options.quality ?? 1);
+
+  if (options.result === "data-uri" || options.result === "tmpfile") {
+    return dataUrl;
+  }
+
+  return dataUrl.replace(/data:image\/(\w+);base64,/, "");
+}
+
 function loadWebViewShotCaptureRef() {
-  return RNViewShotWeb.captureRef;
+  return captureWebRefWithHtml2Canvas;
 }
 
 function downloadBlob(fileName: string, blob: Blob) {
@@ -4951,25 +4695,6 @@ function hasWebShareApi() {
   }
 
   return true;
-}
-
-function canShareWebFile(fileName: string, blob: Blob) {
-  if (!hasWebShareApi()) {
-    return false;
-  }
-
-  const navigatorWithShare = navigator as Navigator & {
-    canShare?: (data: ShareData) => boolean;
-    share?: (data: ShareData) => Promise<void>;
-  };
-
-  const file = new File([blob], fileName, { type: blob.type || "application/octet-stream" });
-  const shareData: ShareData = {
-    title: fileName,
-    files: [file],
-  };
-
-  return !navigatorWithShare.canShare || navigatorWithShare.canShare(shareData);
 }
 
 async function tryShareWebFile(fileName: string, blob: Blob, title = fileName) {
@@ -5108,6 +4833,256 @@ async function shareOrDownloadWebFile(
   return "saved";
 }
 
+async function writeJsZipArchiveToWebFile(archive: JsZipArchiveLike, fileHandle: WebFileSystemFileHandle) {
+  const writable = await fileHandle.createWritable();
+  const stream = archive.generateInternalStream({ type: "uint8array", streamFiles: true });
+  let writeChain = Promise.resolve();
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const rejectOnce = (error: unknown) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+
+      stream
+        .on("data", ((chunk: Uint8Array) => {
+          stream.pause();
+          writeChain = writeChain
+            .then(() => writable.write(new Blob([getArrayBufferSlice(chunk)], { type: "application/zip" })))
+            .then(() => {
+              if (!settled) {
+                stream.resume();
+              }
+            }, rejectOnce);
+        }) as (chunk: Uint8Array) => void)
+        .on("error", rejectOnce as (error: unknown) => void)
+        .on("end", (() => {
+          writeChain.then(() => {
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
+          }, rejectOnce);
+        }) as () => void)
+        .resume();
+    });
+  } finally {
+    await writable.close();
+  }
+}
+
+async function shareOrDownloadWebZipArchive(
+  fileName: string,
+  archive: JsZipArchiveLike,
+  fileHandle: WebFileSystemFileHandle | null,
+) {
+  if (fileHandle) {
+    await writeJsZipArchiveToWebFile(archive, fileHandle);
+    return "saved" as const;
+  }
+
+  const zipBlob = await archive.generateAsync({ type: "blob", streamFiles: true });
+  return shareOrDownloadWebFile(fileName, zipBlob, "Export CardMagic set batch");
+}
+
+async function createWebStreamingZipWriter(fileHandle: WebFileSystemFileHandle): Promise<WebStreamingZipWriter> {
+  const writable = await fileHandle.createWritable();
+  const entries: WebStreamingZipEntry[] = [];
+  let offset = 0;
+  let closed = false;
+
+  const writeZipBytes = async (bytes: Uint8Array) => {
+    await writable.write(new Blob([getArrayBufferSlice(bytes)], { type: "application/zip" }));
+    offset += bytes.byteLength;
+  };
+
+  return {
+    async addFile(fileName, data) {
+      if (closed) {
+        throw new Error("Cannot write to a finalized ZIP archive.");
+      }
+
+      const fileNameBytes = getUtf8Bytes(fileName);
+      const fileBytes = typeof data === "string" ? getUtf8Bytes(data) : data;
+
+      assertZip32Size(fileNameBytes.byteLength, "ZIP file name");
+      assertZip32Size(fileBytes.byteLength, fileName);
+      assertZip32Size(offset, "ZIP local header offset");
+
+      const entry: WebStreamingZipEntry = {
+        fileNameBytes,
+        crc32: getCrc32(fileBytes),
+        compressedSize: fileBytes.byteLength,
+        uncompressedSize: fileBytes.byteLength,
+        localHeaderOffset: offset,
+        modifiedAt: new Date(),
+      };
+
+      const header = createZipLocalFileHeader(entry);
+      await writeZipBytes(header);
+      await writeZipBytes(fileBytes);
+      entries.push(entry);
+    },
+    async close() {
+      if (closed) {
+        return;
+      }
+
+      closed = true;
+      const centralDirectoryOffset = offset;
+
+      for (const entry of entries) {
+        await writeZipBytes(createZipCentralDirectoryHeader(entry));
+      }
+
+      const centralDirectorySize = offset - centralDirectoryOffset;
+      await writeZipBytes(createZipEndOfCentralDirectory(entries.length, centralDirectorySize, centralDirectoryOffset));
+      await writable.close();
+    },
+    async abort() {
+      if (closed) {
+        return;
+      }
+
+      closed = true;
+
+      if (writable.abort) {
+        await writable.abort();
+        return;
+      }
+
+      await writable.close();
+    },
+  };
+}
+
+function createZipLocalFileHeader(entry: WebStreamingZipEntry) {
+  const header = new Uint8Array(30 + entry.fileNameBytes.byteLength);
+  const view = new DataView(header.buffer);
+  const { dosDate, dosTime } = getZipDosDateTime(entry.modifiedAt);
+
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0x0800, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, dosTime, true);
+  view.setUint16(12, dosDate, true);
+  view.setUint32(14, entry.crc32, true);
+  view.setUint32(18, entry.compressedSize, true);
+  view.setUint32(22, entry.uncompressedSize, true);
+  view.setUint16(26, entry.fileNameBytes.byteLength, true);
+  view.setUint16(28, 0, true);
+  header.set(entry.fileNameBytes, 30);
+
+  return header;
+}
+
+function createZipCentralDirectoryHeader(entry: WebStreamingZipEntry) {
+  const header = new Uint8Array(46 + entry.fileNameBytes.byteLength);
+  const view = new DataView(header.buffer);
+  const { dosDate, dosTime } = getZipDosDateTime(entry.modifiedAt);
+
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 20, true);
+  view.setUint16(8, 0x0800, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, dosTime, true);
+  view.setUint16(14, dosDate, true);
+  view.setUint32(16, entry.crc32, true);
+  view.setUint32(20, entry.compressedSize, true);
+  view.setUint32(24, entry.uncompressedSize, true);
+  view.setUint16(28, entry.fileNameBytes.byteLength, true);
+  view.setUint16(30, 0, true);
+  view.setUint16(32, 0, true);
+  view.setUint16(34, 0, true);
+  view.setUint16(36, 0, true);
+  view.setUint32(38, 0, true);
+  view.setUint32(42, entry.localHeaderOffset, true);
+  header.set(entry.fileNameBytes, 46);
+
+  return header;
+}
+
+function createZipEndOfCentralDirectory(entryCount: number, centralDirectorySize: number, centralDirectoryOffset: number) {
+  assertZip32Size(entryCount, "ZIP entry count");
+  assertZip32Size(centralDirectorySize, "ZIP central directory size");
+  assertZip32Size(centralDirectoryOffset, "ZIP central directory offset");
+
+  const header = new Uint8Array(22);
+  const view = new DataView(header.buffer);
+
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, entryCount, true);
+  view.setUint16(10, entryCount, true);
+  view.setUint32(12, centralDirectorySize, true);
+  view.setUint32(16, centralDirectoryOffset, true);
+  view.setUint16(20, 0, true);
+
+  return header;
+}
+
+function getZipDosDateTime(date: Date) {
+  const year = Math.min(2107, Math.max(1980, date.getFullYear()));
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const dosDate = ((year - 1980) << 9) | (month << 5) | day;
+
+  return { dosDate, dosTime };
+}
+
+function getUtf8Bytes(value: string) {
+  return new TextEncoder().encode(value);
+}
+
+let crc32Table: Uint32Array | null = null;
+
+function getCrc32(bytes: Uint8Array) {
+  const table = getCrc32Table();
+  let crc = 0xffffffff;
+
+  for (let index = 0; index < bytes.length; index += 1) {
+    crc = table[(crc ^ bytes[index]) & 0xff] ^ (crc >>> 8);
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function getCrc32Table() {
+  if (crc32Table) {
+    return crc32Table;
+  }
+
+  crc32Table = new Uint32Array(256);
+
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+
+    crc32Table[index] = value >>> 0;
+  }
+
+  return crc32Table;
+}
+
+function assertZip32Size(value: number, label: string) {
+  if (value > 0xffffffff) {
+    throw new Error(`${label} exceeds the ZIP32 size limit.`);
+  }
+}
+
 function dataUriToBlob(dataUri: string) {
   const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUri);
 
@@ -5201,60 +5176,6 @@ async function exportCardMagicJson(fileName: string, payload: CardMagicExport) {
   }
 }
 
-function importJsonFromWebFile(): Promise<unknown | null> {
-  return new Promise((resolve) => {
-    if (typeof document === "undefined") {
-      resolve(null);
-      return;
-    }
-
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json,.json";
-
-    input.onchange = () => {
-      const file = input.files?.[0];
-
-      if (!file) {
-        resolve(null);
-        return;
-      }
-
-      file
-        .text()
-        .then((text) => resolve(JSON.parse(text) as unknown))
-        .catch((error) => {
-          console.warn("Unable to import JSON file.", error);
-          resolve(null);
-        });
-    };
-
-    input.click();
-  });
-}
-
-async function importCardMagicJson(): Promise<unknown | null> {
-  if (Platform.OS === "web" && typeof document !== "undefined") {
-    return importJsonFromWebFile();
-  }
-
-  try {
-    if (!hasNativeModule("ExpoFileSystem")) {
-      throw new Error("ExpoFileSystem native module is unavailable.");
-    }
-
-    const FileSystem = await import("expo-file-system");
-    const picked = await FileSystem.File.pickFileAsync(undefined, "application/json");
-    const file = Array.isArray(picked) ? picked[0] : picked;
-
-    return JSON.parse(await file.text()) as unknown;
-  } catch (error) {
-    console.warn("Unable to import CardMagic JSON.", error);
-    Alert.alert("Import unavailable", "CardMagic could not read a JSON file from this app build.");
-    return null;
-  }
-}
-
 async function shareOrDownloadWebPng(
   fileName: string,
   dataUri: string,
@@ -5327,21 +5248,35 @@ async function saveNativePngToPhotoLibrary(
   }
 }
 
+type MaterializedAiImageResult = AiCreditProgressResponse & {
+  uri: string;
+};
+
 async function generateOpenAiImageUri({
   prompt,
   options = OPENAI_AUXILIARY_IMAGE_OPTIONS,
+  spendCategory,
 }: {
   prompt: string;
   options?: AiImageGenerationOptions;
-}) {
-  const image = await generateAiImageViaEdge({ prompt, options });
+  spendCategory?: CreditSpendCategory;
+}): Promise<MaterializedAiImageResult> {
+  const image = await generateAiImageViaEdge({ prompt, options, spendCategory });
 
   if (image.b64Json) {
-    return await materializeBase64ImageUri(image.b64Json, "png", "generated-art");
+    return {
+      uri: await materializeBase64ImageUri(image.b64Json, "png", "generated-art"),
+      progress: image.progress,
+      creditSpend: image.creditSpend,
+    };
   }
 
   if (image.url) {
-    return await materializeExternalImageUri(image.url, "generated-art");
+    return {
+      uri: await materializeExternalImageUri(image.url, "generated-art"),
+      progress: image.progress,
+      creditSpend: image.creditSpend,
+    };
   }
 
   throw new Error("OpenAI did not return image data.");
@@ -5351,19 +5286,29 @@ async function generateOpenAiImageEditUri({
   imageUri,
   prompt,
   size,
+  spendCategory,
 }: {
   imageUri: string;
   prompt: string;
   size: AiImageGenerationOptions["size"];
-}) {
-  const image = await generateAiImageEditViaEdge({ imageUri, prompt, size });
+  spendCategory?: CreditSpendCategory;
+}): Promise<MaterializedAiImageResult> {
+  const image = await generateAiImageEditViaEdge({ imageUri, prompt, size, spendCategory });
 
   if (image.b64Json) {
-    return await materializeBase64ImageUri(image.b64Json, "png", "edited-image");
+    return {
+      uri: await materializeBase64ImageUri(image.b64Json, "png", "edited-image"),
+      progress: image.progress,
+      creditSpend: image.creditSpend,
+    };
   }
 
   if (image.url) {
-    return await materializeExternalImageUri(image.url, "edited-image");
+    return {
+      uri: await materializeExternalImageUri(image.url, "edited-image"),
+      progress: image.progress,
+      creditSpend: image.creditSpend,
+    };
   }
 
   throw new Error("OpenAI did not return edited image data.");
@@ -5499,6 +5444,8 @@ async function generateSubjectMatteUri({
       diagnostics: matte.diagnostics,
       components,
       sourceUri: imageUri,
+      progress: matte.progress,
+      creditSpend: matte.creditSpend,
     };
   }
 
@@ -5509,6 +5456,8 @@ async function generateSubjectMatteUri({
       diagnostics: matte.diagnostics,
       components: [] as { concept: string; cutoutUrl: string }[],
       sourceUri: imageUri,
+      progress: matte.progress,
+      creditSpend: matte.creditSpend,
     };
   }
 
@@ -5519,6 +5468,8 @@ async function generateSubjectMatteUri({
       diagnostics: matte.diagnostics,
       components: [] as { concept: string; cutoutUrl: string }[],
       sourceUri: imageUri,
+      progress: matte.progress,
+      creditSpend: matte.creditSpend,
     };
   }
 
@@ -5548,141 +5499,6 @@ async function generateOpenAiRulesText({
   prompt: string;
 }) {
   return parseOpenAiRulesTextResponse(await fixRulesTextViaEdge(prompt));
-}
-
-async function generateOpenAiRulesTextWithModel({
-  apiKey,
-  prompt,
-  model,
-}: {
-  apiKey: string;
-  prompt: string;
-  model: (typeof OPENAI_RULES_TEXT_MODELS)[number];
-}) {
-  const body: Record<string, unknown> = {
-    model,
-    text: {
-      format: {
-        type: "json_schema",
-        name: "fixed_rules_text",
-        strict: true,
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["rulesText"],
-          properties: {
-            rulesText: { type: "string" },
-          },
-        },
-      },
-    },
-    input: [
-      {
-        role: "system",
-        content:
-          "You are a Magic: The Gathering Oracle rules editor. Correct both templating and rules-functionality defects. Return only JSON that matches the schema.",
-      },
-      { role: "user", content: prompt },
-    ],
-  };
-
-  if (model.startsWith("gpt-5")) {
-    body.reasoning = { effort: "medium" };
-  }
-
-  const response = await fetch(OPENAI_RESPONSES_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json().catch(() => ({}))) as OpenAiResponsesResponse;
-
-  if (!response.ok) {
-    throw new Error(payload.error?.message || `OpenAI rules text fixer failed with HTTP ${response.status}.`);
-  }
-
-  const content = getOpenAiResponsesTextOutput(payload);
-
-  if (!content) {
-    throw new Error("OpenAI did not return fixed rules text.");
-  }
-
-  return parseOpenAiRulesTextResponse(content);
-}
-
-function getOpenAiResponsesTextOutput(payload: OpenAiResponsesResponse) {
-  if (typeof payload.output_text === "string") {
-    return payload.output_text;
-  }
-
-  for (const item of payload.output ?? []) {
-    for (const block of item.content ?? []) {
-      if (typeof block.text === "string") {
-        return block.text;
-      }
-    }
-  }
-
-  return null;
-}
-
-async function generateOpenAiImageUriWithModel({
-  apiKey,
-  prompt,
-  model,
-  options,
-}: {
-  apiKey: string;
-  prompt: string;
-  model: (typeof OPENAI_IMAGE_MODELS)[number];
-  options: OpenAiImageGenerationOptions;
-}) {
-  const response = await fetch(OPENAI_IMAGE_GENERATION_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      size: options.size,
-      quality: options.quality,
-      output_format: "png",
-    }),
-  });
-  const payload = (await response.json().catch(() => ({}))) as OpenAiImageGenerationResponse;
-
-  if (!response.ok) {
-    throw new Error(payload.error?.message || `OpenAI image generation failed with HTTP ${response.status}.`);
-  }
-
-  const image = payload.data?.[0];
-
-  if (image?.b64_json) {
-    return await materializeBase64ImageUri(image.b64_json, "png", "generated-art");
-  }
-
-  if (image?.url) {
-    return await materializeExternalImageUri(image.url, "generated-art");
-  }
-
-  throw new Error("OpenAI did not return image data.");
-}
-
-function shouldTryNextImageModel(error: Error) {
-  return /\b(?:model|unsupported|not supported|not found|does not exist|access|permission|available)\b/i.test(
-    error.message,
-  );
-}
-
-function shouldTryNextOpenAiTextModel(error: Error) {
-  return /\b(?:model|unsupported|not supported|not found|does not exist|access|permission|available)\b/i.test(
-    error.message,
-  );
 }
 
 function parseOpenAiRulesTextResponse(content: string) {
@@ -5956,8 +5772,9 @@ export default function App() {
   const previewBoundsRef = useRef<CoordinateBounds | null>(null);
   const previewContainerRef = useRef<View>(null);
   const visibleCardExportRef = useRef<View>(null);
-  const [visibleCardExportActive, setVisibleCardExportActive] = useState(false);
+  const visibleCardExportActive = false;
   const mainScrollRef = useRef<ScrollView>(null);
+  const communityScrollBoundaryHandlerRef = useRef<MainScrollBoundaryHandler | null>(null);
   const singleExportContainerRef = useRef<View>(null);
   const batchExportContainerRef = useRef<View>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("edit");
@@ -5966,7 +5783,6 @@ export default function App() {
   const cardSetsRef = useRef<CardSet[]>(cardSets);
   const [deletionTombstones, setDeletionTombstones] = useState<DeletionTombstones>(createEmptyDeletionTombstones);
   const deletionTombstonesRef = useRef<DeletionTombstones>(deletionTombstones);
-  const [frameTemplates, setFrameTemplates] = useState<CardFrameTemplate[]>([]);
   const [artLibraryEntries, setArtLibraryEntries] = useState<ArtLibraryEntry[]>([]);
   const [customCardBacks, setCustomCardBacks] = useState<CustomCardBackEntry[]>([]);
   const [generatedSetSymbols, setGeneratedSetSymbols] = useState<GeneratedSetSymbolEntry[]>([]);
@@ -5995,6 +5811,13 @@ export default function App() {
   const [savedCardPrompt, setSavedCardPrompt] = useState<{
     cardName: string;
     setName: string;
+  } | null>(null);
+  const [saveCardChoicePrompt, setSaveCardChoicePrompt] = useState<{
+    cardName: string;
+    setName: string;
+    targetSetId: string;
+    overwriteSnapshotId: string | null;
+    overwriteLabel: string;
   } | null>(null);
   const [physicalBackMenuOpen, setPhysicalBackMenuOpen] = useState(false);
   const [artSourceOpen, setArtSourceOpen] = useState(false);
@@ -6032,7 +5855,7 @@ export default function App() {
   const [subjectMaskBusy, setSubjectMaskBusy] = useState(false);
   const [subjectMaskStatus, setSubjectMaskStatus] = useState<string | null>(null);
   const [subjectMaskError, setSubjectMaskError] = useState<string | null>(null);
-  const [subjectMaskDiagnostics, setSubjectMaskDiagnostics] = useState<SubjectMatteDiagnostics | null>(null);
+  const [, setSubjectMaskDiagnostics] = useState<SubjectMatteDiagnostics | null>(null);
   // Per-subject cutouts from the last prompted segmentation, each toggleable on/off.
   const [subjectMaskComponents, setSubjectMaskComponents] = useState<SubjectMaskComponent[]>([]);
   const subjectMaskSourceUriRef = useRef<string | null>(null);
@@ -6043,7 +5866,6 @@ export default function App() {
     original: string;
     corrected: string;
   } | null>(null);
-  const [openAiApiKey, setOpenAiApiKey] = useState("");
   const [artAdjustOpen, setArtAdjustOpen] = useState(false);
   const [artAdjustmentInitialMode, setArtAdjustmentInitialMode] = useState<ArtAdjustmentInitialMode>("crop");
   const [physicalBackVisible, setPhysicalBackVisible] = useState(false);
@@ -6057,7 +5879,6 @@ export default function App() {
   const [activeDraftHydrated, setActiveDraftHydrated] = useState(false);
   const [setsHydrated, setSetsHydrated] = useState(false);
   const [deletionTombstonesHydrated, setDeletionTombstonesHydrated] = useState(false);
-  const [frameTemplatesHydrated, setFrameTemplatesHydrated] = useState(false);
   const [artLibraryHydrated, setArtLibraryHydrated] = useState(false);
   const [customCardBacksHydrated, setCustomCardBacksHydrated] = useState(false);
   const [generatedSetSymbolsHydrated, setGeneratedSetSymbolsHydrated] = useState(false);
@@ -6065,12 +5886,32 @@ export default function App() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [showReturnToTop, setShowReturnToTop] = useState(false);
   const [patchNotesOpen, setPatchNotesOpen] = useState(false);
+  const [betaReleaseDeployment, setBetaReleaseDeployment] =
+    useState<CardMagicReleaseDeployment | null>(null);
   const { width, height } = useWindowDimensions();
   const mobileBrowserBottomInset = useMobileBrowserBottomInset(width);
   const [cardFontsLoaded, cardFontLoadError] = useFonts(FULL_MAGIC_PACK.fonts);
   const cardFontsReady = cardFontsLoaded || Boolean(cardFontLoadError);
 
   const faceCard = useMemo(() => getEditableCardFace(card), [card]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchCardMagicReleaseDeployment("beta")
+      .then((deployment) => {
+        if (!cancelled) {
+          setBetaReleaseDeployment(deployment);
+        }
+      })
+      .catch((error) => {
+        console.warn("Unable to load CardMagic beta release metadata.", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (subjectMaskBusy || subjectMaskToggleBusy) {
@@ -6098,7 +5939,6 @@ export default function App() {
     accountUser?.user_metadata?.full_name,
     accountUser?.user_metadata?.name,
   ]);
-  const frame = useMemo(() => inferFrameStyle(faceCard), [faceCard]);
   const isSplitFrame = isSplitTypeFrame(card);
   const splitFrameSummary = useMemo(() => {
     if (!isSplitTypeFrame(card)) {
@@ -6150,6 +5990,7 @@ export default function App() {
   const hasRotateControl = !showingPhysicalBack && hasPreviewRotation(previewTypeFrame);
   const hasDeleteBackControl = hasBackFace;
   const canAddCardBack = previewTypeFrame !== "planeswalker";
+  const canAddPhysicalCardBackFace = !hasBackFace && canAddCardBack;
   const rotatePreview = useCallback(() => {
     previewRotateIconDegrees.value = 0;
     previewRotateIconDegrees.value = withTiming(previewRotated ? -180 : 180, {
@@ -6549,46 +6390,6 @@ export default function App() {
     });
   }, [previewToolbarCollapsed, previewToolbarOrientation, previewToolbarTransition]);
 
-  const togglePreviewToolbarOrientation = useCallback(() => {
-    const currentPosition = previewToolbarPositionRef.current ?? resolvedPreviewToolbarPosition;
-    const currentCenter = {
-      x: currentPosition.x + previewToolbarWidth / 2,
-      y: currentPosition.y + previewToolbarHeight / 2,
-    };
-    const nextOrientation: PreviewToolbarOrientation =
-      previewToolbarOrientation === "horizontal" ? "vertical" : "horizontal";
-    const nextSize = getToolbarSizeForOrientation(nextOrientation);
-    const margin = PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
-    const bottomMargin = keyboardVisible
-      ? PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN
-      : BOTTOM_TAB_BAR_HEIGHT + mobileBrowserBottomInset + PREVIEW_ACTION_TOOLBAR_EDGE_MARGIN;
-    const nextPosition = {
-      x: Math.min(Math.max(margin, width - nextSize.width - margin), Math.max(margin, currentCenter.x - nextSize.width / 2)),
-      y: Math.min(
-        Math.max(margin, previewToolbarViewportHeight - nextSize.height - bottomMargin),
-        Math.max(margin, currentCenter.y - nextSize.height / 2),
-      ),
-    };
-
-    setPreviewToolbarOrientationOverride(nextOrientation);
-    previewToolbarPositionRef.current = nextPosition;
-    setPreviewToolbarPosition(nextPosition);
-    void storePreviewToolbarOrientation(nextOrientation);
-    void storePreviewToolbarPosition(nextPosition);
-  }, [
-    getToolbarSizeForOrientation,
-    keyboardVisible,
-    mobileBrowserBottomInset,
-    previewToolbarViewportHeight,
-    previewToolbarCrossSize,
-    previewToolbarHeight,
-    previewToolbarHorizontalWidth,
-    previewToolbarOrientation,
-    previewToolbarWidth,
-    resolvedPreviewToolbarPosition,
-    width,
-  ]);
-
   const previewToolbarGesture = useMemo(() => {
     const doubleTapGesture = Gesture.Tap()
       .numberOfTaps(2)
@@ -6758,26 +6559,6 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
-    loadStoredFrameTemplates().then((storedTemplates) => {
-      if (cancelled) {
-        return;
-      }
-
-      if (storedTemplates) {
-        setFrameTemplates(storedTemplates);
-      }
-
-      setFrameTemplatesHydrated(true);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
     loadStoredArtLibrary().then((storedEntries) => {
       if (cancelled) {
         return;
@@ -6853,20 +6634,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    loadStoredOpenAiApiKey().then((storedApiKey) => {
-      if (!cancelled) {
-        setOpenAiApiKey(storedApiKey);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     if (!activeDraftHydrated) {
       return;
     }
@@ -6911,6 +6678,11 @@ export default function App() {
   useEffect(() => {
     if (!accountUser) {
       setAccountSetsHydrated(false);
+      setCardSets((current) => {
+        const localSets = getLocalPersistableCardSets(current);
+
+        return cardSetsEqual(current, localSets) ? current : localSets;
+      });
       return;
     }
 
@@ -6925,9 +6697,10 @@ export default function App() {
       setAccountSetsHydrated(false);
 
       try {
-        const [remoteSymbols, remoteSets] = await Promise.all([
+        const [remoteSymbols, remoteSets, sharedSets] = await Promise.all([
           fetchRemoteCustomSetSymbols(accountUser.id),
           fetchRemoteCardSets(accountUser.id),
+          fetchSharedAccountCardSets(accountUser.id),
         ]);
 
         if (!active) {
@@ -6936,7 +6709,7 @@ export default function App() {
 
         const mergedSymbols = mergeCustomSetSymbols(generatedSetSymbolsRef.current, remoteSymbols);
 
-        if (JSON.stringify(generatedSetSymbolsRef.current) !== JSON.stringify(mergedSymbols)) {
+        if (!generatedSetSymbolEntriesEqual(generatedSetSymbolsRef.current, mergedSymbols)) {
           generatedSetSymbolsRef.current = mergedSymbols;
           setGeneratedSetSymbols(mergedSymbols);
         }
@@ -6957,10 +6730,17 @@ export default function App() {
           logStorageInfo("Loaded Supabase account set payload before merge.", getCardSetStorageSummary(validRemoteSets));
         }
 
-        const mergedSets = applyDeletionTombstonesToSets(
-          resolveSetSymbolReferences(mergeAccountCardSets(cardSetsRef.current, validRemoteSets), mergedSymbols),
+        const mergedOwnedSets = applyDeletionTombstonesToSets(
+          resolveSetSymbolReferences(
+            mergeAccountCardSets(getOwnedAccountCardSets(cardSetsRef.current, accountUser.id), validRemoteSets),
+            mergedSymbols,
+          ),
           deletionTombstonesRef.current,
         );
+        const mergedSets = normalizeCardSets([
+          ...mergedOwnedSets,
+          ...resolveSetSymbolReferences(sharedSets, mergedSymbols),
+        ]);
 
         if (!cardSetsEqual(cardSetsRef.current, mergedSets)) {
           cardSetsRef.current = mergedSets;
@@ -6971,7 +6751,7 @@ export default function App() {
         }
 
         await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
-        await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedSets));
+        await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedOwnedSets, accountUser.id));
       } catch (error) {
         console.warn("Unable to sync Supabase account sets.", error);
       } finally {
@@ -6996,7 +6776,7 @@ export default function App() {
 
     const persistRemoteSets = setTimeout(() => {
       void replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current))
-        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(cardSetsRef.current)))
+        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(cardSetsRef.current, accountUser.id)))
         .catch((error) => {
           console.warn("Unable to persist Supabase account sets.", error);
         });
@@ -7050,14 +6830,6 @@ export default function App() {
       console.warn("Unable to update Supabase community display name.", error);
     });
   }, [accountProfile?.displayName, accountProfile?.username, accountUser]);
-
-  useEffect(() => {
-    if (!frameTemplatesHydrated) {
-      return;
-    }
-
-    void storeFrameTemplates(frameTemplates);
-  }, [frameTemplates, frameTemplatesHydrated]);
 
   useEffect(() => {
     if (!artLibraryHydrated) {
@@ -7289,6 +7061,31 @@ export default function App() {
     enqueueAchievementPopups(result.unlockedAchievements);
   };
 
+  const applyAuthoritativeAiProgress = (progress: unknown) => {
+    if (!progress) {
+      return false;
+    }
+
+    const previousProfile = userProgressRef.current;
+    const previousLevel = getXpLevelState(previousProfile).level;
+    const nextProfile = normalizeUserProgressProfile(progress);
+    const nextLevel = getXpLevelState(nextProfile).level;
+    const xpGained = Math.max(0, nextProfile.lifetimeXpEarned - previousProfile.lifetimeXpEarned);
+    const creditReward = Math.max(
+      0,
+      nextProfile.lifetimeLevelCreditsEarned - previousProfile.lifetimeLevelCreditsEarned,
+    );
+
+    userProgressRef.current = nextProfile;
+    setUserProgress(nextProfile);
+    enqueueXpFloatingNumber(xpGained);
+    if (nextLevel > previousLevel) {
+      enqueueLevelUpToast(nextLevel, creditReward);
+    }
+
+    return true;
+  };
+
   const dismissAchievementPopup = useCallback((popupId: string) => {
     setAchievementPopups((current) => current.filter((popup) => popup.popupId !== popupId));
   }, []);
@@ -7333,7 +7130,7 @@ export default function App() {
       }
 
       void replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current))
-        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(normalizedSets)))
+        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(normalizedSets, accountUser.id)))
         .catch((error) => {
           console.warn("Unable to persist Supabase account sets immediately after local edit.", error);
         });
@@ -7526,10 +7323,11 @@ export default function App() {
       setAccountSyncBusy(true);
 
       try {
-        const [remoteProgress, remoteSymbols, remoteSets] = await Promise.all([
+        const [remoteProgress, remoteSymbols, remoteSets, sharedSets] = await Promise.all([
           fetchRemoteUserProgress(accountUser.id),
           fetchRemoteCustomSetSymbols(accountUser.id),
           fetchRemoteCardSets(accountUser.id),
+          fetchSharedAccountCardSets(accountUser.id),
         ]);
 
         if (remoteProgress) {
@@ -7571,10 +7369,17 @@ export default function App() {
           logStorageInfo("Loaded Supabase account set payload before manual sync.", getCardSetStorageSummary(validRemoteSets));
         }
 
-        const mergedSets = applyDeletionTombstonesToSets(
-          resolveSetSymbolReferences(mergeAccountCardSets(cardSetsRef.current, validRemoteSets), mergedSymbols),
+        const mergedOwnedSets = applyDeletionTombstonesToSets(
+          resolveSetSymbolReferences(
+            mergeAccountCardSets(getOwnedAccountCardSets(cardSetsRef.current, accountUser.id), validRemoteSets),
+            mergedSymbols,
+          ),
           deletionTombstonesRef.current,
         );
+        const mergedSets = normalizeCardSets([
+          ...mergedOwnedSets,
+          ...resolveSetSymbolReferences(sharedSets, mergedSymbols),
+        ]);
 
         cardSetsRef.current = mergedSets;
         setCardSets(mergedSets);
@@ -7582,7 +7387,7 @@ export default function App() {
           mergedSets.some((set) => set.id === current) ? current : mergedSets[0].id,
         );
         await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
-        await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedSets));
+        await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedOwnedSets, accountUser.id));
       } catch (error) {
         Alert.alert("Account sync failed", error instanceof Error ? error.message : "Unable to sync your account.");
       } finally {
@@ -7778,15 +7583,16 @@ export default function App() {
     };
   };
 
-  const updateOpenAiApiKey = (apiKey: string) => {
-    setOpenAiApiKey(apiKey);
-    void storeOpenAiApiKey(apiKey);
-  };
-
   const ensureAiServiceReady = (setError: (message: string) => void) => {
     if (!isSupabaseConfigured) {
       setError("Supabase is not configured. Add the Supabase public environment variables before running AI prompts.");
       openCreditStore();
+      return false;
+    }
+
+    if (!accountUser) {
+      setError("Sign in before running AI prompts.");
+      setAccountOpen(true);
       return false;
     }
 
@@ -7806,6 +7612,10 @@ export default function App() {
     setShowReturnToTop((current) => (
       current === shouldShowReturnToTop ? current : shouldShowReturnToTop
     ));
+
+    if (inspectorTab === "community") {
+      communityScrollBoundaryHandlerRef.current?.(event);
+    }
   };
 
   const scrollMainToTop = () => {
@@ -8045,13 +7855,15 @@ export default function App() {
     setSheetSection(null);
 
     try {
-      const artUri = await generateOpenAiImageUri({
+      const generatedArt = await generateOpenAiImageUri({
         prompt: artGeneratorPrompt,
         options: {
           ...OPENAI_CARD_ART_IMAGE_BASE_OPTIONS,
           quality: artGeneratorQuality,
         },
+        spendCategory: artSpendCategory,
       });
+      const artUri = generatedArt.uri;
 
       applyArtUri(artUri, { artist: "OpenAI" });
       addArtLibraryEntry("generated", artUri);
@@ -8060,7 +7872,11 @@ export default function App() {
       setArtGeneratorOpen(false);
       setArtAdjustmentInitialMode("crop");
       setArtAdjustOpen(true);
-      recordSuccessfulCreditSpendAndEvent(artSpendCategory, "generate-art");
+      if (applyAuthoritativeAiProgress(generatedArt.progress)) {
+        recordProgressEvent("generate-art");
+      } else {
+        recordSuccessfulCreditSpendAndEvent(artSpendCategory, "generate-art");
+      }
     } catch (error) {
       console.warn("Unable to generate card art.", error);
       setArtGeneratorError(error instanceof Error ? error.message : "CardMagic could not generate art.");
@@ -8121,6 +7937,7 @@ export default function App() {
     try {
       let maskUri: string;
       let nextComponents: SubjectMaskComponent[] = [];
+      let generatedMaskProgress: unknown;
 
       try {
         if (Platform.OS !== "web") {
@@ -8140,6 +7957,7 @@ export default function App() {
           targetPrompt: providerTargetPrompt,
         });
         maskUri = generatedMask.uri;
+        generatedMaskProgress = generatedMask.progress;
         setSubjectMaskDiagnostics(generatedMask.diagnostics ?? null);
         subjectMaskSourceUriRef.current = generatedMask.sourceUri ?? artUri;
         nextComponents =
@@ -8157,6 +7975,7 @@ export default function App() {
       stopMaskTimer.setPhase("Applying the cutout to your card…");
       updateCurrentFace({
         artSubjectMaskUri: maskUri,
+        artSubjectMaskDisabled: false,
         artSubjectMaskComponents: nextComponents.length > 0 ? nextComponents : undefined,
       });
       setActiveSection("art");
@@ -8164,7 +7983,9 @@ export default function App() {
       setArtSourceOpen(false);
       setArtAdjustmentInitialMode("mask");
       setArtAdjustOpen(true);
-      recordSuccessfulCreditSpend("subjectMask");
+      if (!applyAuthoritativeAiProgress(generatedMaskProgress)) {
+        recordSuccessfulCreditSpend("subjectMask");
+      }
     } catch (error) {
       console.warn("Unable to generate subject mask.", error);
       if (error instanceof SubjectMatteProviderError) {
@@ -8251,7 +8072,9 @@ export default function App() {
         artSubjectMaskUri: composed ?? undefined,
         artSubjectMaskComponents: next.length > 0 ? next : undefined,
       });
-      recordSuccessfulCreditSpend("subjectMask");
+      if (!applyAuthoritativeAiProgress(matte.progress)) {
+        recordSuccessfulCreditSpend("subjectMask");
+      }
     } catch (error) {
       console.warn("Unable to add subject mask.", error);
       if (error instanceof SubjectMatteProviderError) {
@@ -8520,12 +8343,13 @@ export default function App() {
     setCardBackGeneratorError(null);
 
     try {
-      const generatedBackUri =
+      const generatedBack =
         cardBackGeneratorMode === "reskin"
           ? await generateOpenAiImageEditUri({
               imageUri: getDefaultCardBackImageUri(),
               prompt: generatedCardBackPrompt,
               size: "1024x1536",
+              spendCategory: "artImage",
             })
           : await generateOpenAiImageUri({
               prompt: generatedCardBackPrompt,
@@ -8533,7 +8357,9 @@ export default function App() {
                 size: "1024x1536",
                 quality: "medium",
               },
+              spendCategory: "artImage",
             });
+      const generatedBackUri = generatedBack.uri;
       const cardBackUri = await normalizeCardBackImageUri(generatedBackUri, "generated-card-back");
       const labelBase =
         request ||
@@ -8553,7 +8379,9 @@ export default function App() {
         });
       }
       setCardBackGeneratorOpen(false);
-      recordSuccessfulCreditSpend("artImage");
+      if (!applyAuthoritativeAiProgress(generatedBack.progress)) {
+        recordSuccessfulCreditSpend("artImage");
+      }
     } catch (error) {
       console.warn("Unable to generate card back.", error);
       setCardBackGeneratorError(error instanceof Error ? error.message : "CardMagic could not generate the card back.");
@@ -8619,9 +8447,11 @@ export default function App() {
     setSetSymbolGeneratorError(null);
 
     try {
-      const generatedSymbolUri = await generateOpenAiImageUri({
+      const generatedSymbol = await generateOpenAiImageUri({
         prompt: buildSetSymbolGeneratorPrompt(card, request),
+        spendCategory: "setIcon",
       });
+      const generatedSymbolUri = generatedSymbol.uri;
       const setSymbolUri = await normalizeGeneratedSetSymbolImageUri(generatedSymbolUri, "generated-set-symbol");
       const symbolEntry = addCustomSetSymbolEntry(request, setSymbolUri);
 
@@ -8635,7 +8465,11 @@ export default function App() {
       }
       setSetSymbolGeneratorOpen(false);
       setSetSymbolGeneratorTargetSetId(null);
-      recordSuccessfulCreditSpendAndEvent("setIcon", "upload-set-icon");
+      if (applyAuthoritativeAiProgress(generatedSymbol.progress)) {
+        recordProgressEvent("upload-set-icon");
+      } else {
+        recordSuccessfulCreditSpendAndEvent("setIcon", "upload-set-icon");
+      }
     } catch (error) {
       console.warn("Unable to generate set symbol.", error);
       setSetSymbolGeneratorError(error instanceof Error ? error.message : "CardMagic could not generate the symbol.");
@@ -8684,10 +8518,15 @@ export default function App() {
       notify?: boolean;
       updateCurrentCard?: boolean;
       clearDirty?: boolean;
+      saveMode?: "auto" | "new" | "overwrite";
+      overwriteSnapshotId?: string | null;
     },
   ) => {
     const activeSnapshotId = targetSetId === selectedSetId ? activeSetCardId : null;
-    const result = saveCardDraftIntoSet(cardSets, targetSetId, card, activeSnapshotId);
+    const result = saveCardDraftIntoSet(cardSets, targetSetId, card, activeSnapshotId, {
+      saveMode: options?.saveMode,
+      overwriteSnapshotId: options?.overwriteSnapshotId,
+    });
 
     if (!result) {
       return null;
@@ -8719,6 +8558,8 @@ export default function App() {
     notify?: boolean;
     updateCurrentCard?: boolean;
     clearDirty?: boolean;
+    saveMode?: "auto" | "new" | "overwrite";
+    overwriteSnapshotId?: string | null;
   }) => {
     return saveCardToSet(selectedSetId, options);
   };
@@ -8749,10 +8590,37 @@ export default function App() {
     ]);
   };
 
-  const autosaveCurrentCardIfEdited = () => {
+  const saveCardRecoverySnapshotNow = (reason: CardRecoverySnapshot["reason"]) => {
+    const targetSet = cardSetsRef.current.find((set) => set.id === selectedSetId) ?? cardSetsRef.current[0];
+
+    if (!targetSet) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const recoverySnapshot: CardRecoverySnapshot = {
+      id: `recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      savedAt: timestamp,
+      reason,
+      setId: targetSet.id,
+      setName: targetSet.name,
+      activeSetCardId,
+      card: cloneCardDraft(withResolvedSetDefaults(card, targetSet)),
+    };
+
+    void loadStoredCardRecoverySnapshots()
+      .then((snapshots) => storeCardRecoverySnapshots([recoverySnapshot, ...snapshots]))
+      .catch((error) => {
+        console.warn("Unable to write CardMagic recovery snapshot.", error);
+      });
+  };
+
+  const autosaveCurrentCardIfEdited = (reason: CardRecoverySnapshot["reason"] = "autosave") => {
     if (!cardHasUnsavedEdits) {
       return null;
     }
+
+    saveCardRecoverySnapshotNow(reason);
 
     return saveCardToSelectedSet({ updateCurrentCard: false });
   };
@@ -8822,13 +8690,55 @@ export default function App() {
   const saveCurrentCardToSelectedSet = (options?: { notify?: boolean }) => {
     setShareMenuOpen(false);
 
-    confirmDuplicateCardSave(selectedSetId, () => {
-      const result = saveCardToSelectedSet({ notify: false });
+    const targetSet = cardSets.find((set) => set.id === selectedSetId) ?? cardSets[0];
+
+    if (!targetSet) {
+      return;
+    }
+
+    const activeSnapshot =
+      activeSetCardId && targetSet.cards.some((snapshot) => snapshot.id === activeSetCardId)
+        ? targetSet.cards.find((snapshot) => snapshot.id === activeSetCardId) ?? null
+        : null;
+    const namedSnapshot = findNamedSetCardSnapshot(targetSet, card, activeSetCardId);
+    const overwriteSnapshot = activeSnapshot ?? namedSnapshot;
+
+    if (!overwriteSnapshot) {
+      const result = saveCardToSelectedSet({ notify: false, saveMode: "new" });
 
       if (result && options?.notify) {
         confirmSavedCard(result);
       }
+      return;
+    }
+
+    setSaveCardChoicePrompt({
+      cardName: getEditableCardFace(card).name || "Untitled Card",
+      setName: targetSet.name,
+      targetSetId: targetSet.id,
+      overwriteSnapshotId: overwriteSnapshot.id,
+      overwriteLabel:
+        activeSnapshot && overwriteSnapshot.id === activeSnapshot.id
+          ? "Overwrite current card"
+          : `Overwrite ${overwriteSnapshot.card.name || "matching card"}`,
     });
+  };
+
+  const completeSaveCardChoice = (
+    prompt: NonNullable<typeof saveCardChoicePrompt>,
+    saveMode: "new" | "overwrite",
+  ) => {
+    setSaveCardChoicePrompt(null);
+
+    const result = saveCardToSet(prompt.targetSetId, {
+      notify: false,
+      saveMode,
+      overwriteSnapshotId: saveMode === "overwrite" ? prompt.overwriteSnapshotId : null,
+    });
+
+    if (result) {
+      confirmSavedCard(result);
+    }
   };
 
   const startNewCardWithoutSaving = () => {
@@ -9108,31 +9018,52 @@ export default function App() {
       throw new Error("RNViewShot native module is unavailable.");
     }
 
-    const captureRef =
-      Platform.OS === "web" ? await loadWebViewShotCaptureRef() : await loadViewShotCaptureRef();
     const cardName = getSetCardDisplayCard(snapshot).name || `Card ${index + 1}`;
     const fileName = `${String(index + 1).padStart(3, "0")}-${getExportFileBaseName(cardName)}.png`;
 
-    await applyExportRenderTargetUpdate(() =>
-      setBatchExportCard(cloneCardDraft(getSetCardPreviewCard(snapshot, set))),
-    );
-    const batchExportPreview = await waitForExportPreviewRef(batchExportContainerRef, {
-      nativeID: CARDMAGIC_BATCH_EXPORT_PREVIEW_ID,
-      timeoutMs: 8000,
-      errorMessage: "CardMagic could not find the batch render surface.",
-    });
-    await waitForExportPreviewImages(batchExportPreview);
+    try {
+      await applyExportRenderTargetUpdate(() =>
+        setBatchExportCard(cloneCardDraft(getSetCardPreviewCard(snapshot, set))),
+      );
+      const batchExportPreview = await waitForExportPreviewRef(batchExportContainerRef, {
+        nativeID: CARDMAGIC_BATCH_EXPORT_PREVIEW_ID,
+        timeoutMs: 8000,
+        errorMessage: "CardMagic could not find the batch render surface.",
+      });
+      await waitForExportPreviewImages(batchExportPreview);
 
-    const result = await captureRef(batchExportPreview as never, {
-      format: "png",
-      quality: 1,
-      result: Platform.OS === "web" ? "data-uri" : "tmpfile",
-    });
+      if (Platform.OS === "web") {
+        const captureWebRef = await loadWebViewShotCaptureRef();
+        const blob = await captureWebRef(batchExportPreview as unknown as HTMLElement, {
+          format: "png",
+          quality: 1,
+          result: "blob",
+        });
 
-    return {
-      fileName,
-      bytes: await readPngCaptureBytes(result),
-    };
+        if (!(blob instanceof Blob)) {
+          throw new Error("CardMagic web export did not return a PNG blob.");
+        }
+
+        return {
+          fileName,
+          bytes: new Uint8Array(await blob.arrayBuffer()),
+        };
+      }
+
+      const captureRef = await loadViewShotCaptureRef();
+      const result = await captureRef(batchExportPreview as never, {
+        format: "png",
+        quality: 1,
+        result: "tmpfile",
+      });
+
+      return {
+        fileName,
+        bytes: await readPngCaptureBytes(result),
+      };
+    } finally {
+      await applyExportRenderTargetUpdate(() => setBatchExportCard(null));
+    }
   };
 
   const exportSelectedSetBatch = async () => {
@@ -9155,16 +9086,38 @@ export default function App() {
       })),
     };
 
+    let streamingZip: WebStreamingZipWriter | null = null;
+    let streamingZipClosed = false;
+
     try {
       setCardActionMenuOpen(false);
       setEditMenuOpen(false);
       setShareMenuOpen(false);
-      const JSZip = (await import("jszip")).default;
-      const { PDFDocument } = await import("pdf-lib");
-      const archive = new JSZip();
-      const pngFolder = archive.folder("png");
       const setPayload = createSetExportPayload(setSnapshot);
       const setJson = `${JSON.stringify(setPayload, null, 2)}\n`;
+      const fileName = `${getExportFileBaseName(setSnapshot.name)}-batch-export.zip`;
+      const webZipFileHandleResult =
+        Platform.OS === "web" ? await promptForWebSaveFileHandle(fileName, "application/zip") : null;
+
+      if (webZipFileHandleResult === "cancelled") {
+        return;
+      }
+
+      const webZipFileHandle = webZipFileHandleResult ?? null;
+      const { PDFDocument } = await import("pdf-lib");
+      let archive: JsZipMutableArchiveLike | null = null;
+      let pngFolder: JsZipFolderLike | null = null;
+
+      if (Platform.OS === "web" && webZipFileHandle) {
+        streamingZip = await createWebStreamingZipWriter(webZipFileHandle);
+        await streamingZip.addFile("set.json", setJson);
+      } else {
+        const JSZip = (await import("jszip")).default;
+        archive = new JSZip() as JsZipMutableArchiveLike;
+        pngFolder = archive.folder("png");
+        archive.file("set.json", setJson);
+      }
+
       const pdf = await PDFDocument.create();
       const pageWidth = 612;
       const pageHeight = 792;
@@ -9180,8 +9133,6 @@ export default function App() {
       let y = pageHeight - margin;
       let rowHeight = 0;
 
-      archive.file("set.json", setJson);
-
       for (let index = 0; index < setSnapshot.cards.length; index += 1) {
         const snapshot = setSnapshot.cards[index];
         const displayCard = getSetCardDisplayCard(snapshot);
@@ -9194,7 +9145,11 @@ export default function App() {
         });
         const renderedCard = await renderBatchCardPng(snapshot, setSnapshot, index);
 
-        pngFolder?.file(renderedCard.fileName, renderedCard.bytes);
+        if (streamingZip) {
+          await streamingZip.addFile(`png/${renderedCard.fileName}`, renderedCard.bytes);
+        } else {
+          pngFolder?.file(renderedCard.fileName, renderedCard.bytes);
+        }
 
         const png = await pdf.embedPng(renderedCard.bytes);
         const imageAspectRatio = png.width / png.height;
@@ -9232,26 +9187,36 @@ export default function App() {
         total: setSnapshot.cards.length,
         label: "set.json, PNGs, and print-ready PDF",
       });
-      archive.file("print-ready.pdf", await pdf.save());
+      const pdfBytes = await pdf.save();
 
-      const archiveBytes = await archive.generateAsync({ type: "uint8array" });
-      const fileName = `${getExportFileBaseName(setSnapshot.name)}-batch-export.zip`;
-
-      if (Platform.OS === "web") {
-        await shareOrDownloadWebFile(
-          fileName,
-          new Blob([getArrayBufferSlice(archiveBytes)], { type: "application/zip" }),
-          "Export CardMagic set batch",
-        );
-      } else {
+      if (streamingZip) {
+        await streamingZip.addFile("print-ready.pdf", pdfBytes);
+        await streamingZip.close();
+        streamingZipClosed = true;
+      } else if (archive && Platform.OS === "web") {
+        archive.file("print-ready.pdf", new Blob([getArrayBufferSlice(pdfBytes)], { type: "application/pdf" }));
+        await shareOrDownloadWebZipArchive(fileName, archive, null);
+      } else if (archive) {
+        archive.file("print-ready.pdf", pdfBytes);
+        const archiveBytes = await archive.generateAsync({ type: "uint8array", streamFiles: true });
         await writeAndShareNativeBytes(fileName, archiveBytes, {
           dialogTitle: "Export CardMagic set batch",
           mimeType: "application/zip",
           UTI: "public.zip-archive",
         });
+      } else {
+        throw new Error("Batch export ZIP writer was not initialized.");
       }
       recordProgressEvent("export-set");
     } catch (error) {
+      if (streamingZip && !streamingZipClosed) {
+        try {
+          await streamingZip.abort();
+        } catch (abortError) {
+          console.warn("Unable to abort streamed ZIP export.", abortError);
+        }
+      }
+
       console.warn("Set batch export unavailable.", error);
       Alert.alert(
         "Batch export unavailable",
@@ -9261,64 +9226,6 @@ export default function App() {
       setBatchExportCard(null);
       setBatchExportProgress(null);
     }
-  };
-
-  const saveCurrentFrameTemplate = () => {
-    const template = createFrameTemplateFromCard(card);
-
-    setFrameTemplates((current) => [...current, template]);
-    Alert.alert("Frame template saved", `${template.name} was added to your frame templates.`);
-  };
-
-  const applyFrameTemplate = (template: CardFrameTemplate) => {
-    updateCard(getFrameTemplatePatch(template));
-    setActiveSection("frame");
-    setSheetSection(null);
-    setPreviewRotated(false);
-  };
-
-  const removeFrameTemplate = (templateId: string) => {
-    setFrameTemplates((current) => current.filter((template) => template.id !== templateId));
-  };
-
-  const exportFrameTemplates = async () => {
-    await exportCardMagicJson(getExportFileName("cardmagic-frame-templates", "templates"), {
-      schemaVersion: 1,
-      kind: "frame-templates",
-      exportedAt: new Date().toISOString(),
-      templates: frameTemplates.map(cloneFrameTemplate),
-    });
-  };
-
-  const importFrameTemplates = async () => {
-    const imported = await importCardMagicJson();
-
-    if (!imported || typeof imported !== "object") {
-      return;
-    }
-
-    const payload = imported as Partial<CardMagicExport>;
-    const templates =
-      payload.kind === "frame-template" && isCardFrameTemplate(payload.template)
-        ? [payload.template]
-        : payload.kind === "frame-templates" && isCardFrameTemplateArray(payload.templates)
-          ? payload.templates
-          : [];
-
-    if (templates.length === 0) {
-      Alert.alert("Import failed", "That JSON file does not contain CardMagic frame templates.");
-      return;
-    }
-
-    const timestamp = new Date().toISOString();
-    const importedTemplates = templates.map((template) => ({
-      ...cloneFrameTemplate(template),
-      id: `frame-template-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      updatedAt: timestamp,
-    }));
-
-    setFrameTemplates((current) => [...current, ...importedTemplates]);
-    Alert.alert("Templates imported", `${importedTemplates.length} frame template(s) were imported.`);
   };
 
   const startNextCard = (options?: { autosave?: boolean }) => {
@@ -9337,14 +9244,14 @@ export default function App() {
     setShareMenuOpen(false);
   };
 
-  const addFlipSideToCard = () => {
+  const addFlipSideToCard = (options?: { initialFace?: "front" | "back" }) => {
     if ((card.typeFrame ?? "standard") === "planeswalker") {
       setPhysicalBackMenuOpen(false);
       return;
     }
 
     setCardHasUnsavedEdits(true);
-    const nextDfcFace = physicalBackVisible ? "back" : "front";
+    const nextDfcFace = options?.initialFace ?? (physicalBackVisible ? "back" : "front");
 
     setSuppressPreviewFlipTransition(true);
     setCard((current) => {
@@ -9495,8 +9402,17 @@ export default function App() {
       return;
     }
 
-    setCardSets((current) =>
-      normalizeCardSets(
+    const currentSelectedSet = cardSetsRef.current.find((set) => set.id === setId);
+    const currentGeneratedCode = currentSelectedSet ? generateSetCode(currentSelectedSet.name) : null;
+    const shouldUpdateSelectedSetCode = Boolean(
+      currentSelectedSet &&
+        currentSelectedSet.id === selectedSetId &&
+        normalizeSetCode(currentSelectedSet.code, currentSelectedSet.name) === currentGeneratedCode,
+    );
+    const nextSelectedSetCode = shouldUpdateSelectedSetCode ? generateSetCode(nextName) : null;
+
+    setCardSets((current) => {
+      const nextSets = normalizeCardSets(
         current.map((set) => {
           if (set.id !== setId) {
             return set;
@@ -9504,15 +9420,23 @@ export default function App() {
 
           const currentGeneratedCode = generateSetCode(set.name);
           const shouldRegenerateCode = normalizeSetCode(set.code, set.name) === currentGeneratedCode;
+          const nextCode = shouldRegenerateCode ? generateSetCode(nextName) : set.code;
 
           return {
             ...set,
             name: nextName,
-            code: shouldRegenerateCode ? generateSetCode(nextName) : set.code,
+            code: nextCode,
           };
         }),
-      ),
-    );
+      );
+
+      persistAccountSetsNow(nextSets);
+      return nextSets;
+    });
+
+    if (nextSelectedSetCode) {
+      updateCard({ setCode: nextSelectedSetCode });
+    }
   };
 
   const updateSetCode = (setId: string, code: string) => {
@@ -9695,6 +9619,14 @@ export default function App() {
     }
   };
 
+  const inviteSetCollaborator = useCallback(async (setId: string, inviteIdentifier: string) => {
+    if (!accountUser) {
+      throw new Error("Sign in before inviting collaborators.");
+    }
+
+    await inviteCollaborationSetMember(setId, inviteIdentifier);
+  }, [accountUser]);
+
   const undoDelete = useCallback((undoState: DeleteUndoState) => {
     if (undoState.kind === "card") {
       const nextTombstones = removeDeletedCardTombstone(
@@ -9763,6 +9695,10 @@ export default function App() {
 
   const selectInspectorTab = (tab: InspectorTab) => {
     const nextTab: VisibleInspectorTab = tab === "keywords" ? "edit" : tab;
+
+    if (nextTab !== inspectorTab) {
+      autosaveCurrentCardIfEdited("tab-switch");
+    }
 
     setActiveSection(null);
     setEditMenuOpen(false);
@@ -9837,7 +9773,7 @@ export default function App() {
                       </Text>
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel={`Show patch notes for ${headerVersionLabel}`}
+                        accessibilityLabel={`Show ${CARDMAGIC_RELEASE_BRANCH === "main" ? "release notes" : "patch notes"} for ${headerVersionLabel}`}
                         hitSlop={8}
                         onPress={() => setPatchNotesOpen(true)}
                         style={{ alignSelf: "flex-start" }}
@@ -9897,8 +9833,13 @@ export default function App() {
                       }}
                       onClose={() => setShareMenuOpen(false)}
                       onStartNewCard={startNewCardWithoutSaving}
+                      onRandomizeCard={randomizeCard}
                       onShareToCommunity={() => void shareCurrentCardToCommunity()}
                       onExportCurrentCardImage={exportCurrentCardPng}
+                      onExportCurrentCardJson={() => void exportCurrentCard()}
+                      hasSelectedSet={Boolean(selectedSet)}
+                      onExportSelectedSetJson={() => void exportSelectedSet()}
+                      onExportSelectedSetBatch={() => void exportSelectedSetBatch()}
                     />
                     <Pressable
                       accessibilityRole="button"
@@ -9996,9 +9937,7 @@ export default function App() {
                         {physicalBackMenuOpen && showingPhysicalBack ? (
                           <PhysicalBackActionsMenu
                             width={Math.min(304, Math.max(236, previewRenderWidth - 32))}
-                            canAddCardBack={canAddCardBack}
                             onChangeBack={openCardBackSettings}
-                            onAddCardBack={addFlipSideToCard}
                             onClose={() => setPhysicalBackMenuOpen(false)}
                           />
                         ) : null}
@@ -10223,6 +10162,13 @@ export default function App() {
                     customCardBacks={customCardBacks}
                     generatedSetSymbols={generatedSetSymbols}
                     footerOwnerName={accountFooterOwnerName}
+                    canRefreshSets={Boolean(accountUser)}
+                    setsRefreshing={accountSyncBusy}
+                    onRefreshSets={() => void syncRemoteUserProgress()}
+                    canInviteSetCollaborators={Boolean(accountUser)}
+                    onFetchSetCollaborators={fetchCollaborationSetMembers}
+                    onFetchPendingInvites={fetchCollaborationSetPendingInvites}
+                    onInviteSetCollaborator={inviteSetCollaborator}
                   />
                 </TabScreen>
               ) : null}
@@ -10231,6 +10177,9 @@ export default function App() {
                 <CommunityPanel
                   sets={cardSets}
                   accountUser={accountUser}
+                  onRegisterMainScrollHandler={(handler) => {
+                    communityScrollBoundaryHandlerRef.current = handler;
+                  }}
                   onExportCardImage={exportCommunityCardPng}
                 />
               ) : null}
@@ -10269,6 +10218,12 @@ export default function App() {
             onSaveToSet={saveCardToSetThenRandomize}
             onDiscard={performRandomizeCard}
             onClose={() => setRandomizeSavePromptOpen(false)}
+          />
+          <SaveCardChoiceModal
+            prompt={saveCardChoicePrompt}
+            onOverwrite={(prompt) => completeSaveCardChoice(prompt, "overwrite")}
+            onSaveNew={(prompt) => completeSaveCardChoice(prompt, "new")}
+            onClose={() => setSaveCardChoicePrompt(null)}
           />
           <SavedCardPromptModal
             prompt={savedCardPrompt}
@@ -10344,6 +10299,9 @@ export default function App() {
           onPickArt={openArtSourceOptions}
           onPickSetSymbol={() => void pickSetSymbol(selectedSet?.id)}
           onGenerateSetSymbol={() => openSetSymbolGenerator(selectedSet?.id)}
+          onAddCardBack={
+            canAddPhysicalCardBackFace ? () => addFlipSideToCard({ initialFace: "back" }) : undefined
+          }
           onGenerateCardBack={openCardBackGenerator}
           onPickCustomCardBack={pickCustomCardBack}
           onChangeSetDefaultCardBack={(cardBackId) => {
@@ -10491,357 +10449,13 @@ export default function App() {
         <PatchNotesModal
           visible={patchNotesOpen}
           appVersion={CARDMAGIC_APP_VERSION}
-          notes={CARDMAGIC_PATCH_NOTES}
+          releaseBranch={CARDMAGIC_RELEASE_BRANCH}
+          betaReleaseDeployment={betaReleaseDeployment}
+          notes={CARDMAGIC_VISIBLE_PATCH_NOTES}
           onClose={() => setPatchNotesOpen(false)}
         />
       </GestureHandlerRootView>
     </HybridSymbolStyleProvider>
-  );
-}
-
-async function copyTextToClipboard(text: string) {
-  if (Platform.OS === "web" && typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return true;
-  }
-
-  if (Platform.OS === "web" && typeof document !== "undefined") {
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    textArea.style.position = "fixed";
-    textArea.style.opacity = "0";
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-
-    try {
-      return document.execCommand("copy");
-    } finally {
-      document.body.removeChild(textArea);
-    }
-  }
-
-  return false;
-}
-
-function getPatchNoteBulletKey(bullet: PatchNoteBullet): string {
-  return typeof bullet === "string" ? bullet : `${bullet.text}-${bullet.linkUrl}`;
-}
-
-function PatchNotesModal({
-  visible,
-  appVersion,
-  notes,
-  onClose,
-}: {
-  visible: boolean;
-  appVersion: string;
-  notes: PatchNoteEntry[];
-  onClose: () => void;
-}) {
-  if (!visible) {
-    return null;
-  }
-
-  return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(12, 15, 22, 0.48)",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 24,
-        }}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss patch notes"
-          onPress={onClose}
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            bottom: 0,
-            left: 0,
-          }}
-        />
-        <View
-          style={{
-            width: "100%",
-            maxWidth: 440,
-            maxHeight: "82%",
-            borderRadius: 18,
-            borderCurve: "continuous",
-            backgroundColor: "#ffffff",
-            shadowColor: "#000000",
-            shadowOpacity: 0.22,
-            shadowRadius: 26,
-            shadowOffset: { width: 0, height: 14 },
-            elevation: 18,
-            overflow: "hidden",
-          }}
-        >
-          <View
-            style={{
-              paddingHorizontal: 20,
-              paddingTop: 20,
-              paddingBottom: 14,
-              borderBottomWidth: 1,
-              borderBottomColor: "#eceef2",
-              flexDirection: "row",
-              alignItems: "flex-start",
-              gap: 14,
-            }}
-          >
-            <View
-              style={{
-                width: 46,
-                height: 46,
-                borderRadius: 23,
-                backgroundColor: "#111827",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <BookOpen size={22} color="#69d2df" strokeWidth={2.6} />
-            </View>
-            <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-              <Text selectable={false} style={{ color: "#11151c", fontSize: 22, fontWeight: "900" }}>
-                Patch Notes
-              </Text>
-              <Text selectable={false} style={{ color: "#5e6673", fontSize: 13, lineHeight: 18, fontWeight: "800" }}>
-                Current version v{appVersion}
-              </Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss patch notes"
-              onPress={onClose}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                backgroundColor: "#eef0f4",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <X size={18} color="#222733" strokeWidth={2.5} />
-            </Pressable>
-          </View>
-
-          <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-            {notes.map((entry) => (
-              <View
-                key={entry.version}
-                style={{
-                  borderRadius: 14,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: "#e1e4eb",
-                  backgroundColor: "#f8f9fb",
-                  padding: 14,
-                  gap: 10,
-                }}
-              >
-                <View style={{ gap: 3 }}>
-                  <Text selectable={false} style={{ color: "#11151c", fontSize: 16, fontWeight: "900" }}>
-                    v{entry.version} · {entry.title}
-                  </Text>
-                  <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-                    {entry.date}
-                  </Text>
-                </View>
-                <View style={{ gap: 8 }}>
-                  {entry.bullets.map((bullet, index) => (
-                    <View
-                      key={`${entry.version}-${index}-${getPatchNoteBulletKey(bullet)}`}
-                      style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}
-                    >
-                      <Text selectable={false} style={{ color: "#0b7180", fontSize: 15, lineHeight: 19, fontWeight: "900" }}>
-                        •
-                      </Text>
-                      <Text selectable={false} style={{ flex: 1, color: "#2a303a", fontSize: 13, lineHeight: 19, fontWeight: "700" }}>
-                        {typeof bullet === "string" ? (
-                          bullet
-                        ) : (
-                          <>
-                            {bullet.text}{" "}
-                            <Text
-                              accessibilityRole="link"
-                              onPress={() => void Linking.openURL(bullet.linkUrl)}
-                              style={{
-                                color: "#0b7180",
-                                fontSize: 13,
-                                lineHeight: 19,
-                                fontWeight: "900",
-                                textDecorationLine: "underline",
-                              }}
-                            >
-                              {bullet.linkLabel}
-                            </Text>
-                          </>
-                        )}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-function EarlyAccessCodeModal({
-  visible,
-  code,
-  onClose,
-}: {
-  visible: boolean;
-  code: string;
-  onClose: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  if (!visible) {
-    return null;
-  }
-
-  const copyCode = async () => {
-    const ok = await copyTextToClipboard(code);
-    setCopied(ok);
-
-    if (!ok) {
-      Alert.alert("Copy code", code);
-    }
-  };
-
-  return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(12, 15, 22, 0.48)",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 24,
-        }}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss early access code"
-          onPress={onClose}
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            bottom: 0,
-            left: 0,
-          }}
-        />
-        <View
-          style={{
-            width: "100%",
-            maxWidth: 392,
-            borderRadius: 18,
-            borderCurve: "continuous",
-            backgroundColor: "#ffffff",
-            padding: 20,
-            gap: 16,
-            shadowColor: "#000000",
-            shadowOpacity: 0.22,
-            shadowRadius: 26,
-            shadowOffset: { width: 0, height: 14 },
-            elevation: 18,
-          }}
-        >
-          <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 14 }}>
-            <View
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: "#111827",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Sparkles size={23} color="#69d2df" strokeWidth={2.6} />
-            </View>
-            <View style={{ flex: 1, gap: 5 }}>
-              <Text selectable={false} style={{ color: "#11151c", fontSize: 22, fontWeight: "900" }}>
-                Early Access Code
-              </Text>
-              <Text selectable={false} style={{ color: "#5e6673", fontSize: 14, lineHeight: 20, fontWeight: "700" }}>
-                Use this launch code in the credit store to add a one-time account credit grant.
-              </Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss early access code"
-              onPress={onClose}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                backgroundColor: "#eef0f4",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <X size={18} color="#222733" strokeWidth={2.5} />
-            </Pressable>
-          </View>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Copy early access credit code"
-            onPress={() => void copyCode()}
-            style={{
-              borderRadius: 14,
-              borderWidth: 1,
-              borderColor: "#dbe1ea",
-              backgroundColor: "#f7f9fc",
-              paddingHorizontal: 16,
-              paddingVertical: 14,
-              gap: 2,
-            }}
-          >
-            <Text selectable={false} style={{ color: "#111827", fontSize: 30, letterSpacing: 0, fontWeight: "900" }}>
-              {code}
-            </Text>
-            <Text selectable={false} style={{ color: "#697280", fontSize: 13, lineHeight: 18, fontWeight: "800" }}>
-              {copied ? "Copied to clipboard." : "Tap the code to copy it."}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Dismiss early access code"
-            onPress={onClose}
-            style={{
-              minHeight: 52,
-              borderRadius: 26,
-              backgroundColor: "#111827",
-              alignItems: "center",
-              justifyContent: "center",
-              flexDirection: "row",
-              gap: 9,
-              paddingHorizontal: 18,
-            }}
-          >
-            <Sparkles size={18} color="#ffffff" strokeWidth={2.6} />
-            <Text selectable={false} style={{ color: "#ffffff", fontSize: 16, fontWeight: "900" }}>
-              Got it
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-    </Modal>
   );
 }
 
@@ -11880,12 +11494,10 @@ function ArtAdjustmentModal({
   const [addSubjectPrompt, setAddSubjectPrompt] = useState("");
   // Artwork vs Mask view: each shows only its own controls.
   const [adjustMode, setAdjustMode] = useState<ArtAdjustmentInitialMode>(initialMode);
-  const [maskBrushMode, setMaskBrushMode] = useState<MaskBrushMode>("add");
-  const [maskBrushSize, setMaskBrushSize] = useState(18);
   const [maskPreviewUri, setMaskPreviewUri] = useState<string | null>(faceCard.artSubjectMaskUri ?? null);
-  const maskOverlayVisible = adjustMode === "mask" && Boolean(maskPreviewUri);
+  const subjectMaskEnabled = faceCard.artSubjectMaskDisabled !== true;
+  const maskOverlayVisible = adjustMode === "mask" && subjectMaskEnabled && Boolean(maskPreviewUri);
   const [maskTargetPrompt, setMaskTargetPrompt] = useState("");
-  const [maskEditStatus, setMaskEditStatus] = useState<string | null>(null);
   const artRect = getVisibleArtRectForCard(card);
   const artAspectRatio = artRect.width / artRect.height;
   const maxCropWidth = Math.min(width - 48, 460);
@@ -11921,11 +11533,8 @@ function ArtAdjustmentModal({
   const artRectRef = useRef(artRect);
   const cardRef = useRef(card);
   const artUriRef = useRef(artUri);
-  const maskPreviewUriRef = useRef(maskPreviewUri);
-  const maskEditBusyRef = useRef(false);
   const coordinateScaleRef = useRef(coordinateScale);
   const imageAspectRatioRef = useRef(imageAspectRatio);
-  const maskEditLayoutRef = useRef<MaskEditDisplayLayout | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -11959,22 +11568,9 @@ function ArtAdjustmentModal({
     artRectRef.current = artRect;
     cardRef.current = card;
     artUriRef.current = artUri;
-    maskPreviewUriRef.current = maskPreviewUri;
     coordinateScaleRef.current = coordinateScale;
     imageAspectRatioRef.current = imageAspectRatio;
-    maskEditLayoutRef.current = {
-      cropWidth,
-      cropHeight,
-      imageLeft: fittedImageLayout.left,
-      imageTop: fittedImageLayout.top,
-      imageWidth: fittedImageLayout.width,
-      imageHeight: fittedImageLayout.height,
-      offsetX: artTransform.offsetX,
-      offsetY: artTransform.offsetY,
-      scale: artTransform.scale,
-      coordinateScale,
-    };
-  }, [artTransform, artRect, card, artUri, maskPreviewUri, coordinateScale, imageAspectRatio, cropWidth, cropHeight, fittedImageLayout]);
+  }, [artTransform, artRect, card, artUri, coordinateScale, imageAspectRatio]);
 
   useEffect(() => {
     if (!visible) {
@@ -11984,7 +11580,6 @@ function ArtAdjustmentModal({
     panStartTransform.current = artTransform;
     pinchStartTransform.current = artTransform;
     setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
-    setMaskEditStatus(null);
     setAdjustMode(initialMode);
   }, [artUri, initialMode, visible]);
 
@@ -12013,48 +11608,6 @@ function ArtAdjustmentModal({
       scale: artTransform.scale + scaleDelta,
     });
   };
-
-  const updateMaskAtEvent = useCallback(async (event: GestureResponderEvent, nextMode = maskBrushMode) => {
-    if (Platform.OS !== "web" || !artUriRef.current || !maskPreviewUriRef.current || maskEditBusyRef.current) {
-      return;
-    }
-
-    const layout = maskEditLayoutRef.current;
-
-    if (!layout) {
-      return;
-    }
-
-    maskEditBusyRef.current = true;
-    setMaskEditStatus(nextMode === "smartAdd" || nextMode === "smartErase" ? "Selecting connected mask region." : "Painting mask.");
-
-    try {
-      const nextUri = await editWebSubjectMaskAtPoint({
-        artUri: artUriRef.current,
-        maskUri: maskPreviewUriRef.current,
-        layout,
-        point: {
-          x: event.nativeEvent.locationX,
-          y: event.nativeEvent.locationY,
-        },
-        mode: nextMode,
-        brushSize: maskBrushSize,
-      });
-
-      maskPreviewUriRef.current = nextUri;
-      setMaskPreviewUri(nextUri);
-      onChange(toDfcFacePatch(cardRef.current, {
-        artSubjectMaskUri: nextUri,
-        artSubjectMaskComponents: undefined,
-      }));
-    } catch (error) {
-      console.warn("Unable to edit subject mask.", error);
-      setMaskEditStatus(error instanceof Error ? error.message : "Unable to edit mask.");
-    } finally {
-      maskEditBusyRef.current = false;
-      setTimeout(() => setMaskEditStatus(null), 700);
-    }
-  }, [maskBrushMode, maskBrushSize, onChange]);
 
   const artGesture = useMemo(() => {
     const panGesture = Gesture.Pan()
@@ -12268,6 +11821,71 @@ function ArtAdjustmentModal({
               })}
             </View>
             {adjustMode === "mask" ? (
+              <Pressable
+                accessibilityRole="switch"
+                accessibilityLabel="Enable subject mask compositing"
+                accessibilityState={{ checked: subjectMaskEnabled, disabled: !faceCard.artSubjectMaskUri }}
+                disabled={!faceCard.artSubjectMaskUri}
+                onPress={() => {
+                  onChange(toDfcFacePatch(cardRef.current, {
+                    artSubjectMaskDisabled: subjectMaskEnabled,
+                  }));
+                }}
+                style={({ pressed }) => ({
+                  width: cropWidth,
+                  minHeight: 48,
+                  borderRadius: 14,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: subjectMaskEnabled ? "rgba(85, 223, 245, 0.62)" : "rgba(255, 255, 255, 0.24)",
+                  backgroundColor: subjectMaskEnabled
+                    ? "rgba(85, 223, 245, 0.16)"
+                    : pressed
+                      ? "rgba(255, 255, 255, 0.14)"
+                      : "rgba(255, 255, 255, 0.08)",
+                  opacity: faceCard.artSubjectMaskUri ? 1 : 0.52,
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                })}
+              >
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
+                    SUBJECT MASK COMPOSITING
+                  </Text>
+                  <Text selectable={false} style={{ color: "rgba(230, 247, 251, 0.66)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
+                    {faceCard.artSubjectMaskUri
+                      ? "Toggle the foreground cutout without deleting the saved alpha matte."
+                      : "Generate a subject mask before enabling compositing."}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    width: 46,
+                    height: 26,
+                    borderRadius: 999,
+                    borderCurve: "continuous",
+                    backgroundColor: subjectMaskEnabled && faceCard.artSubjectMaskUri ? "#31d0e0" : "rgba(255, 255, 255, 0.22)",
+                    padding: 3,
+                    alignItems: subjectMaskEnabled && faceCard.artSubjectMaskUri ? "flex-end" : "flex-start",
+                    justifyContent: "center",
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 20,
+                      height: 20,
+                      borderRadius: 10,
+                      backgroundColor: "#ffffff",
+                    }}
+                  />
+                </View>
+              </Pressable>
+            ) : null}
+            {adjustMode === "mask" ? (
               <View
                 style={{
                   width: cropWidth,
@@ -12307,7 +11925,7 @@ function ArtAdjustmentModal({
                   }}
                 />
                 <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.62)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
-                  Leave blank for the normal foreground matte. Add a phrase to use fal SAM semantic segmentation.
+                  Leave blank for the normal foreground matte. Add a phrase to use fal.ai SAM semantic segmentation.
                 </Text>
               </View>
             ) : null}
@@ -12634,74 +12252,6 @@ function ArtAdjustmentModal({
         </View>
       </GestureHandlerRootView>
     </Modal>
-  );
-}
-
-function ArtAdjustmentIconButton({
-  accessibilityLabel,
-  onPress,
-  children,
-}: {
-  accessibilityLabel: string;
-  onPress: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      hitSlop={6}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 42,
-        height: 42,
-        borderRadius: 21,
-        borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.34)",
-        backgroundColor: pressed ? "rgba(255, 255, 255, 0.24)" : "rgba(255, 255, 255, 0.12)",
-        alignItems: "center",
-        justifyContent: "center",
-      })}
-    >
-      {children}
-    </Pressable>
-  );
-}
-
-function MaskModeButton({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 36,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: selected ? "#55dff5" : "rgba(255, 255, 255, 0.34)",
-        backgroundColor: selected
-          ? "rgba(85, 223, 245, 0.22)"
-          : pressed
-            ? "rgba(255, 255, 255, 0.2)"
-            : "rgba(255, 255, 255, 0.1)",
-        alignItems: "center",
-        justifyContent: "center",
-        paddingHorizontal: 12,
-      })}
-    >
-      <Text selectable={false} style={{ color: "#ffffff", fontSize: 12, fontWeight: "900" }}>
-        {label}
-      </Text>
-    </Pressable>
   );
 }
 
@@ -13508,6 +13058,136 @@ function SavedCardPromptModal({
   );
 }
 
+type SaveCardChoiceModalPrompt = {
+  cardName: string;
+  setName: string;
+  targetSetId: string;
+  overwriteSnapshotId: string | null;
+  overwriteLabel: string;
+};
+
+function SaveCardChoiceModal({
+  prompt,
+  onOverwrite,
+  onSaveNew,
+  onClose,
+}: {
+  prompt: SaveCardChoiceModalPrompt | null;
+  onOverwrite: (prompt: SaveCardChoiceModalPrompt) => void;
+  onSaveNew: (prompt: SaveCardChoiceModalPrompt) => void;
+  onClose: () => void;
+}) {
+  if (!prompt) {
+    return null;
+  }
+
+  return (
+    <Modal transparent animationType="fade" visible={Boolean(prompt)} onRequestClose={onClose}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(12, 15, 22, 0.46)",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+        }}
+      >
+        <View
+          style={{
+            width: "100%",
+            maxWidth: 380,
+            borderRadius: 18,
+            borderCurve: "continuous",
+            backgroundColor: "#ffffff",
+            padding: 18,
+            gap: 14,
+            shadowColor: "#000000",
+            shadowOpacity: 0.2,
+            shadowRadius: 24,
+            shadowOffset: { width: 0, height: 14 },
+            elevation: 16,
+          }}
+        >
+          <View style={{ gap: 5 }}>
+            <Text selectable style={{ color: "#11151c", fontSize: 21, fontWeight: "900" }}>
+              Save card
+            </Text>
+            <Text selectable style={{ color: "#5f6570", fontSize: 14, lineHeight: 19, fontWeight: "700" }}>
+              Save {prompt.cardName} to {prompt.setName} by overwriting the saved snapshot, or keep the existing card and save this draft as a new card.
+            </Text>
+          </View>
+
+          <View style={{ gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={prompt.overwriteLabel}
+              onPress={() => onOverwrite(prompt)}
+              style={{
+                minHeight: 48,
+                borderRadius: 10,
+                borderCurve: "continuous",
+                backgroundColor: "#151820",
+                alignItems: "center",
+                justifyContent: "center",
+                flexDirection: "row",
+                gap: 8,
+                paddingHorizontal: 14,
+              }}
+            >
+              <Save size={18} color="#ffffff" strokeWidth={2.5} />
+              <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "900" }}>
+                {prompt.overwriteLabel}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Save as new card"
+              onPress={() => onSaveNew(prompt)}
+              style={{
+                minHeight: 46,
+                borderRadius: 10,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#d8dbe2",
+                backgroundColor: "#f8f9fb",
+                alignItems: "center",
+                justifyContent: "center",
+                flexDirection: "row",
+                gap: 8,
+                paddingHorizontal: 14,
+              }}
+            >
+              <Plus size={18} color="#20242d" strokeWidth={2.5} />
+              <Text selectable={false} style={{ color: "#20242d", fontSize: 14, fontWeight: "900" }}>
+                Save as new card
+              </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel save"
+              onPress={onClose}
+              style={{
+                minHeight: 44,
+                borderRadius: 10,
+                borderCurve: "continuous",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 14,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#68707d", fontSize: 14, fontWeight: "900" }}>
+                Cancel
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function CardPhotoExportBusyOverlay() {
   return (
     <View
@@ -13690,6 +13370,85 @@ type SafeCardThumbnailProps = {
   footerOwnerName?: string;
 };
 
+type LazySafeCardThumbnailProps = SafeCardThumbnailProps & {
+  deferFullPreview?: boolean;
+};
+
+function LazySafeCardThumbnail({
+  card,
+  width,
+  cornerRadius,
+  footerOwnerName,
+  deferFullPreview = false,
+}: LazySafeCardThumbnailProps) {
+  const nativeIdRef = useRef(`cardmagic-set-thumbnail-${Math.random().toString(36).slice(2, 10)}`);
+  const [shouldMountFullPreview, setShouldMountFullPreview] = useState(!deferFullPreview);
+
+  useEffect(() => {
+    if (!deferFullPreview) {
+      setShouldMountFullPreview(true);
+      return;
+    }
+
+    setShouldMountFullPreview(false);
+  }, [card, deferFullPreview]);
+
+  useEffect(() => {
+    if (
+      shouldMountFullPreview ||
+      !deferFullPreview ||
+      Platform.OS !== "web" ||
+      typeof document === "undefined" ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
+
+    const element = document.getElementById(nativeIdRef.current);
+
+    if (!element) {
+      setShouldMountFullPreview(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldMountFullPreview(true);
+          observer.disconnect();
+        }
+      },
+      { root: null, rootMargin: CARDMAGIC_SET_THUMBNAIL_LAZY_ROOT_MARGIN, threshold: 0.01 },
+    );
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [deferFullPreview, shouldMountFullPreview]);
+
+  return (
+    <View nativeID={nativeIdRef.current}>
+      {shouldMountFullPreview ? (
+        <SafeCardThumbnail
+          card={card}
+          width={width}
+          cornerRadius={cornerRadius}
+          footerOwnerName={footerOwnerName}
+        />
+      ) : (
+        <CardThumbnailFallback
+          card={card}
+          width={width}
+          cornerRadius={cornerRadius}
+          statusLabel="Preview loading"
+        />
+      )}
+    </View>
+  );
+}
+
 class SafeCardThumbnail extends Component<SafeCardThumbnailProps, TabContentErrorBoundaryState> {
   state: TabContentErrorBoundaryState = { failed: false, autoRepairAttempted: false };
 
@@ -13714,7 +13473,6 @@ class SafeCardThumbnail extends Component<SafeCardThumbnailProps, TabContentErro
           card={this.props.card}
           width={this.props.width}
           cornerRadius={this.props.cornerRadius}
-          footerOwnerName={this.props.footerOwnerName}
         />
       );
     }
@@ -13737,12 +13495,12 @@ function CardThumbnailFallback({
   card,
   width,
   cornerRadius,
-  footerOwnerName,
+  statusLabel = "Preview repaired",
 }: {
   card: CardDraft;
   width: number;
   cornerRadius: number;
-  footerOwnerName?: string;
+  statusLabel?: string;
 }) {
   const height = width / CARD_BACK_PREVIEW_ASPECT_RATIO;
   const face = getEditableCardFace(card);
@@ -13771,7 +13529,7 @@ function CardThumbnailFallback({
         </Text>
       </View>
       <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: Math.max(6, width * 0.065), fontWeight: "900", textTransform: "uppercase" }}>
-        Preview repaired
+        {statusLabel}
       </Text>
     </View>
   );
@@ -14144,15 +13902,25 @@ function TopShareMenu({
   onToggle,
   onClose,
   onStartNewCard,
+  onRandomizeCard,
   onShareToCommunity,
   onExportCurrentCardImage,
+  onExportCurrentCardJson,
+  hasSelectedSet,
+  onExportSelectedSetJson,
+  onExportSelectedSetBatch,
 }: {
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
   onStartNewCard: () => void;
+  onRandomizeCard: () => void;
   onShareToCommunity: () => void;
   onExportCurrentCardImage: () => void;
+  onExportCurrentCardJson: () => void;
+  hasSelectedSet: boolean;
+  onExportSelectedSetJson: () => void;
+  onExportSelectedSetBatch: () => void;
 }) {
   const runAndClose = (action: () => void) => {
     onClose();
@@ -14204,10 +13972,34 @@ function TopShareMenu({
             onPress={() => runAndClose(onStartNewCard)}
           />
           <CardSettingsAction
+            label="Randomize card"
+            icon={<Shuffle size={18} color="#20242d" strokeWidth={2.4} />}
+            onPress={() => runAndClose(onRandomizeCard)}
+          />
+          <CardSettingsAction
             label={Platform.OS === "web" ? "Download card photo" : "Save card photo"}
             icon={<Download size={18} color="#20242d" strokeWidth={2.4} />}
             onPress={() => runAndClose(onExportCurrentCardImage)}
           />
+          <CardSettingsAction
+            label="Download card JSON"
+            icon={<Database size={18} color="#20242d" strokeWidth={2.4} />}
+            onPress={() => runAndClose(onExportCurrentCardJson)}
+          />
+          {hasSelectedSet ? (
+            <>
+              <CardSettingsAction
+                label="Download set JSON"
+                icon={<Download size={18} color="#20242d" strokeWidth={2.4} />}
+                onPress={() => runAndClose(onExportSelectedSetJson)}
+              />
+              <CardSettingsAction
+                label="Download set batch"
+                icon={<Layers size={18} color="#20242d" strokeWidth={2.4} />}
+                onPress={() => runAndClose(onExportSelectedSetBatch)}
+              />
+            </>
+          ) : null}
           <CardSettingsAction
             label="Share card to community"
             icon={<Users size={18} color="#20242d" strokeWidth={2.4} />}
@@ -14221,15 +14013,11 @@ function TopShareMenu({
 
 function PhysicalBackActionsMenu({
   width,
-  canAddCardBack,
   onChangeBack,
-  onAddCardBack,
   onClose,
 }: {
   width: number;
-  canAddCardBack: boolean;
   onChangeBack: () => void;
-  onAddCardBack: () => void;
   onClose: () => void;
 }) {
   return (
@@ -14284,13 +14072,6 @@ function PhysicalBackActionsMenu({
           icon={<Palette size={18} color="#20242d" strokeWidth={2.4} />}
           onPress={onChangeBack}
         />
-        {canAddCardBack ? (
-          <CardSettingsAction
-            label="Add card to back"
-            icon={<Plus size={18} color="#20242d" strokeWidth={2.4} />}
-            onPress={onAddCardBack}
-          />
-        ) : null}
       </View>
     </View>
   );
@@ -14601,7 +14382,7 @@ function FrameTreatmentPreviewButton({
           backgroundColor: "#151820",
         }}
       >
-        {treatment === "borderless" || treatment === "transparentBorderless" ? (
+        {treatment === "borderless" ? (
           <>
             <View
               style={{
@@ -14615,11 +14396,7 @@ function FrameTreatmentPreviewButton({
             />
             <Image
               accessibilityIgnoresInvertColors
-              source={
-                treatment === "transparentBorderless"
-                  ? TRANSPARENT_BORDERLESS_TREATMENT_PREVIEW_SOURCE
-                  : BORDERLESS_TREATMENT_PREVIEW_SOURCE
-              }
+              source={BORDERLESS_TREATMENT_PREVIEW_SOURCE}
               resizeMode="stretch"
               style={{
                 position: "absolute",
@@ -14828,7 +14605,6 @@ function EditSectionList({
           ["art", "Art"],
           ["typeLine", "Type Line"],
           ["rules", typeFrame === "planeswalker" ? "Rules and Loyalty" : "Rules Text"],
-          ["aiPrompts", "AI Prompts"],
           ["printing", "Printing"],
         ] as const
       ).map(([section, label], index) => (
@@ -14870,6 +14646,26 @@ function EditSectionList({
   );
 }
 
+function getInviteUsernameSearchQuery(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed || trimmed.includes(" ")) {
+    return null;
+  }
+
+  if (/^[^@\s]+@/.test(trimmed)) {
+    return null;
+  }
+
+  const usernameQuery = trimmed.replace(/^@+/, "").replace(/[^A-Za-z0-9_]/g, "");
+
+  if (usernameQuery.length < 2) {
+    return null;
+  }
+
+  return usernameQuery;
+}
+
 function SetsPanel({
   sets,
   selectedSetId,
@@ -14877,6 +14673,10 @@ function SetsPanel({
   customCardBacks,
   generatedSetSymbols,
   footerOwnerName,
+  canRefreshSets,
+  setsRefreshing,
+  canInviteSetCollaborators,
+  onRefreshSets,
   onChangeNewSetName,
   onSelectSet,
   onCreateSet,
@@ -14890,6 +14690,9 @@ function SetsPanel({
   onChangeSetDefaultSymbol,
   onPickSetSymbol,
   onGenerateSetSymbol,
+  onFetchSetCollaborators,
+  onFetchPendingInvites,
+  onInviteSetCollaborator,
 }: {
   sets: CardSet[];
   selectedSetId: string;
@@ -14897,6 +14700,10 @@ function SetsPanel({
   customCardBacks: CustomCardBackEntry[];
   generatedSetSymbols: GeneratedSetSymbolEntry[];
   footerOwnerName: string;
+  canRefreshSets: boolean;
+  setsRefreshing: boolean;
+  canInviteSetCollaborators: boolean;
+  onRefreshSets: () => void;
   onChangeNewSetName: (name: string) => void;
   onSelectSet: (setId: string) => void;
   onCreateSet: () => void;
@@ -14913,13 +14720,32 @@ function SetsPanel({
   ) => void;
   onPickSetSymbol: (setId: string) => void;
   onGenerateSetSymbol: (setId: string) => void;
+  onFetchSetCollaborators: (setId: string) => Promise<CollaborationSetMemberPayload[]>;
+  onFetchPendingInvites: (setId: string) => Promise<CollaborationPendingInvitePayload[]>;
+  onInviteSetCollaborator: (setId: string, inviteIdentifier: string) => Promise<void>;
 }) {
   const { width: viewportWidth } = useWindowDimensions();
+  const compactWebViewport = Platform.OS === "web" && viewportWidth <= 700;
   const [expandedSetIds, setExpandedSetIds] = useState<Set<string>>(() => new Set([selectedSetId]));
   const [editingSetId, setEditingSetId] = useState<string | null>(null);
   const [editingSetDefaultsPanel, setEditingSetDefaultsPanel] = useState<"cardBack" | "setSymbol" | null>(null);
   const [editingSetName, setEditingSetName] = useState("");
   const [editingSetCode, setEditingSetCode] = useState("");
+  const [invitingSetId, setInvitingSetId] = useState<string | null>(null);
+  const [inviteIdentifier, setInviteIdentifier] = useState("");
+  const [inviteBusySetId, setInviteBusySetId] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccessMessage, setInviteSuccessMessage] = useState<string | null>(null);
+  const [inviteSuggestions, setInviteSuggestions] = useState<CollaborationInviteProfileSuggestion[]>([]);
+  const [inviteSuggestionsLoading, setInviteSuggestionsLoading] = useState(false);
+  const [inviteSuggestionsSuppressedFor, setInviteSuggestionsSuppressedFor] = useState<string | null>(null);
+  const [inviteSendingSlow, setInviteSendingSlow] = useState(false);
+  const [collaboratorsBySetId, setCollaboratorsBySetId] = useState<Record<string, CollaborationSetMemberPayload[]>>({});
+  const [collaboratorsLoadingSetId, setCollaboratorsLoadingSetId] = useState<string | null>(null);
+  const [collaboratorsErrorBySetId, setCollaboratorsErrorBySetId] = useState<Record<string, string>>({});
+  const [pendingInvitesBySetId, setPendingInvitesBySetId] = useState<Record<string, CollaborationPendingInvitePayload[]>>({});
+  const [pendingInvitesLoadingSetId, setPendingInvitesLoadingSetId] = useState<string | null>(null);
+  const [pendingInvitesErrorBySetId, setPendingInvitesErrorBySetId] = useState<Record<string, string>>({});
   const [visibleCardLimits, setVisibleCardLimits] = useState<Record<string, number>>({});
   const [measuredGridContentWidth, setMeasuredGridContentWidth] = useState(0);
   const gridGap = 8;
@@ -14978,6 +14804,160 @@ function SetsPanel({
     setEditingSetName("");
     setEditingSetCode("");
   }, [editingSetCode, editingSetName, onChangeSetCode, onRenameSet]);
+
+  const loadSetCollaborators = useCallback(async (setId: string) => {
+    setCollaboratorsLoadingSetId(setId);
+    setCollaboratorsErrorBySetId((current) => {
+      const next = { ...current };
+
+      delete next[setId];
+
+      return next;
+    });
+
+    try {
+      const collaborators = await onFetchSetCollaborators(setId);
+
+      setCollaboratorsBySetId((current) => ({
+        ...current,
+        [setId]: collaborators,
+      }));
+    } catch (error) {
+      setCollaboratorsErrorBySetId((current) => ({
+        ...current,
+        [setId]: error instanceof Error ? error.message : "CardMagic could not load collaborators.",
+      }));
+    } finally {
+      setCollaboratorsLoadingSetId((current) => (current === setId ? null : current));
+    }
+  }, [onFetchSetCollaborators]);
+
+  const loadPendingInvites = useCallback(async (setId: string) => {
+    setPendingInvitesLoadingSetId(setId);
+    setPendingInvitesErrorBySetId((current) => {
+      const next = { ...current };
+
+      delete next[setId];
+
+      return next;
+    });
+
+    try {
+      const pendingInvites = await onFetchPendingInvites(setId);
+
+      setPendingInvitesBySetId((current) => ({
+        ...current,
+        [setId]: pendingInvites,
+      }));
+    } catch (error) {
+      setPendingInvitesErrorBySetId((current) => ({
+        ...current,
+        [setId]: error instanceof Error ? error.message : "CardMagic could not load pending invites.",
+      }));
+    } finally {
+      setPendingInvitesLoadingSetId((current) => (current === setId ? null : current));
+    }
+  }, [onFetchPendingInvites]);
+
+  const openSetInvitePanel = useCallback((setId: string) => {
+    if (!canInviteSetCollaborators) {
+      Alert.alert("Sign in required", "Sign in before inviting collaborators to a set.");
+      return;
+    }
+
+    const shouldOpen = invitingSetId !== setId;
+
+    onSelectSet(setId);
+    setExpandedSetIds(new Set([setId]));
+    setInvitingSetId(shouldOpen ? setId : null);
+    setInviteIdentifier("");
+    setInviteError(null);
+    setInviteSuccessMessage(null);
+    setInviteSuggestions([]);
+    setInviteSuggestionsLoading(false);
+    setInviteSuggestionsSuppressedFor(null);
+    setInviteSendingSlow(false);
+
+    if (shouldOpen) {
+      void loadSetCollaborators(setId);
+      void loadPendingInvites(setId);
+    }
+  }, [canInviteSetCollaborators, invitingSetId, loadPendingInvites, loadSetCollaborators, onSelectSet]);
+
+  const submitSetInvite = useCallback(async (setId: string, setName: string) => {
+    const identifier = inviteIdentifier.trim();
+
+    if (!identifier) {
+      setInviteError("Enter an email address or username.");
+      return;
+    }
+
+    setInviteBusySetId(setId);
+    setInviteError(null);
+    setInviteSuccessMessage(null);
+    setInviteSendingSlow(false);
+    const slowTimer = setTimeout(() => setInviteSendingSlow(true), 1200);
+
+    try {
+      await onInviteSetCollaborator(setId, identifier);
+      setInviteIdentifier("");
+      setInviteSuggestions([]);
+      setInviteSuggestionsSuppressedFor(null);
+      setInviteSuccessMessage(`Invitation queued for ${identifier} on ${setName}.`);
+      void loadSetCollaborators(setId);
+      void loadPendingInvites(setId);
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : "CardMagic could not invite that collaborator.");
+    } finally {
+      clearTimeout(slowTimer);
+      setInviteBusySetId(null);
+      setInviteSendingSlow(false);
+    }
+  }, [inviteIdentifier, loadPendingInvites, loadSetCollaborators, onInviteSetCollaborator]);
+
+  useEffect(() => {
+    const query = getInviteUsernameSearchQuery(inviteIdentifier);
+
+    if (!invitingSetId || !canInviteSetCollaborators || !query || inviteIdentifier === inviteSuggestionsSuppressedFor) {
+      setInviteSuggestions([]);
+      setInviteSuggestionsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const timeoutId = setTimeout(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setInviteSuggestionsLoading(true);
+      void searchCollaborationInviteProfiles(query)
+        .then((suggestions) => {
+          if (cancelled) {
+            return;
+          }
+
+          setInviteSuggestions(suggestions);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.warn("Unable to load invite username suggestions.", error);
+            setInviteSuggestions([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setInviteSuggestionsLoading(false);
+          }
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [canInviteSetCollaborators, inviteIdentifier, inviteSuggestionsSuppressedFor, invitingSetId]);
 
   const showMoreCards = useCallback((setId: string) => {
     setVisibleCardLimits((current) => ({
@@ -15038,12 +15018,51 @@ function SetsPanel({
       </View>
 
       <View style={{ gap: 10 }}>
-        <Text
-          selectable
-          style={{ color: "#5f6470", fontSize: 12, fontWeight: "800", textTransform: "uppercase" }}
-        >
-          Saved Sets
-        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <Text
+            selectable
+            style={{ flex: 1, color: "#5f6470", fontSize: 12, fontWeight: "800", textTransform: "uppercase" }}
+          >
+            Saved Sets
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh saved sets"
+            disabled={!canRefreshSets || setsRefreshing}
+            onPress={onRefreshSets}
+            style={{
+              minHeight: 34,
+              borderRadius: 8,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: canRefreshSets ? "#d4d8e0" : "#e2e5ea",
+              backgroundColor: canRefreshSets ? "#ffffff" : "#f1f3f6",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 7,
+              paddingHorizontal: 10,
+              opacity: setsRefreshing ? 0.74 : 1,
+            }}
+          >
+            {setsRefreshing ? (
+              <ActivityIndicator color="#0b7180" size="small" />
+            ) : (
+              <RefreshCw size={15} color={canRefreshSets ? "#151820" : "#8b92a0"} strokeWidth={2.5} />
+            )}
+            <Text
+              selectable={false}
+              numberOfLines={1}
+              style={{
+                color: canRefreshSets ? "#151820" : "#8b92a0",
+                fontSize: 12,
+                fontWeight: "900",
+              }}
+            >
+              Refresh sets
+            </Text>
+          </Pressable>
+        </View>
 
         {sets.map((set) => {
           const selected = set.id === selectedSetId;
@@ -15055,6 +15074,18 @@ function SetsPanel({
           const visibleCardLimit = visibleCardLimits[set.id] ?? SET_GRID_INITIAL_CARD_LIMIT;
           const visibleSetCards = set.cards.slice(0, visibleCardLimit);
           const hiddenCardCount = Math.max(0, set.cards.length - visibleSetCards.length);
+          const collaborators = collaboratorsBySetId[set.id] ?? [];
+          const collaboratorsLoading = collaboratorsLoadingSetId === set.id;
+          const collaboratorsError = collaboratorsErrorBySetId[set.id];
+          const pendingInvites = pendingInvitesBySetId[set.id] ?? [];
+          const pendingInvitesLoading = pendingInvitesLoadingSetId === set.id;
+          const pendingInvitesError = pendingInvitesErrorBySetId[set.id];
+          const collaboratorPanelLoading = collaboratorsLoading || pendingInvitesLoading;
+          const collaboratorPanelError = collaboratorsError ?? pendingInvitesError;
+          const collaboratorRowCount = collaborators.length + pendingInvites.length;
+          const sharedSetLabel = set.ownerUserId
+            ? `Shared by ${set.ownerName ?? "another user"}${set.collaborationRole ? ` - ${set.collaborationRole}` : ""}`
+            : null;
 
           return (
             <View
@@ -15160,8 +15191,31 @@ function SetsPanel({
                       }}
                     >
                       {normalizeSetCode(set.code, set.name)} - {set.cards.length} {set.cards.length === 1 ? "card" : "cards"}
+                      {sharedSetLabel ? ` - ${sharedSetLabel}` : ""}
                     </Text>
                   </View>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Invite collaborators to ${set.name}`}
+                  accessibilityState={{ expanded: invitingSetId === set.id }}
+                  hitSlop={6}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    openSetInvitePanel(set.id);
+                  }}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.28)",
+                    backgroundColor: invitingSetId === set.id ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <UserPlus size={16} color="#ffffff" strokeWidth={2.35} />
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
@@ -15220,6 +15274,334 @@ function SetsPanel({
                   <Trash2 size={16} color="#ffffff" strokeWidth={2.35} />
                 </Pressable>
               </View>
+
+              {invitingSetId === set.id ? (
+                <View
+                  style={{
+                    borderRadius: 9,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: inviteError ? "#f1bcc4" : "#b7ecf4",
+                    backgroundColor: inviteError ? "#fff5f6" : "#f2fcfd",
+                    padding: 10,
+                    gap: 8,
+                  }}
+                >
+                  <Text
+                    selectable={false}
+                    style={{
+                      color: inviteError ? "#a62231" : "#0b7180",
+                      fontSize: 11,
+                      fontWeight: "900",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Invite collaborator
+                  </Text>
+                  <View style={{ flexDirection: viewportWidth >= 560 ? "row" : "column", gap: 8 }}>
+                    <TextInput
+                      accessibilityLabel={`Invite email or username for ${set.name}`}
+                      value={inviteIdentifier}
+                      onChangeText={(identifier) => {
+                        setInviteIdentifier(identifier);
+                        setInviteError(null);
+                        setInviteSuccessMessage(null);
+                        setInviteSuggestionsSuppressedFor(null);
+                      }}
+                      placeholder="friend@example.com or @username"
+                      placeholderTextColor="#68707d"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="default"
+                      onSubmitEditing={() => void submitSetInvite(set.id, set.name)}
+                      returnKeyType="send"
+                      style={{
+                        flex: 1,
+                        minHeight: 42,
+                        borderRadius: 8,
+                        borderCurve: "continuous",
+                        borderWidth: 1,
+                        borderColor: "#d4d8e0",
+                        backgroundColor: "#ffffff",
+                        color: "#151820",
+                        fontSize: 14,
+                        fontWeight: "800",
+                        paddingHorizontal: 10,
+                      }}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Send ${set.name} collaboration invite`}
+                      disabled={inviteBusySetId === set.id}
+                      onPress={() => void submitSetInvite(set.id, set.name)}
+                      style={{
+                        minHeight: 42,
+                        borderRadius: 8,
+                        borderCurve: "continuous",
+                        backgroundColor: inviteBusySetId === set.id ? "#8aa7ad" : "#151820",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexDirection: "row",
+                        gap: 8,
+                        paddingHorizontal: 14,
+                      }}
+                    >
+                      {inviteBusySetId === set.id ? (
+                        <ActivityIndicator color="#ffffff" size="small" />
+                      ) : (
+                        <UserPlus size={16} color="#ffffff" strokeWidth={2.4} />
+                      )}
+                      <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                        Send invite
+                      </Text>
+                    </Pressable>
+                  </View>
+                  {inviteSuggestionsLoading || inviteSuggestions.length > 0 ? (
+                    <View
+                      style={{
+                        borderRadius: 8,
+                        borderCurve: "continuous",
+                        borderWidth: 1,
+                        borderColor: "#d4d8e0",
+                        backgroundColor: "#ffffff",
+                        overflow: "hidden",
+                      }}
+                    >
+                      {inviteSuggestionsLoading ? (
+                        <View style={{ minHeight: 40, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                          <ActivityIndicator color="#0b7180" size="small" />
+                          <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+                            Searching users
+                          </Text>
+                        </View>
+                      ) : (
+                        inviteSuggestions.map((suggestion, suggestionIndex) => (
+                          <Pressable
+                            key={suggestion.userId}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Use ${suggestion.username} as the collaborator username`}
+                            onPress={() => {
+                              const inviteHandle = `@${suggestion.username}`;
+                              setInviteIdentifier(inviteHandle);
+                              setInviteSuggestions([]);
+                              setInviteSuggestionsLoading(false);
+                              setInviteSuggestionsSuppressedFor(inviteHandle);
+                              setInviteError(null);
+                              setInviteSuccessMessage(null);
+                            }}
+                            style={({ pressed }) => ({
+                              minHeight: 42,
+                              paddingHorizontal: 10,
+                              paddingVertical: 7,
+                              borderTopWidth: suggestionIndex === 0 ? 0 : 1,
+                              borderTopColor: "#eef0f4",
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 9,
+                              backgroundColor: pressed ? "#f2fcfd" : "#ffffff",
+                            })}
+                          >
+                            <View
+                              style={{
+                                width: 26,
+                                height: 26,
+                                borderRadius: 13,
+                                backgroundColor: "#e9fbfd",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              <Users size={14} color="#0b7180" strokeWidth={2.5} />
+                            </View>
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                                @{suggestion.username}
+                              </Text>
+                              {suggestion.displayName && suggestion.displayName !== suggestion.username ? (
+                                <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
+                                  {suggestion.displayName}
+                                </Text>
+                              ) : null}
+                            </View>
+                          </Pressable>
+                        ))
+                      )}
+                    </View>
+                  ) : null}
+                  <View
+                    style={{
+                      borderRadius: 8,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: "#d4d8e0",
+                      backgroundColor: "#ffffff",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <View
+                      style={{
+                        minHeight: 40,
+                        paddingHorizontal: 10,
+                        paddingVertical: 7,
+                        borderBottomWidth: collaboratorPanelLoading || collaboratorPanelError || collaboratorRowCount > 0 ? 1 : 0,
+                        borderBottomColor: "#eef0f4",
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Text
+                        selectable={false}
+                        style={{ flex: 1, color: "#151820", fontSize: 12, fontWeight: "900", textTransform: "uppercase" }}
+                      >
+                        Collaborators
+                      </Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Refresh collaborators for ${set.name}`}
+                        disabled={collaboratorPanelLoading}
+                        onPress={() => {
+                          void loadSetCollaborators(set.id);
+                          void loadPendingInvites(set.id);
+                        }}
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: 14,
+                          backgroundColor: collaboratorPanelLoading ? "#eef0f4" : "#f2fcfd",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        {collaboratorPanelLoading ? (
+                          <ActivityIndicator color="#0b7180" size="small" />
+                        ) : (
+                          <RefreshCw size={14} color="#0b7180" strokeWidth={2.5} />
+                        )}
+                      </Pressable>
+                    </View>
+                    {collaboratorPanelLoading && collaboratorRowCount === 0 ? (
+                      <View style={{ minHeight: 40, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <ActivityIndicator color="#0b7180" size="small" />
+                        <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+                          Loading collaborators
+                        </Text>
+                      </View>
+                    ) : collaboratorPanelError ? (
+                      <Text selectable style={{ paddingHorizontal: 10, paddingVertical: 9, color: "#a62231", fontSize: 12, fontWeight: "800" }}>
+                        {collaboratorPanelError}
+                      </Text>
+                    ) : collaboratorRowCount > 0 ? (
+                      <>
+                        {collaborators.map((collaborator, collaboratorIndex) => {
+                          const collaboratorHandle = collaborator.username ? `@${collaborator.username}` : null;
+                          const collaboratorName = collaboratorHandle ?? collaborator.displayName ?? collaborator.memberName;
+                          const secondaryLabel = [
+                            collaborator.role,
+                            collaborator.displayName && collaborator.displayName !== collaboratorName ? collaborator.displayName : null,
+                            formatCompactCommentDate(collaborator.acceptedAt ?? collaborator.createdAt),
+                          ].filter(Boolean).join(" - ");
+
+                          return (
+                            <View
+                              key={collaborator.id}
+                              style={{
+                                minHeight: 42,
+                                paddingHorizontal: 10,
+                                paddingVertical: 7,
+                                borderTopWidth: collaboratorIndex === 0 ? 0 : 1,
+                                borderTopColor: "#eef0f4",
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 9,
+                              }}
+                            >
+                              <View
+                                style={{
+                                  width: 26,
+                                  height: 26,
+                                  borderRadius: 13,
+                                  backgroundColor: collaborator.role === "owner" ? "#eef8f4" : "#e9fbfd",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                              >
+                                <Users size={14} color={collaborator.role === "owner" ? "#117b55" : "#0b7180"} strokeWidth={2.5} />
+                              </View>
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                <Text selectable numberOfLines={1} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                                  {collaboratorName}
+                                </Text>
+                                <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
+                                  {secondaryLabel}
+                                </Text>
+                              </View>
+                            </View>
+                          );
+                        })}
+                        {pendingInvites.map((invite, inviteIndex) => {
+                          const rowIndex = collaborators.length + inviteIndex;
+
+                          return (
+                            <View
+                              key={`pending-${invite.id}`}
+                              style={{
+                                minHeight: 42,
+                                paddingHorizontal: 10,
+                                paddingVertical: 7,
+                                borderTopWidth: rowIndex === 0 ? 0 : 1,
+                                borderTopColor: "#eef0f4",
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 9,
+                              }}
+                            >
+                              <View
+                                style={{
+                                  width: 26,
+                                  height: 26,
+                                  borderRadius: 13,
+                                  backgroundColor: "#fff5db",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                              >
+                                <UserPlus size={14} color="#835c00" strokeWidth={2.5} />
+                              </View>
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                <Text selectable numberOfLines={1} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                                  {invite.invitedEmail}
+                                </Text>
+                                <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
+                                  pending {invite.role} invite{formatCompactCommentDate(invite.createdAt) ? ` - ${formatCompactCommentDate(invite.createdAt)}` : ""}
+                                </Text>
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </>
+                    ) : (
+                      <Text selectable={false} style={{ paddingHorizontal: 10, paddingVertical: 9, color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+                        No collaborators for this set yet.
+                      </Text>
+                    )}
+                  </View>
+                  {inviteError ? (
+                    <Text selectable style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                      {inviteError}
+                    </Text>
+                  ) : inviteSuccessMessage ? (
+                    <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                      {inviteSuccessMessage}
+                    </Text>
+                  ) : null}
+                  {inviteSendingSlow && inviteBusySetId === set.id ? (
+                    <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                      Still sending the invite through Supabase...
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
 
               {expanded ? (
                 <View style={{ gap: 10 }}>
@@ -15581,10 +15963,10 @@ function SetsPanel({
                                   onPress={() => {
                                     setEditingSetId(set.id);
                                     setEditingSetDefaultsPanel("setSymbol");
-                                      onChangeSetDefaultSymbol(set.id, {
-                                        setSymbolPreset: preset.id,
-                                        setSymbolId: undefined,
-                                        setSymbolUri: undefined,
+                                    onChangeSetDefaultSymbol(set.id, {
+                                      setSymbolPreset: preset.id,
+                                      setSymbolId: undefined,
+                                      setSymbolUri: undefined,
                                       setSymbolUsesRarityTreatment: undefined,
                                     });
                                   }}
@@ -15654,7 +16036,7 @@ function SetsPanel({
                     >
                       <Plus size={32} color="#68707d" strokeWidth={2.6} />
                     </Pressable>
-                    {visibleSetCards.map((snapshot) => {
+                    {visibleSetCards.map((snapshot, index) => {
                       const setCard = getSafeSetCardPreviewCard(snapshot, set);
 
                       return (
@@ -15670,11 +16052,12 @@ function SetsPanel({
                           }}
                         >
                           <View pointerEvents="none" style={{ alignItems: "center" }}>
-                            <SafeCardThumbnail
+                            <LazySafeCardThumbnail
                               card={setCard}
                               width={previewWidth}
                               cornerRadius={SET_CARD_THUMBNAIL_RADIUS}
                               footerOwnerName={footerOwnerName}
+                              deferFullPreview={compactWebViewport && index >= SET_GRID_COMPACT_EAGER_PREVIEW_COUNT}
                             />
                           </View>
                           {isEditingSet ? (
@@ -15758,14 +16141,20 @@ function SetsPanel({
 type CommunityBrowseMode = "cards" | "sets";
 const COMMUNITY_CARD_PAGE_SIZE = 8;
 const COMMUNITY_INITIAL_RENDERED_CARD_COUNT = 3;
+const COMMUNITY_AUTO_LOAD_MORE_THRESHOLD = 420;
+const COMMUNITY_SCROLL_WINDOW_UPDATE_THRESHOLD = 96;
+const COMMUNITY_FEED_OVERSCAN_PX = 1200;
+const COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT = 690;
 
 function CommunityPanel({
   sets,
   accountUser,
+  onRegisterMainScrollHandler,
   onExportCardImage,
 }: {
   sets: CardSet[];
   accountUser: SupabaseUser | null;
+  onRegisterMainScrollHandler?: (handler: MainScrollBoundaryHandler | null) => void;
   onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
   const [browseMode, setBrowseMode] = useState<CommunityBrowseMode>("cards");
@@ -15789,8 +16178,12 @@ function CommunityPanel({
   const [commentPopoverCard, setCommentPopoverCard] = useState<CommunityCardPayload | null>(null);
   const [pollsPopoverOpen, setPollsPopoverOpen] = useState(false);
   const [feedbackPopoverOpen, setFeedbackPopoverOpen] = useState(false);
+  const [communityScrollWindow, setCommunityScrollWindow] = useState<MainScrollWindow | null>(null);
   const communityCardsRef = useRef<CommunityCardPayload[]>([]);
   const featuredCardRef = useRef<CommunityCardPayload | null>(null);
+  const communityAutoLoadInFlightRef = useRef(false);
+  const communitySeenMarkIdsRef = useRef<Set<string>>(new Set());
+  const communityScrollWindowRef = useRef<MainScrollWindow | null>(null);
   const canManageCommunityPolls = accountUser?.email?.toLowerCase() === "gtjoe51@gmail.com";
   const localCards = useMemo(
     () =>
@@ -15824,7 +16217,6 @@ function CommunityPanel({
       return haystack.includes(normalizedSearchText);
     });
   }, [communitySets, normalizedSearchText]);
-
   const loadCommunityCards = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setCommunityError("Supabase is not configured.");
@@ -15840,11 +16232,6 @@ function CommunityPanel({
       setCommunityCards(page.cards);
       setCommunityHasMoreCards(page.hasMore);
       setCommunityNextOffset(page.nextOffset);
-      if (!hideSeenCards) {
-        void markCommunityCardsSeen(page.cards.map((entry) => entry.id)).catch((error) => {
-          console.warn("Unable to mark community cards seen.", error);
-        });
-      }
 
       void fetchCommunityFeaturedCard()
         .then(setFeaturedCard)
@@ -15893,17 +16280,68 @@ function CommunityPanel({
       });
       setCommunityHasMoreCards(page.hasMore);
       setCommunityNextOffset(page.nextOffset);
-      if (!hideSeenCards) {
-        void markCommunityCardsSeen(page.cards.map((entry) => entry.id)).catch((error) => {
-          console.warn("Unable to mark community cards seen.", error);
-        });
-      }
     } catch (error) {
       setCommunityError(error instanceof Error ? error.message : "Unable to load more community cards.");
     } finally {
       setCommunityLoadingMore(false);
     }
   }, [communityBusy, communityHasMoreCards, communityLoadingMore, communityNextOffset, feedSort, hideSeenCards]);
+
+  const handleCommunityMainScroll = useCallback<MainScrollBoundaryHandler>((event) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const nextScrollWindow = {
+      offsetY: Math.max(0, contentOffset.y),
+      viewportHeight: Math.max(1, layoutMeasurement.height),
+    };
+    const previousScrollWindow = communityScrollWindowRef.current;
+
+    if (
+      !previousScrollWindow ||
+      Math.abs(previousScrollWindow.offsetY - nextScrollWindow.offsetY) >= COMMUNITY_SCROLL_WINDOW_UPDATE_THRESHOLD ||
+      Math.abs(previousScrollWindow.viewportHeight - nextScrollWindow.viewportHeight) >= 24
+    ) {
+      communityScrollWindowRef.current = nextScrollWindow;
+      setCommunityScrollWindow(nextScrollWindow);
+    }
+
+    if (
+      browseMode !== "cards" ||
+      normalizedSearchText ||
+      communityBusy ||
+      communityLoadingMore ||
+      !communityHasMoreCards ||
+      communityCards.length === 0
+    ) {
+      return;
+    }
+
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+
+    if (distanceFromBottom > COMMUNITY_AUTO_LOAD_MORE_THRESHOLD || communityAutoLoadInFlightRef.current) {
+      return;
+    }
+
+    communityAutoLoadInFlightRef.current = true;
+    void loadMoreCommunityCards().finally(() => {
+      communityAutoLoadInFlightRef.current = false;
+    });
+  }, [
+    browseMode,
+    communityBusy,
+    communityCards.length,
+    communityHasMoreCards,
+    communityLoadingMore,
+    loadMoreCommunityCards,
+    normalizedSearchText,
+  ]);
+
+  useEffect(() => {
+    onRegisterMainScrollHandler?.(handleCommunityMainScroll);
+
+    return () => {
+      onRegisterMainScrollHandler?.(null);
+    };
+  }, [handleCommunityMainScroll, onRegisterMainScrollHandler]);
 
   useEffect(() => {
     communityCardsRef.current = communityCards;
@@ -15982,6 +16420,32 @@ function CommunityPanel({
   const handleCommunityCommentCountChange = useCallback((cardId: string, commentCount: number) => {
     patchCommunityCard(cardId, { commentCount });
   }, [patchCommunityCard]);
+
+  const markVisibleCommunityCardsSeen = useCallback((cardIds: string[]) => {
+    if (hideSeenCards || cardIds.length === 0) {
+      return;
+    }
+
+    const unmarkedIds = Array.from(new Set(cardIds)).filter((cardId) => (
+      !communitySeenMarkIdsRef.current.has(cardId)
+    ));
+
+    if (unmarkedIds.length === 0) {
+      return;
+    }
+
+    for (const cardId of unmarkedIds) {
+      communitySeenMarkIdsRef.current.add(cardId);
+    }
+
+    void markCommunityCardsSeen(unmarkedIds).catch((error) => {
+      for (const cardId of unmarkedIds) {
+        communitySeenMarkIdsRef.current.delete(cardId);
+      }
+
+      console.warn("Unable to mark rendered community cards seen.", error);
+    });
+  }, [hideSeenCards]);
 
   const openCommunitySet = useCallback((set: CommunitySetPayload) => {
     const nextSelectedSetId = selectedCommunitySetId === set.id ? null : set.id;
@@ -16292,9 +16756,11 @@ function CommunityPanel({
           <CommunityCardsPreview
             cards={filteredCommunityCards}
             localFallbackCards={localCards}
+            feedResetKey={`${feedSort}:${hideSeenCards ? "hide-seen" : "all"}:${normalizedSearchText}`}
+            scrollWindow={communityScrollWindow}
             hasMore={Boolean(!normalizedSearchText && communityCards.length > 0 && communityHasMoreCards)}
             loadingMore={communityLoadingMore}
-            onLoadMore={loadMoreCommunityCards}
+            onVisibleCommunityCardIdsChange={markVisibleCommunityCardsSeen}
             onToggleLike={handleToggleCommunityLike}
             onToggleFollow={handleToggleCommunityFollow}
             onOpenComments={openCommunityComments}
@@ -16344,6 +16810,7 @@ function WeeklyFeaturedCardPreview({
     windowWidth >= 620 ? 320 :
     Math.min(300, Math.max(232, windowWidth - 96));
   const previewAspectRatio = card ? getTypeFrameSpec(getPreviewTypeFrame(card.card)).aspectRatio : CARD_BACK_PREVIEW_ASPECT_RATIO;
+  const reservedPreviewHeight = previewWidth / previewAspectRatio;
 
   return (
     <View
@@ -16384,8 +16851,25 @@ function WeeklyFeaturedCardPreview({
       </View>
 
       {loading && !card ? (
-        <View style={{ minHeight: 120, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color="#6ed7e8" />
+        <View style={{ gap: 12, alignItems: "center" }}>
+          <View
+            style={{
+              width: previewWidth,
+              height: reservedPreviewHeight,
+              borderRadius: 9,
+              backgroundColor: "rgba(255,255,255,0.1)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.14)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <ActivityIndicator color="#6ed7e8" />
+          </View>
+          <View style={{ width: "100%", gap: 6, alignItems: "center" }}>
+            <View style={{ width: "62%", height: 15, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.16)" }} />
+            <View style={{ width: "46%", height: 12, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.12)" }} />
+          </View>
         </View>
       ) : card ? (
         <View style={{ gap: 12, alignItems: "center" }}>
@@ -16904,7 +17388,7 @@ function CommunityPollsPopover({
   canCreatePolls: boolean;
   onClose: () => void;
 }) {
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const { height: windowHeight } = useWindowDimensions();
   const [polls, setPolls] = useState<CommunityPollPayload[]>([]);
   const [pollsLoading, setPollsLoading] = useState(false);
   const [pollsError, setPollsError] = useState<string | null>(null);
@@ -17744,9 +18228,11 @@ function formatCompactCommentDate(value: string) {
 function CommunityCardsPreview({
   cards,
   localFallbackCards,
+  feedResetKey,
+  scrollWindow,
   hasMore,
   loadingMore,
-  onLoadMore,
+  onVisibleCommunityCardIdsChange,
   onToggleLike,
   onToggleFollow,
   onOpenComments,
@@ -17754,42 +18240,127 @@ function CommunityCardsPreview({
 }: {
   cards: CommunityCardPayload[];
   localFallbackCards: Array<{ id: string; setName: string; card: CardDraft }>;
+  feedResetKey: string;
+  scrollWindow: MainScrollWindow | null;
   hasMore: boolean;
   loadingMore: boolean;
-  onLoadMore: () => void;
+  onVisibleCommunityCardIdsChange: (cardIds: string[]) => void;
   onToggleLike: (cardId: string, liked: boolean) => void;
   onToggleFollow: (userId: string, followed: boolean) => void;
   onOpenComments: (cardId: string) => void;
   onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
-  const [renderedCardCount, setRenderedCardCount] = useState(COMMUNITY_INITIAL_RENDERED_CARD_COUNT);
+  const [listTopY, setListTopY] = useState(0);
+  const [itemHeightsById, setItemHeightsById] = useState<Record<string, number>>({});
   const cardPreviewWidth =
     windowWidth >= 900 ? 420 :
     windowWidth >= 620 ? 380 :
     Math.min(360, Math.max(286, windowWidth - 28));
   const usingCommunityCards = cards.length > 0;
-  const feedItemCount = usingCommunityCards ? cards.length : localFallbackCards.length;
-  const visibleCommunityCards = cards.slice(0, renderedCardCount);
-  const visibleFallbackCards = localFallbackCards.slice(0, renderedCardCount);
+  const feedItems = useMemo(
+    () =>
+      usingCommunityCards
+        ? cards.map((entry) => ({ kind: "community" as const, id: entry.id, entry }))
+        : localFallbackCards.map((entry) => ({ kind: "fallback" as const, id: entry.id, entry })),
+    [cards, localFallbackCards, usingCommunityCards],
+  );
+  const feedItemCount = feedItems.length;
 
   useEffect(() => {
-    setRenderedCardCount(
-      Math.min(COMMUNITY_INITIAL_RENDERED_CARD_COUNT, Math.max(feedItemCount, COMMUNITY_INITIAL_RENDERED_CARD_COUNT)),
-    );
-  }, [cards, localFallbackCards]);
+    setItemHeightsById({});
+  }, [cardPreviewWidth, feedResetKey]);
 
-  useEffect(() => {
-    if (renderedCardCount >= feedItemCount) {
+  const virtualWindow = useMemo(() => {
+    if (feedItemCount === 0) {
+      return {
+        startIndex: 0,
+        endIndex: 0,
+        topSpacerHeight: 0,
+        bottomSpacerHeight: 0,
+      };
+    }
+
+    const estimatedInitialHeight =
+      COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT * COMMUNITY_INITIAL_RENDERED_CARD_COUNT;
+    const viewportTop = scrollWindow
+      ? Math.max(0, scrollWindow.offsetY - listTopY - COMMUNITY_FEED_OVERSCAN_PX)
+      : 0;
+    const viewportBottom = scrollWindow
+      ? Math.max(
+          viewportTop + scrollWindow.viewportHeight,
+          scrollWindow.offsetY - listTopY + scrollWindow.viewportHeight + COMMUNITY_FEED_OVERSCAN_PX,
+        )
+      : estimatedInitialHeight;
+    let cursorY = 0;
+    let startIndex = 0;
+    let endIndex = feedItemCount;
+    let topSpacerHeight = 0;
+    let visibleHeight = 0;
+
+    for (let index = 0; index < feedItemCount; index += 1) {
+      const item = feedItems[index];
+      const itemHeight = itemHeightsById[item.id] ?? COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT;
+      const itemTop = cursorY;
+      const itemBottom = cursorY + itemHeight;
+
+      if (itemBottom < viewportTop) {
+        startIndex = index + 1;
+        topSpacerHeight += itemHeight;
+      }
+
+      if (itemTop <= viewportBottom) {
+        endIndex = index + 1;
+      }
+
+      cursorY = itemBottom;
+    }
+
+    endIndex = Math.min(feedItemCount, Math.max(endIndex, startIndex + 1));
+
+    for (let index = startIndex; index < endIndex; index += 1) {
+      const item = feedItems[index];
+      visibleHeight += itemHeightsById[item.id] ?? COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT;
+    }
+
+    return {
+      startIndex,
+      endIndex,
+      topSpacerHeight,
+      bottomSpacerHeight: Math.max(0, cursorY - topSpacerHeight - visibleHeight),
+    };
+  }, [feedItemCount, feedItems, itemHeightsById, listTopY, scrollWindow]);
+
+  const visibleFeedItems = feedItems.slice(virtualWindow.startIndex, virtualWindow.endIndex);
+  const visibleCommunityCardIds = useMemo(
+    () => visibleFeedItems.flatMap((item) => (item.kind === "community" ? [item.id] : [])),
+    [visibleFeedItems],
+  );
+  const visibleCommunityCardIdsKey = visibleCommunityCardIds.join("\n");
+  const handleItemLayout = useCallback((itemId: string, event: LayoutChangeEvent) => {
+    const measuredHeight = event.nativeEvent.layout.height;
+
+    if (measuredHeight <= 0) {
       return;
     }
 
-    const timeout = setTimeout(() => {
-      setRenderedCardCount((current) => Math.min(feedItemCount, current + 2));
-    }, 60);
+    setItemHeightsById((current) => {
+      if (Math.abs((current[itemId] ?? 0) - measuredHeight) < 2) {
+        return current;
+      }
 
-    return () => clearTimeout(timeout);
-  }, [feedItemCount, renderedCardCount]);
+      return {
+        ...current,
+        [itemId]: measuredHeight,
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (visibleCommunityCardIds.length > 0) {
+      onVisibleCommunityCardIdsChange(visibleCommunityCardIds);
+    }
+  }, [onVisibleCommunityCardIdsChange, visibleCommunityCardIdsKey]);
 
   if (feedItemCount === 0) {
     return (
@@ -17802,50 +18373,59 @@ function CommunityCardsPreview({
   }
 
   return (
-    <View style={{ padding: 12, gap: 16 }}>
-      {usingCommunityCards
-        ? visibleCommunityCards.map((entry) => (
+    <View
+      onLayout={(event) => setListTopY(event.nativeEvent.layout.y)}
+      style={{ padding: 12, gap: 16 }}
+    >
+      {virtualWindow.topSpacerHeight > 0 ? (
+        <View pointerEvents="none" style={{ height: virtualWindow.topSpacerHeight }} />
+      ) : null}
+      {visibleFeedItems.map((item) => (
+        <View
+          key={item.id}
+          onLayout={(event) => handleItemLayout(item.id, event)}
+        >
+          {item.kind === "community" ? (
             <CommunityFeedCardItem
-              key={entry.id}
-              entry={entry}
+              entry={item.entry}
               cardPreviewWidth={cardPreviewWidth}
               onToggleLike={onToggleLike}
               onToggleFollow={onToggleFollow}
               onOpenComments={onOpenComments}
               onExportCardImage={onExportCardImage}
             />
-          ))
-        : visibleFallbackCards.map((entry) => (
+          ) : (
             <CommunityFallbackCardItem
-              key={entry.id}
-              entry={entry}
+              entry={item.entry}
               cardPreviewWidth={cardPreviewWidth}
               onExportCardImage={onExportCardImage}
             />
-          ))}
-      {cards.length > 0 && hasMore ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Load more community cards"
-          disabled={loadingMore}
-          onPress={onLoadMore}
+          )}
+        </View>
+      ))}
+      {virtualWindow.bottomSpacerHeight > 0 ? (
+        <View pointerEvents="none" style={{ height: virtualWindow.bottomSpacerHeight }} />
+      ) : null}
+      {cards.length > 0 && hasMore && loadingMore ? (
+        <View
+          accessibilityRole="progressbar"
           style={{
             minHeight: 46,
             borderRadius: 999,
             borderWidth: 1,
-            borderColor: loadingMore ? "#d8dbe2" : "#151820",
-            backgroundColor: loadingMore ? "#f4f5f7" : "#151820",
+            borderColor: "#d8dbe2",
+            backgroundColor: "#f4f5f7",
             alignItems: "center",
             justifyContent: "center",
             flexDirection: "row",
             gap: 8,
           }}
         >
-          {loadingMore ? <ActivityIndicator color="#0b7180" size="small" /> : <Plus size={17} color="#ffffff" strokeWidth={2.6} />}
-          <Text selectable={false} style={{ color: loadingMore ? "#68707d" : "#ffffff", fontSize: 13, fontWeight: "900" }}>
-            {loadingMore ? "Loading cards" : "Load more cards"}
+          <ActivityIndicator color="#0b7180" size="small" />
+          <Text selectable={false} style={{ color: "#68707d", fontSize: 13, fontWeight: "900" }}>
+            Loading cards
           </Text>
-        </Pressable>
+        </View>
       ) : null}
     </View>
   );
@@ -18351,81 +18931,5 @@ function CommunityEmptyState({
         </Text>
       </View>
     </View>
-  );
-}
-
-function getFrameTemplateSummary(template: CardFrameTemplate) {
-  const typeFrame = template.data.typeFrame ?? "standard";
-  const treatment = template.data.frameTreatment ?? "standard";
-  const frameSelection = template.data.frameSelection ?? "auto";
-  const colors = template.data.frameColors?.length ? template.data.frameColors.join("") : "auto";
-
-  return `${typeFrame} · ${FRAME_TREATMENT_LABELS[treatment]} · ${FRAME_SELECTION_LABELS[frameSelection]} · ${colors}`;
-}
-
-function InspectorRow({
-  icon,
-  label,
-  value,
-  onPress,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  onPress?: () => void;
-}) {
-  const Container = onPress ? Pressable : View;
-
-  return (
-    <Container
-      accessibilityRole={onPress ? "button" : undefined}
-      onPress={onPress}
-      style={{
-        minHeight: 62,
-        borderRadius: 10,
-        borderCurve: "continuous",
-        borderWidth: 1,
-        borderColor: "#d8dbe2",
-        backgroundColor: "#ffffff",
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 12,
-      }}
-    >
-      <View
-        style={{
-          width: 38,
-          height: 38,
-          borderRadius: 19,
-          backgroundColor: "#f0f1eb",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {icon}
-      </View>
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text
-          selectable
-          style={{
-            color: "#6b7280",
-            fontSize: 12,
-            fontWeight: "800",
-            textTransform: "uppercase",
-          }}
-        >
-          {label}
-        </Text>
-        <Text
-          selectable
-          numberOfLines={2}
-          style={{ color: "#151a22", fontSize: 15, fontWeight: "800", lineHeight: 19 }}
-        >
-          {value}
-        </Text>
-      </View>
-    </Container>
   );
 }

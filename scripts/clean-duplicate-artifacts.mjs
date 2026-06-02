@@ -1,11 +1,12 @@
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-const duplicateSuffixPattern = / [2-9][0-9]*$/;
+const duplicateSuffixPattern = / [2-9][0-9]*(?=\.|$)/;
 const removals = [];
 
 removeMatchingChildren("node_modules", duplicateSuffixPattern);
 removeMatchingChildren(".expo", duplicateSuffixPattern);
+removeMatchingChildren("dist", duplicateSuffixPattern);
 removeMatchingChildren(".git", /^index [2-9][0-9]*$/);
 removeMatchingChildren(".", /^dist-stuck-/);
 

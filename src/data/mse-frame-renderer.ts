@@ -14,6 +14,11 @@ import {
   MseM15ColorBlendKey,
   MseM15ColorBlendMode,
 } from "@/data/mse-frame-blends";
+import {
+  getMseM15StampedTreatmentFamilySource,
+  getMseM15TreatmentFamilySource,
+} from "@/data/mse-frame-treatment-sources";
+import { getMseM15TypeFrameFamilySource } from "@/data/mse-frame-typeframe-sources";
 import { FrameEffect, FrameIdentity, FrameTreatment, ManaColor } from "@/types/card";
 
 export type MseM15MainframeVariant = "standard" | "dfcNotched" | "dfcNormal" | "dfcBack";
@@ -84,30 +89,6 @@ export const MSE_M15_RENDERER = {
       artifact: require("../../assets/card-assets/basic-m15/mse-renderer/mainframes/dfc-back-masked/artifact.png"),
       land: require("../../assets/card-assets/basic-m15/mse-renderer/mainframes/dfc-back-masked/land.png"),
       colorless: require("../../assets/card-assets/basic-m15/mse-renderer/mainframes/dfc-back-masked/colorless.png"),
-    } satisfies Record<FrameIdentity, ImageSourcePropType>,
-  },
-  typeframes: {
-    saga: {
-      white: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/white.png"),
-      blue: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/blue.png"),
-      black: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/black.png"),
-      red: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/red.png"),
-      green: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/green.png"),
-      gold: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/gold.png"),
-      artifact: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/artifact.png"),
-      land: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/land.png"),
-      colorless: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/saga-masked/colorless.png"),
-    } satisfies Record<FrameIdentity, ImageSourcePropType>,
-    planeswalker: {
-      white: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/white.png"),
-      blue: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/blue.png"),
-      black: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/black.png"),
-      red: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/red.png"),
-      green: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/green.png"),
-      gold: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/gold.png"),
-      artifact: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/artifact.png"),
-      land: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/land.png"),
-      colorless: require("../../assets/card-assets/basic-m15/mse-renderer/typeframes/planeswalker-masked/colorless.png"),
     } satisfies Record<FrameIdentity, ImageSourcePropType>,
   },
   saga: {
@@ -305,11 +286,7 @@ const MSE_M15_FUTURE_TEXTBOX_HYBRID_BLEND_MASK_SOURCE = require(
   "../../assets/card-assets/basic-m15/showcase-mse/magic-future.mse-style/hybrid_blend_textbox.png",
 );
 
-const MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE: ImageSourcePropType = require(
-  "../../assets/card-assets/basic-m15/source-pack/data/magic-m15-altered.mse-style/frame_masks/borderless_transparent.png",
-);
-
-const MSE_M15_TRANSPARENT_BORDERLESS_DARK_TEXTBOX_FILL_SOURCE: ImageSourcePropType = require(
+const MSE_M15_BORDERLESS_DARK_TEXTBOX_FILL_SOURCE: ImageSourcePropType = require(
   "../../assets/card-assets/basic-m15/mse-renderer/treatments/transparent-borderless/dark-textbox-fill.png",
 );
 
@@ -317,111 +294,10 @@ const MSE_M15_BORDERLESS_PINLINE_ONLY_RESTORE_MASK_SOURCE: ImageSourcePropType =
   "../../assets/card-assets/basic-m15/mse-renderer/treatments/transparent-borderless/pinline-only-restore-mask.png",
 );
 
+const MSE_M15_SUBJECT_MASK_FRAME_APPROVAL_SOURCE: ImageSourcePropType = require(
+  "../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless/mask-frame.png",
+);
 
-const MSE_M15_TREATMENT_FRAME_SOURCES: Partial<Record<FrameTreatment, Record<FrameIdentity, ImageSourcePropType>>> = {
-  borderless: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/white.png"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/blue.png"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/black.png"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/red.png"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/green.png"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/gold.png"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/artifact.png"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/land.png"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/colorless.png"),
-  },
-  transparentBorderless: {
-    white: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    blue: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    black: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    red: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    green: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    gold: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    artifact: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    land: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-    colorless: MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE,
-  },
-  fullArt: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/white.png"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/blue.png"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/black.png"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/red.png"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/green.png"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/gold.png"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/artifact.png"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/land.png"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/full-art/masked/colorless.png"),
-  },
-  extendedArt: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/white.png"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/blue.png"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/black.png"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/red.png"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/green.png"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/gold.png"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/artifact.png"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/land.png"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/extended-art/masked/colorless.png"),
-  },
-  textless: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/white.png"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/blue.png"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/black.png"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/red.png"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/green.png"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/gold.png"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/artifact.png"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/land.png"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/textless/authentic/colorless.png"),
-  },
-  retro: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/white.jpg"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/blue.jpg"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/black.jpg"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/red.jpg"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/green.jpg"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/gold.jpg"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/artifact.jpg"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/land.jpg"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/retro/colorless.jpg"),
-  },
-  showcase: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/white.png"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/blue.png"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/black.png"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/red.png"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/green.png"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/gold.png"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/artifact.png"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/land.png"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/showcase-zendikar/masked/colorless.png"),
-  },
-  etchedFoil: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/white.png"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/blue.png"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/black.png"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/red.png"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/green.png"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/gold.png"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/artifact.png"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/land.png"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/etched-foil/masked/colorless.png"),
-  },
-};
-
-const MSE_M15_STAMPED_TREATMENT_FRAME_SOURCES: Partial<Record<FrameTreatment, Record<FrameIdentity, ImageSourcePropType>>> = {
-  borderless: {
-    white: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/white.png"),
-    blue: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/blue.png"),
-    black: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/black.png"),
-    red: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/red.png"),
-    green: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/green.png"),
-    gold: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/gold.png"),
-    artifact: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/artifact.png"),
-    land: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/land.png"),
-    colorless: require("../../assets/card-assets/basic-m15/mse-renderer/treatments/borderless-normal-height/masked/colorless.png"),
-  },
-};
 
 const MSE_M15_SECURITY_STAMP_SOURCE = require("../../assets/card-assets/basic-m15/source-pack/data/magic-m15-altered.mse-style/foil_stamp.png");
 
@@ -715,16 +591,16 @@ export function getMseM15ArtifactMainframeBlendMaskSource(): ImageSourcePropType
   return MSE_M15_ARTIFACT_MAINFRAME_BLEND_MASK_SOURCE;
 }
 
-export function getMseM15TransparentBorderlessFrameMaskSource(): ImageSourcePropType {
-  return MSE_M15_TRANSPARENT_BORDERLESS_FRAME_SOURCE;
-}
-
-export function getMseM15TransparentBorderlessDarkTextboxFillSource(): ImageSourcePropType {
-  return MSE_M15_TRANSPARENT_BORDERLESS_DARK_TEXTBOX_FILL_SOURCE;
+export function getMseM15BorderlessDarkTextboxFillSource(): ImageSourcePropType {
+  return MSE_M15_BORDERLESS_DARK_TEXTBOX_FILL_SOURCE;
 }
 
 export function getMseM15BorderlessPinlineOnlyRestoreMaskSource(): ImageSourcePropType {
   return MSE_M15_BORDERLESS_PINLINE_ONLY_RESTORE_MASK_SOURCE;
+}
+
+export function getMseM15SubjectMaskFrameApprovalSource(): ImageSourcePropType {
+  return MSE_M15_SUBJECT_MASK_FRAME_APPROVAL_SOURCE;
 }
 
 export function getMseM15FrameTreatmentSource(
@@ -734,12 +610,11 @@ export function getMseM15FrameTreatmentSource(
   _colorBlend?: MseM15ColorBlend | null,
 ): ImageSourcePropType | null {
   if (stamped) {
-    return MSE_M15_STAMPED_TREATMENT_FRAME_SOURCES[treatment]?.[frameIdentity] ??
-      MSE_M15_TREATMENT_FRAME_SOURCES[treatment]?.[frameIdentity] ??
-      null;
+    return getMseM15StampedTreatmentFamilySource(treatment, frameIdentity) ??
+      getMseM15TreatmentFamilySource(treatment, frameIdentity);
   }
 
-  return MSE_M15_TREATMENT_FRAME_SOURCES[treatment]?.[frameIdentity] ?? null;
+  return getMseM15TreatmentFamilySource(treatment, frameIdentity);
 }
 
 export function getMseM15SecurityStampSource(): ImageSourcePropType {
@@ -852,7 +727,7 @@ export function getMseM15TypeFrameSource(
     return MSE_M15_SAGA_FRAME_BLEND_SOURCES[colorBlend.mode][colorBlend.key];
   }
 
-  return MSE_M15_RENDERER.typeframes[type][frameIdentity];
+  return getMseM15TypeFrameFamilySource(type, frameIdentity);
 }
 
 export function getMseM15PtBoxSource(
@@ -883,7 +758,7 @@ export function getMseM15OverlaySources(
 ): MseM15OverlayLayer[] {
   const layers: MseM15OverlayLayer[] = [];
   const isNyx = frameEffects.includes("nyx");
-  const isBorderless = treatment === "borderless" || treatment === "transparentBorderless";
+  const isBorderless = treatment === "borderless";
   const supportsLegendaryHeader =
     treatment === "standard" || treatment === "borderless" || treatment === "textless";
 

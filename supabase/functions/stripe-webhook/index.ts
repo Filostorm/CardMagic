@@ -21,6 +21,8 @@ type StripeEvent = {
   };
 };
 
+const STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300;
+
 serve(async (request) => {
   if (request.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -77,6 +79,15 @@ async function verifyStripeSignature(payload: string, signatureHeader: string, s
     return false;
   }
 
+  const timestampSeconds = Number(timestamp);
+
+  if (
+    !Number.isFinite(timestampSeconds) ||
+    Math.abs(Date.now() / 1000 - timestampSeconds) > STRIPE_WEBHOOK_TOLERANCE_SECONDS
+  ) {
+    return false;
+  }
+
   const signedPayload = `${timestamp}.${payload}`;
   const key = await crypto.subtle.importKey(
     "raw",
@@ -117,4 +128,3 @@ function requireEnv(name: string) {
 
   return value;
 }
-

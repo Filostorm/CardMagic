@@ -1,5 +1,5 @@
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { ImagePlus, Sparkles } from "lucide-react-native";
+import { ImagePlus, Plus, Sparkles } from "lucide-react-native";
 import { type ReactNode } from "react";
 
 import { CardBackPreview } from "@/components/card-back-preview";
@@ -15,6 +15,7 @@ type CardBackPickerProps = {
   showSummary?: boolean;
   onChange: (cardBackId: CardBackId | undefined) => void;
   onChangeSetDefault?: (cardBackId: CardBackId) => void;
+  onAddCardBack?: () => void;
   onGenerateCardBack?: () => void;
   onPickCustomCardBack?: () => void;
 };
@@ -28,6 +29,7 @@ export function CardBackPicker({
   showSummary = false,
   onChange,
   onChangeSetDefault,
+  onAddCardBack,
   onGenerateCardBack,
   onPickCustomCardBack,
 }: CardBackPickerProps) {
@@ -76,6 +78,9 @@ export function CardBackPicker({
           paddingRight: 2,
         }}
       >
+        {onAddCardBack ? (
+          <AddCardBackChoice onPress={onAddCardBack} />
+        ) : null}
         {includeSetDefault ? (
           <CardBackChoice
             label="Set default"
@@ -146,6 +151,72 @@ export function CardBackPicker({
         </Pressable>
       ) : null}
     </View>
+  );
+}
+
+function AddCardBackChoice({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Add double-faced card"
+      onPress={onPress}
+      style={{
+        width: 96,
+        minHeight: 146,
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      <View
+        style={{
+          borderRadius: 8,
+          borderCurve: "continuous",
+          borderWidth: 1,
+          borderColor: "rgba(21, 24, 32, 0.22)",
+          padding: 5,
+        }}
+      >
+        <View
+          style={{
+            width: 78,
+            aspectRatio: 375 / 523,
+            borderRadius: 8,
+            borderCurve: "continuous",
+            backgroundColor: "#f7f8fa",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <View
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 16,
+              backgroundColor: "#151820",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Plus size={18} color="#ffffff" strokeWidth={2.8} />
+          </View>
+        </View>
+      </View>
+      <Text
+        selectable={false}
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+        style={{
+          color: "#1f2530",
+          fontSize: 12,
+          lineHeight: 14,
+          fontWeight: "900",
+          textAlign: "center",
+        }}
+      >
+        Add DFC
+      </Text>
+    </Pressable>
   );
 }
 

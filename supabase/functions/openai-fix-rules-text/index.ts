@@ -1,9 +1,11 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const OPENAI_RULES_TEXT_MODELS = ["gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1"] as const;
+const MAX_JSON_BODY_BYTES = 64 * 1024;
+const MAX_PROMPT_LENGTH = 8000;
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cardmagic-request-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -17,17 +19,89 @@ serve(async (request) => {
   }
 
   try {
-    const { prompt } = await request.json() as { prompt?: string };
+    const user = await getAuthenticatedUser(request.headers.get("Authorization"));
 
-    if (!prompt?.trim()) {
+    if (!user) {
+      return json({ error: "Sign in before fixing rules text." }, 401);
+    }
+
+    const { prompt } = await readJsonBody<{ prompt?: string }>(request, MAX_JSON_BODY_BYTES);
+    const normalizedPrompt = prompt?.trim() ?? "";
+
+    if (!normalizedPrompt) {
       return json({ error: "Prompt is required." }, 400);
     }
 
-    return json({ content: await fixRulesText(prompt) });
+    if (normalizedPrompt.length > MAX_PROMPT_LENGTH) {
+      return json({ error: `Prompt must be ${MAX_PROMPT_LENGTH} characters or fewer.` }, 400);
+    }
+
+    return json({ content: await fixRulesText(normalizedPrompt) });
   } catch (error) {
+    if (error instanceof RequestValidationError) {
+      return json({ error: error.message }, error.status);
+    }
+
     return json({ error: error instanceof Error ? error.message : "OpenAI rules text fixer failed." }, 500);
   }
 });
+
+type SupabaseAuthUser = {
+  id: string;
+};
+
+class RequestValidationError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "RequestValidationError";
+    this.status = status;
+  }
+}
+
+async function getAuthenticatedUser(authorization: string | null): Promise<SupabaseAuthUser | null> {
+  if (!authorization?.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const supabaseUrl = requireEnv("SUPABASE_URL").replace(/\/$/, "");
+  const supabaseAnonKey = requireEnv("SUPABASE_ANON_KEY");
+  const token = authorization.slice("Bearer ".length);
+  const userResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: supabaseAnonKey,
+    },
+  });
+
+  if (!userResponse.ok) {
+    return null;
+  }
+
+  const user = await userResponse.json();
+  return typeof user?.id === "string" ? { id: user.id } : null;
+}
+
+async function readJsonBody<T>(request: Request, maxBytes: number): Promise<T> {
+  const contentLength = Number(request.headers.get("Content-Length") ?? "0");
+
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new RequestValidationError("Request body is too large.", 413);
+  }
+
+  const body = await request.text();
+
+  if (body.length > maxBytes) {
+    throw new RequestValidationError("Request body is too large.", 413);
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new RequestValidationError("Request body must be valid JSON.", 400);
+  }
+}
 
 async function fixRulesText(prompt: string) {
   let lastError: Error | null = null;

@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronRight, ImagePlus, ListPlus, Pencil, Share2, Sparkles, Trash2, X } from "lucide-react-native";
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Image,
   ImageSourcePropType,
@@ -37,7 +37,7 @@ import {
   getMseM15FrameTreatmentSource,
   getMseM15MainframeSource,
 } from "@/data/mse-frame-renderer";
-import type { CardDatabaseEntry, CardDatabaseMetadata } from "@/data/card-database";
+import type { CardDatabaseSearchEntry, CardDatabaseSearchMetadata } from "@/data/card-database-search";
 import {
   KEYWORD_CATEGORY_LABELS,
   KEYWORD_CATEGORY_TABS,
@@ -144,9 +144,14 @@ const SECTION_TITLES: Record<CardSection, string> = {
 };
 
 type CardDatabaseModule = typeof import("@/data/card-database");
+type CardDatabaseSearchModule = typeof import("@/data/card-database-search");
 
 function loadCardDatabaseModule(): Promise<CardDatabaseModule> {
   return import("@/data/card-database");
+}
+
+function loadCardDatabaseSearchModule(): Promise<CardDatabaseSearchModule> {
+  return import("@/data/card-database-search");
 }
 
 const RARITIES: CardRarity[] = ["common", "uncommon", "rare", "mythic"];
@@ -261,6 +266,7 @@ type SectionEditorModalProps = {
   onPickArt: () => void;
   onPickSetSymbol: () => void;
   onGenerateSetSymbol: () => void;
+  onAddCardBack?: () => void;
   onGenerateCardBack?: () => void;
   onPickCustomCardBack?: () => void;
   onChangeSetDefaultCardBack?: (cardBackId: CardBackId) => void;
@@ -305,6 +311,7 @@ export function SectionEditorModal({
   onPickArt,
   onPickSetSymbol,
   onGenerateSetSymbol,
+  onAddCardBack,
   onGenerateCardBack,
   onPickCustomCardBack,
   onChangeSetDefaultCardBack,
@@ -745,6 +752,7 @@ export function SectionEditorModal({
                 customBacks={customCardBacks}
                 includeSetDefault
                 onChangeSetDefault={onChangeSetDefaultCardBack}
+                onAddCardBack={onAddCardBack}
                 onGenerateCardBack={onGenerateCardBack}
                 onPickCustomCardBack={onPickCustomCardBack}
                 onChange={(cardBackId) => onChange({ cardBackId })}
@@ -1174,31 +1182,54 @@ function BaseCardNameAutocompleteField({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [databaseModule, setDatabaseModule] = useState<CardDatabaseModule | null>(null);
-  const [databaseLoading, setDatabaseLoading] = useState(false);
-  const shouldLoadDatabase = menuOpen || value.trim().length >= 2;
+  const [searchModule, setSearchModule] = useState<CardDatabaseSearchModule | null>(null);
+  const [searchIndexLoading, setSearchIndexLoading] = useState(false);
+  const shouldLoadSearchIndex = menuOpen || value.trim().length >= 2;
   const suggestions = useMemo(
-    () => (databaseModule ? databaseModule.searchCardDatabase(value, 8) : []),
-    [databaseModule, value],
+    () => (searchModule ? searchModule.searchCardDatabaseIndex(value, 8) : []),
+    [searchModule, value],
   );
-  const metadata: CardDatabaseMetadata | null = databaseModule ? databaseModule.getCardDatabaseMetadata() : null;
+  const metadata: CardDatabaseSearchMetadata | null = searchModule ? searchModule.getCardDatabaseSearchMetadata() : null;
   const showSuggestions = menuOpen && suggestions.length > 0;
   const updateText = (baseCardName: string) => {
     onChangeText(baseCardName);
     setMenuOpen(baseCardName.trim().length >= 2);
   };
+  const selectSuggestion = async (entry: CardDatabaseSearchEntry) => {
+    setMenuOpen(false);
+
+    try {
+      const module = databaseModule ?? await loadCardDatabaseModule();
+
+      if (!databaseModule) {
+        setDatabaseModule(module);
+      }
+
+      const databaseEntry = module.getCardDatabaseEntryById(entry.id);
+
+      if (!databaseEntry) {
+        console.warn("Selected Oracle card is missing from the full card database.", { id: entry.id });
+        return;
+      }
+
+      onSelectPatch(module.buildCardPatchFromDatabaseEntry(databaseEntry));
+    } catch (error) {
+      console.warn("Card database selection unavailable.", error);
+    }
+  };
 
   useEffect(() => {
-    if (!shouldLoadDatabase || databaseModule) {
+    if (!shouldLoadSearchIndex || searchModule) {
       return undefined;
     }
 
     let cancelled = false;
 
-    setDatabaseLoading(true);
-    loadCardDatabaseModule()
+    setSearchIndexLoading(true);
+    loadCardDatabaseSearchModule()
       .then((module) => {
         if (!cancelled) {
-          setDatabaseModule(module);
+          setSearchModule(module);
         }
       })
       .catch((error) => {
@@ -1206,14 +1237,14 @@ function BaseCardNameAutocompleteField({
       })
       .finally(() => {
         if (!cancelled) {
-          setDatabaseLoading(false);
+          setSearchIndexLoading(false);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [databaseModule, shouldLoadDatabase]);
+  }, [searchModule, shouldLoadSearchIndex]);
 
   return (
     <View
@@ -1248,7 +1279,7 @@ function BaseCardNameAutocompleteField({
         >
           {metadata
             ? `${metadata.cardCount.toLocaleString("en-US")} Oracle cards`
-            : databaseLoading
+            : searchIndexLoading
               ? "Loading Oracle cards"
               : "Oracle lookup"}
         </Text>
@@ -1286,12 +1317,7 @@ function BaseCardNameAutocompleteField({
         {showSuggestions ? (
           <CardDatabaseAutocompleteMenu
             suggestions={suggestions}
-            onSelect={(entry) => {
-              if (databaseModule) {
-                onSelectPatch(databaseModule.buildCardPatchFromDatabaseEntry(entry));
-              }
-              setMenuOpen(false);
-            }}
+            onSelect={(entry) => void selectSuggestion(entry)}
           />
         ) : null}
       </View>
@@ -1303,8 +1329,8 @@ function CardDatabaseAutocompleteMenu({
   suggestions,
   onSelect,
 }: {
-  suggestions: CardDatabaseEntry[];
-  onSelect: (entry: CardDatabaseEntry) => void;
+  suggestions: CardDatabaseSearchEntry[];
+  onSelect: (entry: CardDatabaseSearchEntry) => void;
 }) {
   return (
     <View
@@ -1329,7 +1355,6 @@ function CardDatabaseAutocompleteMenu({
           key={entry.id}
           accessibilityRole="button"
           accessibilityLabel={`Use ${entry.name} as the base card`}
-          onPressIn={() => onSelect(entry)}
           onPress={() => onSelect(entry)}
           style={{
             minHeight: 48,
@@ -1367,8 +1392,8 @@ function CardDatabaseAutocompleteMenu({
   );
 }
 
-function getCardDatabaseSuggestionDetail(entry: CardDatabaseEntry): string {
-  const typeLine = entry.faces[0]?.typeLine || entry.typeLine || "Card";
+function getCardDatabaseSuggestionDetail(entry: CardDatabaseSearchEntry): string {
+  const typeLine = entry.typeLine || "Card";
   const layout = entry.layout
     .split("_")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -1921,6 +1946,7 @@ function WatermarkEditor({
   const opacity = card.watermarkOpacity ?? 0.16;
   const scale = card.watermarkScale ?? 1;
   const [activeCategory, setActiveCategory] = useState<MseWatermarkCategory>("ravnica");
+  const [expanded, setExpanded] = useState(false);
   const visiblePresets = MSE_WATERMARK_PRESETS.filter(
     (preset) => preset.category === activeCategory,
   );
@@ -1936,7 +1962,13 @@ function WatermarkEditor({
 
   return (
     <View style={{ gap: 16 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`${expanded ? "Collapse" : "Expand"} watermark controls`}
+        onPress={() => setExpanded((current) => !current)}
+        style={{ flexDirection: "row", alignItems: "center", gap: 12 }}
+      >
         <View
           style={{
             width: 64,
@@ -1984,253 +2016,262 @@ function WatermarkEditor({
             {card.watermarkUri ? "Custom uploaded image" : enabled ? "MSE preset mark" : "Hidden"}
           </Text>
         </View>
-      </View>
+        {expanded ? (
+          <ChevronDown size={20} color="#4f5664" strokeWidth={2.6} />
+        ) : (
+          <ChevronRight size={20} color="#4f5664" strokeWidth={2.6} />
+        )}
+      </Pressable>
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Disable watermark"
-          onPress={() =>
-            onChange({
-              watermarkPreset: undefined,
-              watermarkUri: undefined,
-            })
-          }
-          style={{
-            minHeight: 42,
-            borderRadius: 8,
-            borderCurve: "continuous",
-            borderWidth: 1,
-            borderColor: !enabled ? "#151820" : "#d4d8e0",
-            backgroundColor: !enabled ? "#151820" : "#ffffff",
-            alignItems: "center",
-            justifyContent: "center",
-            paddingHorizontal: 12,
-          }}
-        >
-          <Text selectable={false} style={{ color: !enabled ? "#ffffff" : "#1f2530", fontWeight: "900" }}>
-            None
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Upload custom watermark"
-          onPress={onPickWatermark}
-          style={{
-            minHeight: 42,
-            borderRadius: 8,
-            borderCurve: "continuous",
-            backgroundColor: "#151820",
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "row",
-            gap: 9,
-            paddingHorizontal: 13,
-          }}
-        >
-          <ImagePlus size={17} color="#ffffff" strokeWidth={2.3} />
-          <Text selectable={false} style={{ color: "#ffffff", fontWeight: "900" }}>
-            Upload
-          </Text>
-        </Pressable>
-      </View>
+      {expanded ? (
+        <>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Disable watermark"
+              onPress={() =>
+                onChange({
+                  watermarkPreset: undefined,
+                  watermarkUri: undefined,
+                })
+              }
+              style={{
+                minHeight: 42,
+                borderRadius: 8,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: !enabled ? "#151820" : "#d4d8e0",
+                backgroundColor: !enabled ? "#151820" : "#ffffff",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 12,
+              }}
+            >
+              <Text selectable={false} style={{ color: !enabled ? "#ffffff" : "#1f2530", fontWeight: "900" }}>
+                None
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Upload custom watermark"
+              onPress={onPickWatermark}
+              style={{
+                minHeight: 42,
+                borderRadius: 8,
+                borderCurve: "continuous",
+                backgroundColor: "#151820",
+                alignItems: "center",
+                justifyContent: "center",
+                flexDirection: "row",
+                gap: 9,
+                paddingHorizontal: 13,
+              }}
+            >
+              <ImagePlus size={17} color="#ffffff" strokeWidth={2.3} />
+              <Text selectable={false} style={{ color: "#ffffff", fontWeight: "900" }}>
+                Upload
+              </Text>
+            </Pressable>
+          </View>
 
-      <View style={{ gap: 8 }}>
-        <Text
-          selectable
-          style={{
-            color: "#5f6470",
-            fontSize: 12,
-            fontWeight: "800",
-            textTransform: "uppercase",
-          }}
-        >
-          MSE watermark bank
-        </Text>
-        <ScrollView
-          horizontal
-          keyboardShouldPersistTaps="handled"
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingRight: 4 }}
-        >
-          {Object.entries(MSE_WATERMARK_CATEGORY_LABELS).map(([category, label]) => {
-            const selected = activeCategory === category;
+          <View style={{ gap: 8 }}>
+            <Text
+              selectable
+              style={{
+                color: "#5f6470",
+                fontSize: 12,
+                fontWeight: "800",
+                textTransform: "uppercase",
+              }}
+            >
+              MSE watermark bank
+            </Text>
+            <ScrollView
+              horizontal
+              keyboardShouldPersistTaps="handled"
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 8, paddingRight: 4 }}
+            >
+              {Object.entries(MSE_WATERMARK_CATEGORY_LABELS).map(([category, label]) => {
+                const selected = activeCategory === category;
 
-            return (
-              <Pressable
-                key={`watermark-category-${category}`}
-                accessibilityRole="button"
-                accessibilityLabel={`Show ${label} watermarks`}
-                onPress={() => setActiveCategory(category as MseWatermarkCategory)}
-                style={{
-                  minHeight: 38,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: selected ? "#151820" : "#d4d8e0",
-                  backgroundColor: selected ? "#151820" : "#ffffff",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingHorizontal: 13,
-                }}
-              >
-                <Text
-                  selectable={false}
-                  style={{
-                    color: selected ? "#ffffff" : "#1f2530",
-                    fontSize: 13,
-                    fontWeight: "900",
-                  }}
-                >
-                  {label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {visiblePresets.map((preset) => {
-            const selected = !card.watermarkUri && card.watermarkPreset === preset.id;
+                return (
+                  <Pressable
+                    key={`watermark-category-${category}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Show ${label} watermarks`}
+                    onPress={() => setActiveCategory(category as MseWatermarkCategory)}
+                    style={{
+                      minHeight: 38,
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: selected ? "#151820" : "#d4d8e0",
+                      backgroundColor: selected ? "#151820" : "#ffffff",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 13,
+                    }}
+                  >
+                    <Text
+                      selectable={false}
+                      style={{
+                        color: selected ? "#ffffff" : "#1f2530",
+                        fontSize: 13,
+                        fontWeight: "900",
+                      }}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {visiblePresets.map((preset) => {
+                const selected = !card.watermarkUri && card.watermarkPreset === preset.id;
 
-            return (
-              <Pressable
-                key={`watermark-${preset.id}`}
-                accessibilityRole="button"
-                accessibilityLabel={`Choose ${preset.label} watermark`}
-                onPress={() => selectPreset(preset.id)}
-                style={{
-                  width: 62,
-                  minHeight: 62,
-                  borderRadius: 8,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: selected ? "#151820" : "#d4d8e0",
-                  backgroundColor: selected ? "#151820" : "#ffffff",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: 6,
-                  gap: 3,
-                }}
-              >
-                <View style={{ opacity: selected ? 0.92 : 0.62 }}>
-                  <WatermarkSymbolMark
-                    presetId={preset.id}
-                    color={selected ? "#ffffff" : "#222222"}
-                    size={30}
-                  />
-                </View>
-                <Text
-                  selectable={false}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.68}
-                  style={{
-                    color: selected ? "#ffffff" : "#1f2530",
-                    fontSize: 10,
-                    lineHeight: 12,
-                    fontWeight: "800",
-                  }}
-                >
-                  {preset.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
+                return (
+                  <Pressable
+                    key={`watermark-${preset.id}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Choose ${preset.label} watermark`}
+                    onPress={() => selectPreset(preset.id)}
+                    style={{
+                      width: 62,
+                      minHeight: 62,
+                      borderRadius: 8,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: selected ? "#151820" : "#d4d8e0",
+                      backgroundColor: selected ? "#151820" : "#ffffff",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 6,
+                      gap: 3,
+                    }}
+                  >
+                    <View style={{ opacity: selected ? 0.92 : 0.62 }}>
+                      <WatermarkSymbolMark
+                        presetId={preset.id}
+                        color={selected ? "#ffffff" : "#222222"}
+                        size={30}
+                      />
+                    </View>
+                    <Text
+                      selectable={false}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.68}
+                      style={{
+                        color: selected ? "#ffffff" : "#1f2530",
+                        fontSize: 10,
+                        lineHeight: 12,
+                        fontWeight: "800",
+                      }}
+                    >
+                      {preset.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
 
-      <View style={{ gap: 8 }}>
-        <Text
-          selectable
-          style={{
-            color: "#5f6470",
-            fontSize: 12,
-            fontWeight: "800",
-            textTransform: "uppercase",
-          }}
-        >
-          Opacity
-        </Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {[
-            ["Subtle", 0.1],
-            ["Normal", 0.16],
-            ["Strong", 0.24],
-          ].map(([label, value]) => {
-            const selected = Math.abs(opacity - Number(value)) < 0.01;
+          <View style={{ gap: 8 }}>
+            <Text
+              selectable
+              style={{
+                color: "#5f6470",
+                fontSize: 12,
+                fontWeight: "800",
+                textTransform: "uppercase",
+              }}
+            >
+              Opacity
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {[
+                ["Subtle", 0.1],
+                ["Normal", 0.16],
+                ["Strong", 0.24],
+              ].map(([label, value]) => {
+                const selected = Math.abs(opacity - Number(value)) < 0.01;
 
-            return (
-              <Pressable
-                key={`watermark-opacity-${label}`}
-                accessibilityRole="button"
-                accessibilityLabel={`Set watermark opacity to ${label}`}
-                onPress={() => onChange({ watermarkOpacity: Number(value) })}
-                style={{
-                  minHeight: 38,
-                  borderRadius: 8,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: selected ? "#151820" : "#d4d8e0",
-                  backgroundColor: selected ? "#151820" : "#ffffff",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingHorizontal: 12,
-                }}
-              >
-                <Text selectable={false} style={{ color: selected ? "#ffffff" : "#1f2530", fontWeight: "900" }}>
-                  {label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
+                return (
+                  <Pressable
+                    key={`watermark-opacity-${label}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Set watermark opacity to ${label}`}
+                    onPress={() => onChange({ watermarkOpacity: Number(value) })}
+                    style={{
+                      minHeight: 38,
+                      borderRadius: 8,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: selected ? "#151820" : "#d4d8e0",
+                      backgroundColor: selected ? "#151820" : "#ffffff",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                    }}
+                  >
+                    <Text selectable={false} style={{ color: selected ? "#ffffff" : "#1f2530", fontWeight: "900" }}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
 
-      <View style={{ gap: 8 }}>
-        <Text
-          selectable
-          style={{
-            color: "#5f6470",
-            fontSize: 12,
-            fontWeight: "800",
-            textTransform: "uppercase",
-          }}
-        >
-          Scale
-        </Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {[
-            ["Small", 0.82],
-            ["Normal", 1],
-            ["Large", 1.22],
-          ].map(([label, value]) => {
-            const selected = Math.abs(scale - Number(value)) < 0.01;
+          <View style={{ gap: 8 }}>
+            <Text
+              selectable
+              style={{
+                color: "#5f6470",
+                fontSize: 12,
+                fontWeight: "800",
+                textTransform: "uppercase",
+              }}
+            >
+              Scale
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {[
+                ["Small", 0.82],
+                ["Normal", 1],
+                ["Large", 1.22],
+              ].map(([label, value]) => {
+                const selected = Math.abs(scale - Number(value)) < 0.01;
 
-            return (
-              <Pressable
-                key={`watermark-scale-${label}`}
-                accessibilityRole="button"
-                accessibilityLabel={`Set watermark scale to ${label}`}
-                onPress={() => onChange({ watermarkScale: Number(value) })}
-                style={{
-                  minHeight: 38,
-                  borderRadius: 8,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: selected ? "#151820" : "#d4d8e0",
-                  backgroundColor: selected ? "#151820" : "#ffffff",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingHorizontal: 12,
-                }}
-              >
-                <Text selectable={false} style={{ color: selected ? "#ffffff" : "#1f2530", fontWeight: "900" }}>
-                  {label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
+                return (
+                  <Pressable
+                    key={`watermark-scale-${label}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Set watermark scale to ${label}`}
+                    onPress={() => onChange({ watermarkScale: Number(value) })}
+                    style={{
+                      minHeight: 38,
+                      borderRadius: 8,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: selected ? "#151820" : "#d4d8e0",
+                      backgroundColor: selected ? "#151820" : "#ffffff",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                    }}
+                  >
+                    <Text selectable={false} style={{ color: selected ? "#ffffff" : "#1f2530", fontWeight: "900" }}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        </>
+      ) : null}
     </View>
   );
 }
@@ -3223,19 +3264,6 @@ function filterArenaKeywordDefinitions(
   return definitions.filter((definition) => !definition.arenaOnly);
 }
 
-function getAvailableCustomKeywordId(name: string, keywords: CardKeyword[]): string {
-  const baseId = `custom-${normalizeKeywordId(name) || "keyword"}`;
-  let candidate = baseId;
-  let suffix = 2;
-
-  while (keywords.some((keyword) => keyword.id === candidate)) {
-    candidate = `${baseId}-${suffix}`;
-    suffix += 1;
-  }
-
-  return candidate;
-}
-
 function getAvailableCustomDefinitionId(
   name: string,
   definitions: KeywordDefinition[],
@@ -3932,9 +3960,12 @@ function RichTextEditor({
         : [],
     [autocompleteDefinitions, selectionStart, value],
   );
-  const promotableKeywordDefinitions = useMemo(
-    () => getPromotableRulesKeywordDefinitions(autocompleteDefinitions ?? []),
-    [autocompleteDefinitions],
+  const rulesTextKeywordReminders = useMemo(
+    () =>
+      autocompleteDefinitions
+        ? getRulesTextKeywordReminderEntries(value, autocompleteDefinitions)
+        : [],
+    [autocompleteDefinitions, value],
   );
   const multilineMinHeight = 108;
   const multilineLineHeight = 21;
@@ -3971,38 +4002,6 @@ function RichTextEditor({
         : { start: nextStart, end: nextEnd };
     });
   }, [value.length]);
-
-  useEffect(() => {
-    if (!onChangeKeywords || promotableKeywordDefinitions.length === 0) {
-      return;
-    }
-
-    const promotion = promoteRulesTextKeywordLinesToChips(
-      value,
-      keywords,
-      promotableKeywordDefinitions,
-    );
-
-    if (!promotion) {
-      return;
-    }
-
-    onChangeKeywords(promotion.keywords);
-
-    if (promotion.rulesText !== value) {
-      onChangeText(promotion.rulesText);
-      const cursorIndex = Math.min(selectionRange.start, promotion.rulesText.length);
-      setSelectionRange({ start: cursorIndex, end: cursorIndex });
-      setForcedSelectionRange({ start: cursorIndex, end: cursorIndex });
-    }
-  }, [
-    keywords,
-    onChangeKeywords,
-    onChangeText,
-    promotableKeywordDefinitions,
-    selectionRange.start,
-    value,
-  ]);
 
   const appendSymbol = (symbol: string) => {
     if (symbol === "1") {
@@ -4177,7 +4176,10 @@ function RichTextEditor({
         ) : null}
         <KeywordReminderToggleBar
           keywords={keywords}
+          rulesText={value}
+          rulesTextKeywordReminders={rulesTextKeywordReminders}
           onChangeKeywords={onChangeKeywords}
+          onChangeRulesText={onChangeText}
         />
       </View>
       {showSymbolPalette ? (
@@ -4286,12 +4288,26 @@ function RulesTextSymbolModePicker({
 
 function KeywordReminderToggleBar({
   keywords,
+  rulesText,
+  rulesTextKeywordReminders,
   onChangeKeywords,
+  onChangeRulesText,
 }: {
   keywords: CardKeyword[];
+  rulesText: string;
+  rulesTextKeywordReminders: CardKeyword[];
   onChangeKeywords?: (keywords: CardKeyword[]) => void;
+  onChangeRulesText?: (rulesText: string) => void;
 }) {
-  if (keywords.length === 0) {
+  const rulesTextKeywordIds = new Set(rulesTextKeywordReminders.map((keyword) => keyword.id));
+  const reminderKeywords = [
+    ...rulesTextKeywordReminders.map((keyword) => ({ keyword, source: "rulesText" as const })),
+    ...keywords
+      .filter((keyword) => !rulesTextKeywordIds.has(keyword.id))
+      .map((keyword) => ({ keyword, source: "keywordList" as const })),
+  ];
+
+  if (reminderKeywords.length === 0) {
     return null;
   }
 
@@ -4317,13 +4333,14 @@ function KeywordReminderToggleBar({
         Keyword reminders
       </Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 7 }}>
-        {keywords.map((keyword) => {
+        {reminderKeywords.map(({ keyword, source }) => {
           const hasReminder = Boolean(keyword.reminderText?.trim());
           const reminderShown = Boolean(keyword.showReminder);
+          const togglesRulesText = source === "rulesText";
 
           return (
             <Pressable
-              key={`rules-keyword-${keyword.id}`}
+              key={`rules-keyword-${source}-${keyword.id}`}
               accessibilityRole={hasReminder ? "switch" : "button"}
               accessibilityLabel={
                 hasReminder
@@ -4331,12 +4348,21 @@ function KeywordReminderToggleBar({
                   : `${keyword.name} has no reminder text`
               }
               accessibilityState={hasReminder ? { checked: reminderShown } : { disabled: true }}
-              disabled={!hasReminder || !onChangeKeywords}
-              onPress={() =>
+              disabled={!hasReminder || (!onChangeKeywords && (!togglesRulesText || !onChangeRulesText))}
+              onPress={() => {
+                if (togglesRulesText) {
+                  onChangeRulesText?.(
+                    reminderShown
+                      ? removeRulesTextKeywordReminder(rulesText, keyword)
+                      : addRulesTextKeywordReminder(rulesText, keyword),
+                  );
+                  return;
+                }
+
                 updateKeyword(keyword.id, {
                   showReminder: !reminderShown,
-                })
-              }
+                });
+              }}
               style={{
                 minHeight: 34,
                 borderRadius: 999,
@@ -4470,16 +4496,6 @@ function RulesKeywordAutocompleteMenu({
   );
 }
 
-type PromotedRulesKeyword = {
-  definition: KeywordDefinition;
-  showReminder: boolean;
-};
-
-type RulesKeywordPromotion = {
-  rulesText: string;
-  keywords: CardKeyword[];
-};
-
 function getPromotableRulesKeywordDefinitions(
   customDefinitions: KeywordDefinition[],
 ): KeywordDefinition[] {
@@ -4488,150 +4504,146 @@ function getPromotableRulesKeywordDefinitions(
     .sort((first, second) => second.name.length - first.name.length || first.name.localeCompare(second.name));
 }
 
-function promoteRulesTextKeywordLinesToChips(
+function getRulesTextKeywordReminderEntries(
   rulesText: string,
-  keywords: CardKeyword[],
-  definitions: KeywordDefinition[],
-): RulesKeywordPromotion | null {
-  if (!rulesText.trim() || definitions.length === 0) {
-    return null;
+  customDefinitions: KeywordDefinition[],
+): CardKeyword[] {
+  if (!rulesText.trim()) {
+    return [];
   }
 
-  const nextKeywords = [...keywords];
-  const normalizedKeywordIds = new Set(nextKeywords.map((keyword) => keyword.id));
-  const normalizedRulesText = rulesText.replace(/\r\n?/g, "\n");
-  let promotedAnyLine = false;
-  let updatedExistingReminderState = false;
-  const retainedLines: string[] = [];
-
-  for (const line of normalizedRulesText.split("\n")) {
-    const promotedKeywords = getPromotedRulesKeywordLine(line, definitions);
-
-    if (!promotedKeywords) {
-      retainedLines.push(line);
-      continue;
-    }
-
-    promotedAnyLine = true;
-
-    for (const promotedKeyword of promotedKeywords) {
-      const existingIndex = nextKeywords.findIndex((keyword) => keyword.id === promotedKeyword.definition.id);
-
-      if (existingIndex >= 0) {
-        if (
-          promotedKeyword.showReminder &&
-          !nextKeywords[existingIndex].showReminder &&
-          nextKeywords[existingIndex].reminderText?.trim()
-        ) {
-          nextKeywords[existingIndex] = {
-            ...nextKeywords[existingIndex],
-            showReminder: true,
-          };
-          updatedExistingReminderState = true;
-        }
-
-        continue;
-      }
-
-      if (normalizedKeywordIds.has(promotedKeyword.definition.id)) {
-        continue;
-      }
-
-      normalizedKeywordIds.add(promotedKeyword.definition.id);
-      nextKeywords.push({
-        ...promotedKeyword.definition,
-        showReminder: promotedKeyword.showReminder,
-      });
-    }
-  }
-
-  if (!promotedAnyLine && !updatedExistingReminderState) {
-    return null;
-  }
-
-  const promotedRulesText = normalizeRulesTextAfterKeywordPromotion(retainedLines);
-
-  if (
-    promotedRulesText === rulesText &&
-    nextKeywords.length === keywords.length &&
-    nextKeywords.every((keyword, index) => keyword === keywords[index])
-  ) {
-    return null;
-  }
-
-  return {
-    rulesText: promotedRulesText,
-    keywords: nextKeywords,
-  };
-}
-
-function getPromotedRulesKeywordLine(
-  line: string,
-  definitions: KeywordDefinition[],
-): PromotedRulesKeyword[] | null {
-  const trimmedLine = line.trim();
-
-  if (!trimmedLine || /[.;:]$/.test(trimmedLine)) {
-    return null;
-  }
-
-  const phrases = trimmedLine.split(/\s*,\s*/).filter(Boolean);
-
-  if (phrases.length === 0) {
-    return null;
-  }
-
-  const promotedKeywords: PromotedRulesKeyword[] = [];
+  const entries: CardKeyword[] = [];
   const seenIds = new Set<string>();
 
-  for (const phrase of phrases) {
-    const promotedKeyword = getPromotedRulesKeywordPhrase(phrase, definitions);
+  for (const definition of getPromotableRulesKeywordDefinitions(customDefinitions)) {
+    const reminderText = definition.reminderText?.trim();
 
-    if (!promotedKeyword || seenIds.has(promotedKeyword.definition.id)) {
-      return null;
-    }
-
-    seenIds.add(promotedKeyword.definition.id);
-    promotedKeywords.push(promotedKeyword);
-  }
-
-  return promotedKeywords;
-}
-
-function getPromotedRulesKeywordPhrase(
-  phrase: string,
-  definitions: KeywordDefinition[],
-): PromotedRulesKeyword | null {
-  const trimmedPhrase = phrase.trim();
-
-  for (const definition of definitions) {
-    const keywordPattern = new RegExp(
-      `^${escapeRegExp(definition.name)}(?:\\s*\\(([^)]*)\\))?$`,
-      "i",
-    );
-    const match = trimmedPhrase.match(keywordPattern);
-
-    if (!match) {
+    if (!reminderText || seenIds.has(definition.id)) {
       continue;
     }
 
-    const inlineReminderText = match[1]?.trim();
-    const definitionReminderText = definition.reminderText?.trim();
+    const matches = Array.from(rulesText.matchAll(getRulesTextKeywordReminderPattern(definition)))
+      .filter((match) => !isRulesKeywordMatchInsideParenthetical(rulesText, match));
 
-    return {
-      definition,
-      showReminder: Boolean(inlineReminderText && definitionReminderText),
-    };
+    if (matches.length === 0) {
+      continue;
+    }
+
+    seenIds.add(definition.id);
+    entries.push({
+      ...definition,
+      showReminder: matches.some((match) =>
+        normalizeReminderTextForComparison(match.groups?.reminder ?? "") ===
+        normalizeReminderTextForComparison(reminderText),
+      ),
+    });
   }
 
-  return null;
+  return entries;
 }
 
-function normalizeRulesTextAfterKeywordPromotion(lines: string[]): string {
-  return lines
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+function isRulesKeywordMatchInsideParenthetical(
+  rulesText: string,
+  match: RegExpMatchArray,
+): boolean {
+  const groups = match.groups as { prefix?: string } | undefined;
+  const keywordStart = (match.index ?? 0) + (groups?.prefix?.length ?? 0);
+  let parentheticalDepth = 0;
+
+  for (let index = 0; index < keywordStart; index += 1) {
+    const character = rulesText[index];
+
+    if (character === "(") {
+      parentheticalDepth += 1;
+    } else if (character === ")") {
+      parentheticalDepth = Math.max(0, parentheticalDepth - 1);
+    }
+  }
+
+  return parentheticalDepth > 0;
+}
+
+function addRulesTextKeywordReminder(rulesText: string, keyword: CardKeyword): string {
+  const reminderText = keyword.reminderText?.trim();
+
+  if (!reminderText) {
+    return rulesText;
+  }
+
+  const pattern = getRulesTextKeywordReminderPattern(keyword);
+  let insertedReminder = false;
+
+  return rulesText.replace(pattern, (...replaceArgs: unknown[]) => {
+    if (insertedReminder) {
+      return String(replaceArgs[0]);
+    }
+
+    const groups = replaceArgs[replaceArgs.length - 1] as
+      | {
+          prefix?: string;
+          keyword?: string;
+          suffix?: string;
+          parenthetical?: string;
+          reminder?: string;
+        }
+      | undefined;
+    const existingReminder = groups?.reminder ?? "";
+
+    if (normalizeReminderTextForComparison(existingReminder) === normalizeReminderTextForComparison(reminderText)) {
+      insertedReminder = true;
+      return String(replaceArgs[0]);
+    }
+
+    if (groups?.parenthetical) {
+      return String(replaceArgs[0]);
+    }
+
+    insertedReminder = true;
+    return `${groups?.prefix ?? ""}${groups?.keyword ?? keyword.name}${groups?.suffix ?? ""} (${reminderText})`;
+  });
+}
+
+function removeRulesTextKeywordReminder(rulesText: string, keyword: CardKeyword): string {
+  const reminderText = keyword.reminderText?.trim();
+
+  if (!reminderText) {
+    return rulesText;
+  }
+
+  return rulesText.replace(getRulesTextKeywordReminderPattern(keyword), (...replaceArgs: unknown[]) => {
+    const original = String(replaceArgs[0]);
+    const groups = replaceArgs[replaceArgs.length - 1] as
+      | {
+          prefix?: string;
+          keyword?: string;
+          suffix?: string;
+          parenthetical?: string;
+          reminder?: string;
+        }
+      | undefined;
+
+    if (
+      normalizeReminderTextForComparison(groups?.reminder ?? "") !==
+      normalizeReminderTextForComparison(reminderText)
+    ) {
+      return original;
+    }
+
+    return `${groups?.prefix ?? ""}${groups?.keyword ?? keyword.name}${groups?.suffix ?? ""}`;
+  });
+}
+
+function getRulesTextKeywordReminderPattern(keyword: Pick<KeywordDefinition, "name">): RegExp {
+  const escapedName = keyword.name.trim().split(/\s+/).map(escapeRegExp).join("\\s+");
+
+  return new RegExp(
+    `(?<prefix>^|[^A-Za-z])(?<keyword>${escapedName})(?<suffix>[ \\t]+(?:\\{[^}]+\\}|[0-9X]+|[WUBRGCS](?:\\/[WUBRGCS])?)+)?(?<parenthetical>\\s*\\((?<reminder>[^)]*)\\))?`,
+    "gim",
+  );
+}
+
+function normalizeReminderTextForComparison(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function escapeRegExp(value: string): string {
@@ -4928,7 +4940,7 @@ function FrameEditor({
             textTransform: "uppercase",
           }}
         >
-          Default frames
+          Color override
         </Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {manualFrameSelections.map((frameSelection) => {
@@ -5847,18 +5859,6 @@ function frameSwatchColor(frame: Exclude<FrameSelection, "auto">): string {
   };
 
   return colors[frame];
-}
-
-function manaFrameSwatchColor(color: ManaColor): string {
-  const frames: Record<ManaColor, Exclude<FrameSelection, "auto">> = {
-    W: "white",
-    U: "blue",
-    B: "black",
-    R: "red",
-    G: "green",
-  };
-
-  return frameSwatchColor(frames[color]);
 }
 
 function getTypeWords(typeLine: string): string[] {

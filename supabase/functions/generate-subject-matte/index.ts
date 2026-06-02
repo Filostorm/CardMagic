@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
+import {
+  AiCreditSpendError,
+  refundAiCreditSpend,
+  spendAiCredits,
+} from "../_shared/ai-credits.ts";
+
 type MaskEntry = {
   url?: string;
   image?: { url?: string };
@@ -78,11 +84,14 @@ class FalSamSegmentationError extends Error {
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cardmagic-request-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const FAL_SAM_FETCH_TIMEOUT_MS = 18000;
+const MAX_JSON_BODY_BYTES = 12 * 1024 * 1024;
+const MAX_IMAGE_DATA_URL_CHARS = 10 * 1024 * 1024;
+const MAX_TARGET_PROMPT_LENGTH = 160;
 
 serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -94,52 +103,104 @@ serve(async (request) => {
   }
 
   try {
-    const { imageDataUrl, targetPrompt } = await request.json() as {
+    const user = await getAuthenticatedUser(request.headers.get("Authorization"));
+
+    if (!user) {
+      return json({ error: "Sign in before generating subject masks." }, 401);
+    }
+
+    const { imageDataUrl, targetPrompt, clientRequestId } = await readJsonBody<{
       imageDataUrl?: string;
       targetPrompt?: string;
-    };
+      clientRequestId?: string;
+    }>(request, MAX_JSON_BODY_BYTES);
 
     if (!imageDataUrl?.startsWith("data:image/")) {
       return json({ error: "A data URL image is required." }, 400);
     }
 
-    const normalizedTargetPrompt = typeof targetPrompt === "string" ? targetPrompt.trim().slice(0, 160) : "";
+    if (imageDataUrl.length > MAX_IMAGE_DATA_URL_CHARS) {
+      return json({ error: "Image is too large for subject masking." }, 413);
+    }
+
+    const normalizedTargetPrompt =
+      typeof targetPrompt === "string" ? targetPrompt.trim().slice(0, MAX_TARGET_PROMPT_LENGTH) : "";
     console.log("[subject-matte] request received", {
       hasImage: imageDataUrl.startsWith("data:image/"),
       targetPrompt: normalizedTargetPrompt || "(foreground)",
     });
-    const falKey = Deno.env.get("FAL_KEY");
 
-    if (falKey) {
-      if (normalizedTargetPrompt) {
-        const result = await segmentImageWithFalSam(imageDataUrl, normalizedTargetPrompt, falKey);
-        return json({
-          url: result.subjectMasks[0]?.url,
-          urls: result.subjectMasks.map((mask) => mask.url),
-          subjectMasks: result.subjectMasks,
-          provider: "fal-sam",
-          targetPrompt: normalizedTargetPrompt,
-          diagnostics: result.diagnostics,
-        });
+    const supabaseUrl = requireEnv("SUPABASE_URL").replace(/\/$/, "");
+    const supabaseAnonKey = requireEnv("SUPABASE_ANON_KEY");
+    const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const spend = await spendAiCredits({
+      supabaseUrl,
+      supabaseAnonKey,
+      accessToken: user.accessToken,
+      category: "subjectMask",
+      source: "generate-subject-matte",
+      referenceId: createAiSpendReferenceId("generate-subject-matte", clientRequestId),
+      metadata: {
+        prompted: Boolean(normalizedTargetPrompt),
+      },
+    });
+
+    try {
+      const falKey = Deno.env.get("FAL_KEY");
+
+      if (falKey) {
+        if (normalizedTargetPrompt) {
+          const result = await segmentImageWithFalSam(imageDataUrl, normalizedTargetPrompt, falKey);
+          return json({
+            url: result.subjectMasks[0]?.url,
+            urls: result.subjectMasks.map((mask) => mask.url),
+            subjectMasks: result.subjectMasks,
+            provider: "fal-sam",
+            targetPrompt: normalizedTargetPrompt,
+            diagnostics: result.diagnostics,
+            progress: spend.progress,
+            creditSpend: spend,
+          });
+        }
+
+        const url = await removeBackgroundWithFal(imageDataUrl, falKey);
+        return json({ url, provider: "fal", progress: spend.progress, creditSpend: spend });
       }
 
-      const url = await removeBackgroundWithFal(imageDataUrl, falKey);
-      return json({ url, provider: "fal" });
+      if (normalizedTargetPrompt) {
+        throw new RequestValidationError("Configure FAL_KEY for prompted subject segmentation.", 501);
+      }
+
+      const replicateToken = Deno.env.get("REPLICATE_API_TOKEN");
+
+      if (replicateToken) {
+        const url = await removeBackgroundWithReplicate(imageDataUrl, replicateToken);
+        return json({ url, provider: "replicate", progress: spend.progress, creditSpend: spend });
+      }
+
+      throw new RequestValidationError("Configure FAL_KEY or REPLICATE_API_TOKEN for subject matte generation.", 501);
+    } catch (providerError) {
+      await refundAiCreditSpend({
+        supabaseUrl,
+        serviceRoleKey,
+        userId: user.id,
+        spend,
+        reason: providerError instanceof Error ? providerError.message : "Subject matte generation failed.",
+      }).catch((refundError) => {
+        console.warn("Unable to refund failed subject matte generation.", refundError);
+      });
+
+      throw providerError;
     }
-
-    if (normalizedTargetPrompt) {
-      return json({ error: "Configure FAL_KEY for prompted subject segmentation." }, 501);
-    }
-
-    const replicateToken = Deno.env.get("REPLICATE_API_TOKEN");
-
-    if (replicateToken) {
-      const url = await removeBackgroundWithReplicate(imageDataUrl, replicateToken);
-      return json({ url, provider: "replicate" });
-    }
-
-    return json({ error: "Configure FAL_KEY or REPLICATE_API_TOKEN for subject matte generation." }, 501);
   } catch (error) {
+    if (error instanceof RequestValidationError) {
+      return json({ error: error.message }, error.status);
+    }
+
+    if (error instanceof AiCreditSpendError) {
+      return json({ error: error.message }, error.status);
+    }
+
     if (error instanceof FalSamSegmentationError) {
       return json({ error: error.message, diagnostics: error.diagnostics }, 500);
     }
@@ -147,6 +208,74 @@ serve(async (request) => {
     return json({ error: error instanceof Error ? error.message : "Subject matte generation failed." }, 500);
   }
 });
+
+type SupabaseAuthUser = {
+  id: string;
+  accessToken: string;
+};
+
+class RequestValidationError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "RequestValidationError";
+    this.status = status;
+  }
+}
+
+async function getAuthenticatedUser(authorization: string | null): Promise<SupabaseAuthUser | null> {
+  if (!authorization?.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const supabaseUrl = requireEnv("SUPABASE_URL").replace(/\/$/, "");
+  const supabaseAnonKey = requireEnv("SUPABASE_ANON_KEY");
+  const token = authorization.slice("Bearer ".length);
+  const userResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: supabaseAnonKey,
+    },
+  });
+
+  if (!userResponse.ok) {
+    return null;
+  }
+
+  const user = await userResponse.json();
+  return typeof user?.id === "string" ? { id: user.id, accessToken: token } : null;
+}
+
+function requireEnv(name: string) {
+  const value = Deno.env.get(name);
+
+  if (!value) {
+    throw new Error(`${name} is not configured.`);
+  }
+
+  return value;
+}
+
+async function readJsonBody<T>(request: Request, maxBytes: number): Promise<T> {
+  const contentLength = Number(request.headers.get("Content-Length") ?? "0");
+
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new RequestValidationError("Request body is too large.", 413);
+  }
+
+  const body = await request.text();
+
+  if (body.length > maxBytes) {
+    throw new RequestValidationError("Request body is too large.", 413);
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new RequestValidationError("Request body must be valid JSON.", 400);
+  }
+}
 
 async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string, key: string) {
   const startedAt = Date.now();
@@ -627,6 +756,16 @@ function getReplicateError(prediction: ReplicatePrediction) {
   }
 
   return null;
+}
+
+function createAiSpendReferenceId(source: string, clientRequestId: unknown) {
+  if (typeof clientRequestId !== "string") {
+    return undefined;
+  }
+
+  const normalizedRequestId = clientRequestId.trim().slice(0, 96).replace(/[^a-z0-9._:-]+/gi, "-");
+
+  return normalizedRequestId ? `${source}:${normalizedRequestId}` : undefined;
 }
 
 function json(body: unknown, status = 200) {

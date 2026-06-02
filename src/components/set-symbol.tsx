@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Image, Platform, View } from "react-native";
+import { Asset } from "expo-asset";
+import { Image, Platform, View, type ImageSourcePropType } from "react-native";
 import Svg, { Defs, G, LinearGradient, Path, Stop } from "react-native-svg";
 
 import { getMseWatermarkPreset } from "@/data/mse-watermarks";
@@ -10,11 +11,40 @@ import { CardRarity } from "@/types/card";
 export type SetSymbolPreset = {
   id: string;
   label: string;
+  source?: ImageSourcePropType;
   paths: string[];
   details?: string[];
   cutouts?: string[];
 };
 
+const DEFAULT_PRESET_SET_SYMBOL_VISUAL_SCALE = 1.08;
+
+const DEFAULT_SET_SYMBOL_SOURCES: Record<string, ImageSourcePropType> = {
+  spire: require("../../assets/card-assets/set-symbols/generated-defaults/spire.png"),
+  crownfall: require("../../assets/card-assets/set-symbols/generated-defaults/crownfall.png"),
+  starforge: require("../../assets/card-assets/set-symbols/generated-defaults/starforge.png"),
+  rift: require("../../assets/card-assets/set-symbols/generated-defaults/rift.png"),
+  mask: require("../../assets/card-assets/set-symbols/generated-defaults/mask.png"),
+  citadel: require("../../assets/card-assets/set-symbols/generated-defaults/citadel.png"),
+  helix: require("../../assets/card-assets/set-symbols/generated-defaults/helix.png"),
+  ember: require("../../assets/card-assets/set-symbols/generated-defaults/ember.png"),
+  grove: require("../../assets/card-assets/set-symbols/generated-defaults/grove.png"),
+  tideglass: require("../../assets/card-assets/set-symbols/generated-defaults/tideglass.png"),
+  moonblade: require("../../assets/card-assets/set-symbols/generated-defaults/moonblade.png"),
+  sunlance: require("../../assets/card-assets/set-symbols/generated-defaults/sunlance.png"),
+  ironroot: require("../../assets/card-assets/set-symbols/generated-defaults/ironroot.png"),
+  vault: require("../../assets/card-assets/set-symbols/generated-defaults/vault.png"),
+  eye: require("../../assets/card-assets/set-symbols/generated-defaults/eye.png"),
+  banner: require("../../assets/card-assets/set-symbols/generated-defaults/banner.png"),
+  scarab: require("../../assets/card-assets/set-symbols/generated-defaults/scarab.png"),
+  comet: require("../../assets/card-assets/set-symbols/generated-defaults/comet.png"),
+  obelisk: require("../../assets/card-assets/set-symbols/generated-defaults/obelisk.png"),
+  sigil: require("../../assets/card-assets/set-symbols/generated-defaults/sigil.png"),
+  maw: require("../../assets/card-assets/set-symbols/generated-defaults/maw.png"),
+  keystone: require("../../assets/card-assets/set-symbols/generated-defaults/keystone.png"),
+  anvil: require("../../assets/card-assets/set-symbols/generated-defaults/anvil.png"),
+  portal: require("../../assets/card-assets/set-symbols/generated-defaults/portal.png"),
+};
 const RARITY_TREATMENTS: Record<
   CardRarity,
   { fill: string; high: string; low: string; outline: string; shadow: string }
@@ -49,7 +79,7 @@ const RARITY_TREATMENTS: Record<
   },
 };
 
-export const SET_SYMBOL_PRESETS: SetSymbolPreset[] = [
+const SET_SYMBOL_PRESET_DEFINITIONS: Omit<SetSymbolPreset, "source">[] = [
   {
     id: "spire",
     label: "Spire",
@@ -202,6 +232,11 @@ export const SET_SYMBOL_PRESETS: SetSymbolPreset[] = [
   },
 ];
 
+export const SET_SYMBOL_PRESETS: SetSymbolPreset[] = SET_SYMBOL_PRESET_DEFINITIONS.map((preset) => ({
+  ...preset,
+  source: DEFAULT_SET_SYMBOL_SOURCES[preset.id],
+}));
+
 export function SetSymbolMark({
   presetId,
   imageUri,
@@ -210,6 +245,7 @@ export function SetSymbolMark({
   size,
   exportMode = false,
   exportFlattenMasks = false,
+  visualScale = 1,
 }: {
   presetId?: string;
   imageUri?: string;
@@ -220,14 +256,17 @@ export function SetSymbolMark({
   // Pre-flatten the masked metallic symbol into a plain raster image so the
   // html2canvas export renders it faithfully. Web-only.
   exportFlattenMasks?: boolean;
+  visualScale?: number;
 }) {
+  const visualSize = size * visualScale;
+
   if (imageUri) {
     if (usesRarityTreatment) {
       const treatment = RARITY_TREATMENTS[rarity];
       const fill = rarity === "common" ? treatment.fill : treatment.high;
 
       if (Platform.OS === "web" && exportFlattenMasks) {
-        return <FlattenedRaritySetSymbol symbolUri={imageUri} treatment={treatment} size={size} />;
+        return <FlattenedRaritySetSymbol symbolUri={imageUri} treatment={treatment} size={size} visualScale={visualScale} />;
       }
 
       if (Platform.OS === "web" && !exportMode) {
@@ -260,10 +299,10 @@ export function SetSymbolMark({
               style={[
                 {
                   position: "absolute",
-                  width: size,
-                  height: size,
+                  width: visualSize,
+                  height: visualSize,
                   opacity: 0.42,
-                  transform: [{ scale: 1.05 }, { translateX: size * 0.018 }, { translateY: size * 0.026 }],
+                  transform: [{ scale: 1.05 }, { translateX: visualSize * 0.018 }, { translateY: visualSize * 0.026 }],
                 },
                 createMaskStyle(treatment.shadow),
               ] as any}
@@ -272,8 +311,8 @@ export function SetSymbolMark({
               style={[
                 {
                   position: "absolute",
-                  width: size,
-                  height: size,
+                  width: visualSize,
+                  height: visualSize,
                   opacity: 1,
                   transform: [{ scale: 1.08 }],
                 },
@@ -283,8 +322,8 @@ export function SetSymbolMark({
             <View
               style={[
                 {
-                  width: size,
-                  height: size,
+                  width: visualSize,
+                  height: visualSize,
                 },
                 createMaskStyle(fillBackground),
               ] as any}
@@ -308,11 +347,11 @@ export function SetSymbolMark({
             resizeMode="contain"
             style={{
               position: "absolute",
-              width: size,
-              height: size,
+              width: visualSize,
+              height: visualSize,
               tintColor: treatment.outline,
               opacity: exportMode ? 0.58 : 0.42,
-              transform: [{ scale: 1.05 }, { translateX: size * 0.018 }, { translateY: size * 0.026 }],
+              transform: [{ scale: 1.05 }, { translateX: visualSize * 0.018 }, { translateY: visualSize * 0.026 }],
             }}
           />
           <Image
@@ -320,8 +359,8 @@ export function SetSymbolMark({
             source={{ uri: imageUri }}
             resizeMode="contain"
             style={{
-              width: size,
-              height: size,
+              width: visualSize,
+              height: visualSize,
               tintColor: fill,
             }}
           />
@@ -334,12 +373,27 @@ export function SetSymbolMark({
         accessibilityIgnoresInvertColors
         source={{ uri: imageUri }}
         resizeMode="contain"
-        style={{ width: size, height: size }}
+        style={{ width: visualSize, height: visualSize }}
       />
     );
   }
 
   const preset = getSetSymbolPreset(presetId);
+  const presetImageUri = resolveSetSymbolSourceUri(preset.source);
+
+  if (presetImageUri) {
+    return (
+      <SetSymbolMark
+        imageUri={presetImageUri}
+        usesRarityTreatment
+        rarity={rarity}
+        size={size}
+        exportMode={exportMode}
+        exportFlattenMasks={exportFlattenMasks}
+        visualScale={DEFAULT_PRESET_SET_SYMBOL_VISUAL_SCALE}
+      />
+    );
+  }
 
   return (
     <View
@@ -355,16 +409,43 @@ export function SetSymbolMark({
   );
 }
 
+function resolveSetSymbolSourceUri(source?: ImageSourcePropType) {
+  if (!source) {
+    return undefined;
+  }
+
+  if (typeof source === "object" && "uri" in source && typeof source.uri === "string") {
+    return source.uri;
+  }
+
+  const resolveAssetSource = (Image as typeof Image & {
+    resolveAssetSource?: (source: ImageSourcePropType) => { uri?: string } | null;
+  }).resolveAssetSource;
+
+  const reactNativeUri = resolveAssetSource?.(source)?.uri;
+  if (reactNativeUri) {
+    return reactNativeUri;
+  }
+
+  try {
+    return Asset.fromModule(source as number).uri;
+  } catch {
+    return undefined;
+  }
+}
+
 // Option B: composite the editor's three masked metallic layers (shadow,
 // outline, gradient fill) into one flat PNG so html2canvas can capture it.
 function FlattenedRaritySetSymbol({
   symbolUri,
   treatment,
   size,
+  visualScale,
 }: {
   symbolUri: string;
   treatment: { fill: string; high: string; low: string; outline: string; shadow: string };
   size: number;
+  visualScale: number;
 }) {
   const [uri, setUri] = useState<string | null>(null);
 
@@ -404,6 +485,8 @@ function FlattenedRaritySetSymbol({
     };
   }, [symbolUri, treatment.shadow, treatment.outline, treatment.high, treatment.fill, treatment.low]);
 
+  const visualSize = size * visualScale;
+
   return (
     <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
       {uri ? (
@@ -411,7 +494,7 @@ function FlattenedRaritySetSymbol({
           accessibilityIgnoresInvertColors
           source={{ uri }}
           resizeMode="contain"
-          style={{ width: size, height: size }}
+          style={{ width: visualSize, height: visualSize }}
         />
       ) : null}
     </View>

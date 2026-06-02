@@ -23,6 +23,14 @@ serve(async (request) => {
   }
 
   try {
+    const supabaseUrl = requireEnv("SUPABASE_URL").replace(/\/$/, "");
+    const supabaseAnonKey = requireEnv("SUPABASE_ANON_KEY");
+    const user = await getAuthenticatedUser(supabaseUrl, supabaseAnonKey, request.headers.get("Authorization"));
+
+    if (!user) {
+      return json({ error: "Sign in before starting checkout." }, 401);
+    }
+
     const stripeSecretKey = requireEnv("STRIPE_SECRET_KEY");
     const priceMap = JSON.parse(requireEnv("CARDMAGIC_STRIPE_PRICE_MAP")) as Record<CheckoutProductId, string>;
     const { productId, successUrl, cancelUrl } = await request.json() as {
@@ -33,12 +41,6 @@ serve(async (request) => {
 
     if (!productId || !priceMap[productId]) {
       return json({ error: "Unknown checkout product." }, 400);
-    }
-
-    const user = getAuthenticatedUser(request.headers.get("Authorization"));
-
-    if (!user) {
-      return json({ error: "Sign in before starting checkout." }, 401);
     }
 
     const fallbackSiteUrl = requireEnv("CARDMAGIC_SITE_URL").replace(/\/$/, "");
@@ -81,38 +83,37 @@ serve(async (request) => {
   }
 });
 
-function getAuthenticatedUser(authorization: string | null): SupabaseAuthUser | null {
+async function getAuthenticatedUser(
+  supabaseUrl: string,
+  supabaseAnonKey: string,
+  authorization: string | null,
+): Promise<SupabaseAuthUser | null> {
   if (!authorization?.startsWith("Bearer ")) {
     return null;
   }
 
   const token = authorization.slice("Bearer ".length);
-  const payload = decodeJwtPayload(token);
+  const userResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: supabaseAnonKey,
+    },
+  });
 
-  if (!payload?.sub) {
+  if (!userResponse.ok) {
+    return null;
+  }
+
+  const user = await userResponse.json();
+
+  if (typeof user?.id !== "string") {
     return null;
   }
 
   return {
-    id: payload.sub,
-    email: typeof payload.email === "string" ? payload.email : null,
+    id: user.id,
+    email: typeof user.email === "string" ? user.email : null,
   };
-}
-
-function decodeJwtPayload(token: string): { sub?: string; email?: unknown } | null {
-  const payload = token.split(".")[1];
-
-  if (!payload) {
-    return null;
-  }
-
-  try {
-    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, "=");
-    return JSON.parse(atob(paddedPayload));
-  } catch {
-    return null;
-  }
 }
 
 function requireEnv(name: string) {

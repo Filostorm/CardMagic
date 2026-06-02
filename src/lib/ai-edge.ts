@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 
+import type { CreditSpendCategory } from "@/lib/progression";
 import { supabase, supabaseAnonKey, supabaseUrl } from "@/lib/supabase";
 
 export type AiImageGenerationOptions = {
@@ -12,7 +13,20 @@ export type AiImageResult = {
   url?: string;
 };
 
-type AiImageFunctionResponse = AiImageResult & {
+export type AiCreditSpendReceipt = {
+  transactionId?: string | null;
+  category?: CreditSpendCategory;
+  cost?: number;
+  balanceAfter?: number;
+  levelReward?: number;
+};
+
+export type AiCreditProgressResponse = {
+  progress?: unknown;
+  creditSpend?: AiCreditSpendReceipt;
+};
+
+type AiImageFunctionResponse = AiImageResult & AiCreditProgressResponse & {
   error?: string;
 };
 
@@ -35,7 +49,7 @@ export type SubjectMatteDiagnostics = {
   attempts?: SubjectMatteDiagnosticAttempt[];
 };
 
-type SubjectMatteFunctionResponse = AiImageResult & {
+type SubjectMatteFunctionResponse = AiImageResult & AiCreditProgressResponse & {
   provider?: "fal" | "fal-sam" | "replicate";
   // One cutout URL per matched concept (prompted multi-concept segmentation).
   // The client unions these into a single matte.
@@ -46,7 +60,12 @@ type SubjectMatteFunctionResponse = AiImageResult & {
   error?: string;
 };
 
+const OPENAI_IMAGE_EDGE_TIMEOUT_MS = 90000;
+const OPENAI_RULES_TEXT_EDGE_TIMEOUT_MS = 30000;
 const SUBJECT_MATTE_EDGE_TIMEOUT_MS = 30000;
+const EDGE_IMAGE_FETCH_TIMEOUT_MS = 20000;
+const MAX_EDGE_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
+const BASE64_CHUNK_SIZE = 0x8000;
 
 export class SubjectMatteProviderError extends Error {
   readonly diagnostics?: SubjectMatteDiagnostics;
@@ -61,21 +80,22 @@ export class SubjectMatteProviderError extends Error {
 export async function generateAiImageViaEdge({
   prompt,
   options,
+  spendCategory,
 }: {
   prompt: string;
   options: AiImageGenerationOptions;
+  spendCategory?: CreditSpendCategory;
 }) {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
   }
 
-  const { data, error } = await supabase.functions.invoke<AiImageFunctionResponse>("openai-generate-image", {
-    body: { prompt, options },
+  const data = await invokeAiEdgeFunction<AiImageFunctionResponse>({
+    functionName: "openai-generate-image",
+    actionLabel: "generating images",
+    timeoutMs: OPENAI_IMAGE_EDGE_TIMEOUT_MS,
+    body: { prompt, options, spendCategory },
   });
-
-  if (error) {
-    throw new Error(error.message);
-  }
 
   if (data?.b64Json || data?.url) {
     return data;
@@ -88,23 +108,24 @@ export async function generateAiImageEditViaEdge({
   imageUri,
   prompt,
   size,
+  spendCategory,
 }: {
   imageUri: string;
   prompt: string;
   size: AiImageGenerationOptions["size"];
+  spendCategory?: CreditSpendCategory;
 }) {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
   }
 
   const imageDataUrl = await imageUriToDataUrl(imageUri);
-  const { data, error } = await supabase.functions.invoke<AiImageFunctionResponse>("openai-edit-image", {
-    body: { imageDataUrl, prompt, size },
+  const data = await invokeAiEdgeFunction<AiImageFunctionResponse>({
+    functionName: "openai-edit-image",
+    actionLabel: "editing images",
+    timeoutMs: OPENAI_IMAGE_EDGE_TIMEOUT_MS,
+    body: { imageDataUrl, prompt, size, spendCategory },
   });
-
-  if (error) {
-    throw new Error(error.message);
-  }
 
   if (data?.b64Json || data?.url) {
     return data;
@@ -124,6 +145,7 @@ export async function generateSubjectMatteViaEdge({
     throw new Error("Supabase is not configured.");
   }
 
+  const accessToken = await getRequiredSupabaseAccessToken("generating subject masks");
   const imageDataUrl = await imageUriToDataUrl(imageUri);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SUBJECT_MATTE_EDGE_TIMEOUT_MS);
@@ -134,7 +156,7 @@ export async function generateSubjectMatteViaEdge({
       method: "POST",
       headers: {
         apikey: supabaseAnonKey,
-        authorization: `Bearer ${supabaseAnonKey}`,
+        authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({ imageDataUrl, targetPrompt }),
@@ -174,13 +196,12 @@ export async function fixRulesTextViaEdge(prompt: string) {
     throw new Error("Supabase is not configured.");
   }
 
-  const { data, error } = await supabase.functions.invoke<AiRulesTextFunctionResponse>("openai-fix-rules-text", {
+  const data = await invokeAiEdgeFunction<AiRulesTextFunctionResponse>({
+    functionName: "openai-fix-rules-text",
+    actionLabel: "fixing rules text",
+    timeoutMs: OPENAI_RULES_TEXT_EDGE_TIMEOUT_MS,
     body: { prompt },
   });
-
-  if (error) {
-    throw new Error(error.message);
-  }
 
   if (data?.content) {
     return data.content;
@@ -191,23 +212,41 @@ export async function fixRulesTextViaEdge(prompt: string) {
 
 async function imageUriToDataUrl(uri: string) {
   if (uri.startsWith("data:")) {
+    assertDataUrlWithinUploadLimit(uri);
     return uri;
   }
 
   if (Platform.OS !== "web" && uri.startsWith("file://")) {
     const FileSystem = await import("expo-file-system");
+    const info = await FileSystem.getInfoAsync(uri);
+
+    if (info.exists && typeof info.size === "number" && info.size > MAX_EDGE_IMAGE_UPLOAD_BYTES) {
+      throw new Error("Image is too large for AI processing.");
+    }
+
     const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
 
     return `data:image/${getImageUriExtension(uri, "png") === "jpg" ? "jpeg" : getImageUriExtension(uri, "png")};base64,${base64}`;
   }
 
-  const response = await fetch(uri);
+  const response = await fetchWithTimeout(
+    uri,
+    undefined,
+    EDGE_IMAGE_FETCH_TIMEOUT_MS,
+    "Image download timed out before AI processing could start.",
+  );
 
   if (!response.ok) {
     throw new Error(`Image fetch failed with ${response.status}.`);
   }
 
   const blob = await response.blob();
+  assertBlobWithinUploadLimit(blob);
+
+  if (Platform.OS === "web" && typeof FileReader !== "undefined") {
+    return await blobToDataUrl(blob);
+  }
+
   const buffer = await blob.arrayBuffer();
   const base64 = arrayBufferToBase64(buffer);
   const mimeType = blob.type || `image/${getImageUriExtension(uri, "png")}`;
@@ -215,12 +254,147 @@ async function imageUriToDataUrl(uri: string) {
   return `data:${mimeType};base64,${base64}`;
 }
 
+async function getRequiredSupabaseAccessToken(actionLabel: string) {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.auth.getSession();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const token = data.session?.access_token;
+
+  if (!token) {
+    throw new Error(`Sign in before ${actionLabel}.`);
+  }
+
+  return token;
+}
+
+async function invokeAiEdgeFunction<T extends { error?: string }>({
+  functionName,
+  actionLabel,
+  body,
+  timeoutMs,
+}: {
+  functionName: string;
+  actionLabel: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+}) {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const accessToken = await getRequiredSupabaseAccessToken(actionLabel);
+  const clientRequestId = createClientRequestId();
+  const response = await fetchWithTimeout(
+    `${supabaseUrl.replace(/\/$/, "")}/functions/v1/${functionName}`,
+    {
+      method: "POST",
+      headers: {
+        apikey: supabaseAnonKey,
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+        "x-cardmagic-request-id": clientRequestId,
+      },
+      body: JSON.stringify({ ...body, clientRequestId }),
+    },
+    timeoutMs,
+    `CardMagic timed out while ${actionLabel}. Try again in a moment.`,
+  );
+  const data = await response.json().catch(() => null) as T | null;
+
+  if (!response.ok) {
+    throw new Error(data?.error ?? `${functionName} failed with HTTP ${response.status}.`);
+  }
+
+  return data ?? ({} as T);
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  timeoutMessage: string,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(timeoutMessage);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function createClientRequestId() {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+
+  if (randomUuid) {
+    return randomUuid;
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function assertDataUrlWithinUploadLimit(dataUrl: string) {
+  const base64 = dataUrl.match(/^data:[^;]+;base64,(.+)$/)?.[1];
+
+  if (!base64) {
+    return;
+  }
+
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const byteLength = Math.floor((base64.length * 3) / 4) - padding;
+
+  if (byteLength > MAX_EDGE_IMAGE_UPLOAD_BYTES) {
+    throw new Error("Image is too large for AI processing.");
+  }
+}
+
+function assertBlobWithinUploadLimit(blob: Blob) {
+  if (blob.size > MAX_EDGE_IMAGE_UPLOAD_BYTES) {
+    throw new Error("Image is too large for AI processing.");
+  }
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Image could not be converted for AI processing."));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Image could not be read for AI processing."));
+    reader.readAsDataURL(blob);
+  });
+}
+
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   let binary = "";
   const bytes = new Uint8Array(buffer);
 
-  for (let index = 0; index < bytes.length; index += 1) {
-    binary += String.fromCharCode(bytes[index]);
+  for (let index = 0; index < bytes.length; index += BASE64_CHUNK_SIZE) {
+    const chunk = bytes.subarray(index, index + BASE64_CHUNK_SIZE);
+    binary += String.fromCharCode(...chunk);
   }
 
   return btoa(binary);

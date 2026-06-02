@@ -1,11 +1,22 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
+import {
+  AiCreditSpendError,
+  refundAiCreditSpend,
+  spendAiCredits,
+  type AiCreditSpendCategory,
+} from "../_shared/ai-credits.ts";
+
 type ImageEditSize = "1024x1024" | "1536x1024" | "1024x1536";
 
 const OPENAI_IMAGE_MODELS = ["gpt-image-1.5", "gpt-image-1"] as const;
+const MAX_JSON_BODY_BYTES = 12 * 1024 * 1024;
+const MAX_IMAGE_DATA_URL_CHARS = 10 * 1024 * 1024;
+const MAX_PROMPT_LENGTH = 4000;
+const IMAGE_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cardmagic-request-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -19,31 +30,147 @@ serve(async (request) => {
   }
 
   try {
-    const { imageDataUrl, prompt, size } = await request.json() as {
+    const user = await getAuthenticatedUser(request.headers.get("Authorization"));
+
+    if (!user) {
+      return json({ error: "Sign in before editing images." }, 401);
+    }
+
+    const { imageDataUrl, prompt, size, clientRequestId } = await readJsonBody<{
       imageDataUrl?: string;
       prompt?: string;
       size?: ImageEditSize;
-    };
+      spendCategory?: AiCreditSpendCategory;
+      clientRequestId?: string;
+    }>(request, MAX_JSON_BODY_BYTES);
+    const normalizedPrompt = prompt?.trim() ?? "";
 
     if (!imageDataUrl?.startsWith("data:image/")) {
       return json({ error: "A data URL image is required." }, 400);
     }
 
-    if (!prompt?.trim()) {
+    if (imageDataUrl.length > MAX_IMAGE_DATA_URL_CHARS) {
+      return json({ error: "Image is too large for AI editing." }, 413);
+    }
+
+    if (!normalizedPrompt) {
       return json({ error: "Prompt is required." }, 400);
     }
 
-    const result = await editImage({
-      imageFile: dataUrlToFile(imageDataUrl, "card-art.png"),
-      prompt,
-      size: size ?? "1024x1024",
+    if (normalizedPrompt.length > MAX_PROMPT_LENGTH) {
+      return json({ error: `Prompt must be ${MAX_PROMPT_LENGTH} characters or fewer.` }, 400);
+    }
+
+    if (size && !IMAGE_SIZES.has(size)) {
+      return json({ error: "Unsupported image size." }, 400);
+    }
+
+    const supabaseUrl = requireEnv("SUPABASE_URL").replace(/\/$/, "");
+    const supabaseAnonKey = requireEnv("SUPABASE_ANON_KEY");
+    const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const spend = await spendAiCredits({
+      supabaseUrl,
+      supabaseAnonKey,
+      accessToken: user.accessToken,
+      category: "artImage",
+      source: "openai-edit-image",
+      referenceId: createAiSpendReferenceId("openai-edit-image", clientRequestId),
+      metadata: {
+        size: size ?? "1024x1024",
+      },
     });
 
-    return json(result);
+    try {
+      const result = await editImage({
+        imageFile: dataUrlToFile(imageDataUrl, "card-art.png"),
+        prompt: normalizedPrompt,
+        size: size ?? "1024x1024",
+      });
+
+      return json({ ...result, progress: spend.progress, creditSpend: spend });
+    } catch (providerError) {
+      await refundAiCreditSpend({
+        supabaseUrl,
+        serviceRoleKey,
+        userId: user.id,
+        spend,
+        reason: providerError instanceof Error ? providerError.message : "OpenAI image edit failed.",
+      }).catch((refundError) => {
+        console.warn("Unable to refund failed OpenAI image edit.", refundError);
+      });
+
+      throw providerError;
+    }
   } catch (error) {
+    if (error instanceof RequestValidationError) {
+      return json({ error: error.message }, error.status);
+    }
+
+    if (error instanceof AiCreditSpendError) {
+      return json({ error: error.message }, error.status);
+    }
+
     return json({ error: error instanceof Error ? error.message : "OpenAI image edit failed." }, 500);
   }
 });
+
+type SupabaseAuthUser = {
+  id: string;
+  accessToken: string;
+};
+
+class RequestValidationError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "RequestValidationError";
+    this.status = status;
+  }
+}
+
+async function getAuthenticatedUser(authorization: string | null): Promise<SupabaseAuthUser | null> {
+  if (!authorization?.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const supabaseUrl = requireEnv("SUPABASE_URL").replace(/\/$/, "");
+  const supabaseAnonKey = requireEnv("SUPABASE_ANON_KEY");
+  const token = authorization.slice("Bearer ".length);
+  const userResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: supabaseAnonKey,
+    },
+  });
+
+  if (!userResponse.ok) {
+    return null;
+  }
+
+  const user = await userResponse.json();
+  return typeof user?.id === "string" ? { id: user.id, accessToken: token } : null;
+}
+
+async function readJsonBody<T>(request: Request, maxBytes: number): Promise<T> {
+  const contentLength = Number(request.headers.get("Content-Length") ?? "0");
+
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new RequestValidationError("Request body is too large.", 413);
+  }
+
+  const body = await request.text();
+
+  if (body.length > maxBytes) {
+    throw new RequestValidationError("Request body is too large.", 413);
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new RequestValidationError("Request body must be valid JSON.", 400);
+  }
+}
 
 async function editImage({
   imageFile,
@@ -128,6 +255,16 @@ function shouldTryNextOpenAiModel(error: Error) {
   );
 }
 
+function createAiSpendReferenceId(source: string, clientRequestId: unknown) {
+  if (typeof clientRequestId !== "string") {
+    return undefined;
+  }
+
+  const normalizedRequestId = clientRequestId.trim().slice(0, 96).replace(/[^a-z0-9._:-]+/gi, "-");
+
+  return normalizedRequestId ? `${source}:${normalizedRequestId}` : undefined;
+}
+
 function requireEnv(name: string) {
   const value = Deno.env.get(name);
 
@@ -144,4 +281,3 @@ function json(body: unknown, status = 200) {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
-

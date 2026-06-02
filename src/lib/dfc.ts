@@ -1,29 +1,6 @@
 import { CardDraft, DfcMode } from "@/types/card";
 import { getFrameColors } from "@/lib/card-style";
 
-type FacePatch = Pick<
-  Partial<CardDraft>,
-  | "name"
-  | "baseCardName"
-  | "manaCost"
-  | "typeLine"
-  | "rulesText"
-  | "rulesTextColors"
-  | "rulesTextColor"
-  | "flavorText"
-  | "keywords"
-  | "power"
-  | "toughness"
-  | "artUri"
-  | "artSubjectMaskUri"
-  | "artSubjectMaskComponents"
-  | "artTransform"
-  | "frameSelection"
-  | "frameColors"
-  | "frameTreatment"
-  | "showcaseFrame"
->;
-
 export function isDfcBackFace(card: CardDraft): boolean {
   return isTransformingTypeFrame(card) && card.dfcFace === "back";
 }
@@ -66,6 +43,7 @@ export function getEditableCardFace(card: CardDraft): CardDraft {
     toughness: card.backToughness ?? backDefaults.backToughness ?? "",
     artUri: card.backArtUri,
     artSubjectMaskUri: card.backArtSubjectMaskUri,
+    artSubjectMaskDisabled: card.backArtSubjectMaskDisabled,
     artSubjectMaskComponents: card.backArtSubjectMaskComponents,
     artTransform: card.backArtTransform,
     frameSelection:
@@ -95,6 +73,7 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
     toughness,
     artUri,
     artSubjectMaskUri,
+    artSubjectMaskDisabled,
     artSubjectMaskComponents,
     artTransform,
     frameSelection,
@@ -155,6 +134,10 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
 
   if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskUri")) {
     nextPatch.backArtSubjectMaskUri = artSubjectMaskUri;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskDisabled")) {
+    nextPatch.backArtSubjectMaskDisabled = artSubjectMaskDisabled;
   }
 
   if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskComponents")) {

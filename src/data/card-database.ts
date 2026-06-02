@@ -45,6 +45,12 @@ type SearchCandidate = {
   normalizedLabel: string;
 };
 
+type ScoredSearchCandidate = {
+  entry: CardDatabaseEntry;
+  index: number;
+  score: number;
+};
+
 const MAX_SEARCH_POOL = 80;
 const SPLIT_LAYOUTS = new Set(["split", "aftermath"]);
 const DFC_LAYOUTS = new Set(["transform", "modal_dfc"]);
@@ -56,6 +62,7 @@ const LOYALTY_ABILITY_PATTERN = /^([+−-]?\d+|0):\s*(.+)$/;
 const SHORT_FUZZY_TOKEN_LENGTH = 3;
 
 const searchableBaseCards = rawDatabase.cards.filter(isSearchableBaseCard);
+const searchableBaseCardsById = new Map(searchableBaseCards.map((entry) => [entry.id, entry]));
 const searchCandidates = buildSearchCandidates(searchableBaseCards);
 
 export function getCardDatabaseMetadata(): CardDatabaseMetadata {
@@ -76,31 +83,67 @@ export function searchCardDatabase(query: string, limit = 8): CardDatabaseEntry[
     return [];
   }
 
-  const seen = new Set<string>();
-  const scored = searchCandidates
-    .map((candidate, index) => ({
-      entry: candidate.entry,
-      index,
-      score: scoreCandidate(normalizedQuery, candidate.normalizedLabel),
-    }))
-    .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score || left.index - right.index);
-  const results: CardDatabaseEntry[] = [];
+  const bestByCardId = new Map<string, ScoredSearchCandidate>();
 
-  for (const candidate of scored.slice(0, MAX_SEARCH_POOL)) {
-    if (seen.has(candidate.entry.id)) {
+  for (let index = 0; index < searchCandidates.length; index += 1) {
+    const candidate = searchCandidates[index];
+    const score = scoreCandidate(normalizedQuery, candidate.normalizedLabel);
+
+    if (score <= 0) {
       continue;
     }
 
-    seen.add(candidate.entry.id);
-    results.push(candidate.entry);
+    const scoredCandidate = {
+      entry: candidate.entry,
+      index,
+      score,
+    };
+    const existingCandidate = bestByCardId.get(candidate.entry.id);
 
-    if (results.length >= limit) {
-      break;
+    if (!existingCandidate || isScoredSearchCandidateBefore(scoredCandidate, existingCandidate)) {
+      bestByCardId.set(candidate.entry.id, scoredCandidate);
     }
   }
 
-  return results;
+  const topCandidates: ScoredSearchCandidate[] = [];
+  const poolLimit = Math.max(limit, MAX_SEARCH_POOL);
+
+  for (const candidate of bestByCardId.values()) {
+    insertTopSearchCandidate(topCandidates, candidate, poolLimit);
+  }
+
+  return topCandidates.slice(0, limit).map((candidate) => candidate.entry);
+}
+
+export function getCardDatabaseEntryById(id: string): CardDatabaseEntry | null {
+  return searchableBaseCardsById.get(id) ?? null;
+}
+
+function insertTopSearchCandidate(
+  pool: ScoredSearchCandidate[],
+  candidate: ScoredSearchCandidate,
+  limit: number,
+) {
+  if (pool.length >= limit && !isScoredSearchCandidateBefore(candidate, pool[pool.length - 1])) {
+    return;
+  }
+
+  const insertAt = pool.findIndex((existingCandidate) =>
+    isScoredSearchCandidateBefore(candidate, existingCandidate),
+  );
+
+  pool.splice(insertAt === -1 ? pool.length : insertAt, 0, candidate);
+
+  if (pool.length > limit) {
+    pool.pop();
+  }
+}
+
+function isScoredSearchCandidateBefore(
+  left: ScoredSearchCandidate,
+  right: ScoredSearchCandidate,
+) {
+  return left.score > right.score || (left.score === right.score && left.index < right.index);
 }
 
 export function getCardDatabaseEntryPrimaryFace(entry: CardDatabaseEntry): CardDatabaseFace {

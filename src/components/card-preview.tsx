@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { Pencil } from "lucide-react-native";
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -49,7 +49,6 @@ import {
   getTokenFrameSource,
   getTokenPtBoxSource,
   getTypeFrameOverlaySource,
-  getTypeFrameSpec,
 } from "@/data/full-magic-pack";
 import type { TokenFrameVariant } from "@/data/full-magic-pack";
 import {
@@ -77,8 +76,7 @@ import {
   getMseM15SecurityStampSource,
   getMseM15StandardArtifactColorMainframeSource,
   getMseM15StandardColorSecurityStampBackingSource,
-  getMseM15TransparentBorderlessDarkTextboxFillSource,
-  getMseM15TransparentBorderlessFrameMaskSource,
+  getMseM15BorderlessDarkTextboxFillSource,
   getMseM15TypeLineTextureSource,
   getMseM15TypeFrameSource,
   MseM15OverlayLayer,
@@ -89,7 +87,6 @@ import {
 } from "@/data/mse-frame-blends";
 import {
   FRAME_STYLES,
-  getManaColors,
   getFrameColors,
   getManualFrameColors,
   hasPowerToughnessBox,
@@ -104,7 +101,6 @@ import {
   getDfcMode,
   getNextDfcFacePatch,
   isDfcBackFace,
-  shouldShowDfcFaceManaCost,
   toDfcFacePatch,
 } from "@/lib/dfc";
 import {
@@ -144,6 +140,13 @@ import {
   ShowcaseFrameSpec,
 } from "@/data/showcase-frames";
 import {
+  createCardPreviewFrameModel,
+  shouldRenderDfcFrontWithStandardTreatmentGeometry,
+  shouldShowDfcColorIndicator,
+  shouldUseMseM15ColorBlend,
+  supportsFrameEffectOverlays,
+} from "@/components/card-preview/card-preview-model";
+import {
   ArtTransform,
   CardDraft,
   CardSection,
@@ -156,6 +159,12 @@ import {
   SplitCardHalf,
   TypeFrame,
 } from "@/types/card";
+
+function getSvgMaskTypeProps(maskType: "alpha" | "luminance"): Partial<ComponentProps<typeof Mask>> {
+  return Platform.OS === "web"
+    ? ({ style: { maskType } } as Partial<ComponentProps<typeof Mask>>)
+    : ({ maskType } as Partial<ComponentProps<typeof Mask>>);
+}
 
 type CardPreviewProps = {
   card: CardDraft;
@@ -251,7 +260,6 @@ const FRAME_TREATMENT_ART_RECTS: Record<FrameTreatment, CoordinateRect> = {
   fullArt: { x: 23, y: 59, width: 328, height: 423 },
   extendedArt: { x: 32, y: 62, width: 311, height: 376 },
   borderless: { x: 0, y: 0, width: 375, height: 523 },
-  transparentBorderless: { x: 0, y: 0, width: 375, height: 523 },
   promo: { x: 24, y: 52, width: 327, height: 422 },
   showcase: { x: 0, y: 0, width: 375, height: 523 },
   textless: { x: 29, y: 59, width: 316, height: 424 },
@@ -319,19 +327,6 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
   borderless: {
     ...DEFAULT_FRAME_TREATMENT_LAYOUT,
     art: FRAME_TREATMENT_ART_RECTS.borderless,
-    name: { x: 32, y: 30, width: 226, height: 23 },
-    manaCost: { x: 263, y: 28, width: 83, height: 23 },
-    typeLine: { x: 28, y: 296, width: 274, height: 20 },
-    setSymbol: { x: 304, y: 297, width: 40, height: 22 },
-    textArea: { x: 35, y: 327, width: 304, height: 154 },
-    rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
-    ptBox: { x: 273, y: 466, width: 81, height: 42 },
-    powerToughness: { x: 286, y: 471, width: 60, height: 28 },
-    footer: { x: 24, y: 488, width: 326, height: 20 },
-  },
-  transparentBorderless: {
-    ...DEFAULT_FRAME_TREATMENT_LAYOUT,
-    art: FRAME_TREATMENT_ART_RECTS.transparentBorderless,
     name: { x: 32, y: 30, width: 226, height: 23 },
     manaCost: { x: 263, y: 28, width: 83, height: 23 },
     typeLine: { x: 28, y: 296, width: 274, height: 20 },
@@ -895,7 +890,7 @@ function MaskedSecurityStampPinlineBump({
             width={rect.width}
             height={rect.height}
             maskUnits="userSpaceOnUse"
-            maskType="luminance"
+            {...getSvgMaskTypeProps("luminance")}
           >
             <SvgImage
               href={maskSource as never}
@@ -1310,9 +1305,8 @@ function ModernPrintingFooter({
   footerOwnerName?: string;
 }) {
   const isBattle = variant === "battle";
-  const isToken = variant === "token";
   const isFutureshifted = variant === "futureshifted";
-  const footerInk = isToken ? "#171512" : "#f6f0df";
+  const footerInk = "#f6f0df";
   const collectorFontSize = (isBattle ? 8.6 : 8.2) * scale;
   const collectorLineHeight = (isBattle ? 9.4 : 8.8) * scale;
   const detailFontSize = (isBattle ? 7.6 : 7.25) * scale;
@@ -1326,6 +1320,7 @@ function ModernPrintingFooter({
   const artistFontFamily = FULL_MAGIC_PACK.fontFamilies.footerArtist;
   const legalFontFamily = FULL_MAGIC_PACK.fontFamilies.footerLegal;
   const copyrightLine = getCardMagicFooterCopyrightLine(card, footerOwnerName);
+  const artistArrowSource = FULL_MAGIC_PACK.artistArrowLight;
 
   if (isFutureshifted) {
     const futureFrameIdentity = inferFrameIdentity(card);
@@ -1436,7 +1431,7 @@ function ModernPrintingFooter({
     );
   }
 
-  if (!isBattle && !isToken) {
+  if (!isBattle) {
     return (
       <View
         style={{
@@ -1487,7 +1482,7 @@ function ModernPrintingFooter({
             </Text>
             <Image
               accessibilityIgnoresInvertColors
-              source={FULL_MAGIC_PACK.artistArrowLight}
+                source={artistArrowSource}
               resizeMode="contain"
               style={{
                 width: arrowWidth,
@@ -1585,7 +1580,7 @@ function ModernPrintingFooter({
           </Text>
           <Image
             accessibilityIgnoresInvertColors
-            source={FULL_MAGIC_PACK.artistArrowLight}
+            source={artistArrowSource}
             resizeMode="contain"
             style={{
               width: arrowWidth,
@@ -1707,29 +1702,34 @@ function CardPreviewComponent({
   onSectionPress,
   onChange,
 }: CardPreviewProps) {
-  const faceCard = getEditableCardFace(card);
-  const frameIdentity = inferFrameIdentity(faceCard);
-  const frameStyle = inferFrameStyle(faceCard);
-  const selectedTypeFrame = card.typeFrame ?? "standard";
-  const isBattleBackFace = selectedTypeFrame === "battle" && isDfcBackFace(card);
-  const isBattleFrontFace = selectedTypeFrame === "battle" && !isBattleBackFace;
-  const isDfcCardFace = selectedTypeFrame === "dfc";
-  const isDfcBack = isDfcCardFace && isDfcBackFace(card);
-  const frameTreatment = isDfcBack ? card.backFrameTreatment ?? "standard" : card.frameTreatment ?? "standard";
-  const renderDfcFrontWithStandardTreatmentGeometry =
-    isDfcCardFace && !isDfcBack && shouldRenderDfcFrontWithStandardTreatmentGeometry(frameTreatment);
-  const showcaseFrame = isDfcBack
-    ? card.backShowcaseFrame ?? DEFAULT_SHOWCASE_FRAME
-    : card.showcaseFrame ?? DEFAULT_SHOWCASE_FRAME;
-  const typeFrame =
-    isBattleBackFace || isDfcBack || renderDfcFrontWithStandardTreatmentGeometry
-      ? "standard"
-      : selectedTypeFrame;
+  const frameModel = useMemo(() => createCardPreviewFrameModel(card), [card]);
+  const {
+    faceCard,
+    frameIdentity,
+    frameStyle,
+    selectedTypeFrame,
+    isBattleFrontFace,
+    isDfcBack,
+    frameTreatment,
+    showcaseFrame,
+    typeFrame,
+    showcaseSpec,
+    typeFrameSpec,
+    showManaCost,
+    manaSymbols,
+    frameColors,
+    manualFrameColors,
+    resolvedMseColorBlend,
+    usesArtifactBaseFrame,
+    shouldUseSubjectMaskAsPrimaryArt,
+    mseColorBlend,
+    mseAccentColorBlend,
+    useGoldRegularFrame,
+    regularFrameIdentity,
+    regularMseColorBlend,
+    regularFrameStyle,
+  } = frameModel;
   const baseTreatmentLayout = typeFrame === "standard" ? FRAME_TREATMENT_LAYOUTS[frameTreatment] : null;
-  const showcaseSpec =
-    typeFrame === "standard" && frameTreatment === "showcase"
-      ? getShowcaseFrameSpec(showcaseFrame)
-      : null;
   const isFutureshiftedShowcase = showcaseSpec?.id === "futureshifted";
   const treatmentLayout = isFutureshiftedShowcase
     ? FUTURESHIFTED_TREATMENT_LAYOUT
@@ -1737,35 +1737,14 @@ function CardPreviewComponent({
       ? STELLAR_SIGHTS_TREATMENT_LAYOUT
       : baseTreatmentLayout;
   const isRetroTreatment = typeFrame === "standard" && frameTreatment === "retro";
-  const isTransparentBorderlessTreatment =
-    typeFrame === "standard" && frameTreatment === "transparentBorderless";
   const isBorderlessTreatment =
-    typeFrame === "standard" && (frameTreatment === "borderless" || frameTreatment === "transparentBorderless");
-  const typeFrameSpec = getTypeFrameSpec(typeFrame);
-  const showManaCost = shouldShowDfcFaceManaCost(card);
-  const manaSymbols = showManaCost ? parseManaCost(faceCard.manaCost) : [];
+    typeFrame === "standard" && frameTreatment === "borderless";
   const [isManaCostFocused, setIsManaCostFocused] = useState(false);
   const shouldReserveTitleManaCostSpace =
     showManaCost && (!isDfcBackFace(card) || manaSymbols.length > 0 || isManaCostFocused);
-  const manaColors = getManaColors(faceCard.manaCost);
-  const frameColors = getFrameColors(faceCard);
-  const manualFrameColors = getManualFrameColors(faceCard);
-  const resolvedMseColorBlend = shouldUseMseM15ColorBlend(faceCard, frameColors)
-    ? getMseM15ColorBlend(frameColors, manualFrameColors.length > 0 ? "" : faceCard.manaCost)
-    : null;
-  const usesArtifactBaseFrame = frameIdentity === "artifact";
-  const mseColorBlend = usesArtifactBaseFrame ? null : resolvedMseColorBlend;
-  const mseAccentColorBlend = resolvedMseColorBlend;
-  const useGoldRegularFrame =
-    typeFrame === "standard" &&
-    (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "transparentBorderless") &&
-    frameColors.length > 2;
-  const regularFrameIdentity = useGoldRegularFrame ? "gold" : frameIdentity;
-  const regularMseColorBlend = useGoldRegularFrame ? null : mseColorBlend;
-  const regularFrameStyle = useGoldRegularFrame ? FRAME_STYLES.gold : frameStyle;
   const artifactMainframeColorSource =
     typeFrame === "standard" &&
-    (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "transparentBorderless") &&
+    (frameTreatment === "standard" || frameTreatment === "borderless") &&
     usesArtifactBaseFrame &&
     frameColors.length > 0
       ? getMseM15StandardArtifactColorMainframeSource(frameColors, mseAccentColorBlend)
@@ -1776,7 +1755,7 @@ function CardPreviewComponent({
     typeFrame === "saga" ? "black" : getSecurityStampBackingFrameIdentity(regularFrameIdentity, frameColors);
   const artifactStampBackingSource =
     typeFrame === "standard" &&
-    (frameTreatment === "standard" || frameTreatment === "borderless" || frameTreatment === "transparentBorderless") &&
+    (frameTreatment === "standard" || frameTreatment === "borderless") &&
     usesArtifactBaseFrame &&
     frameColors.length <= 2 &&
     frameColors.length > 0
@@ -1824,7 +1803,7 @@ function CardPreviewComponent({
   const showArtGenerating = artGenerating && !exportMode;
   const [imageAspectRatio, setImageAspectRatio] = useState<number | null>(initialArtImageAspectRatio ?? null);
   const hasShowcaseArtTreatment = Boolean(showcaseSpec?.artMask || showcaseSpec?.artFilter || showcaseSpec?.artOverlay);
-  const suppressSecurityStamp = showcaseSpec?.id === "dndRulebook";
+  const suppressSecurityStamp = typeFrame === "token" || showcaseSpec?.id === "dndRulebook";
   const securityStamped = !suppressSecurityStamp && shouldShowSecurityStamp(card, faceCard, typeFrame);
   const showStampPinlineBump = false;
   const borderlessTreatmentFrameBlendSources =
@@ -1839,7 +1818,7 @@ function CardPreviewComponent({
     borderlessTreatmentFrameBlendSources ?? textlessTreatmentFrameBlendSources;
   const borderlessDarkTextboxFillSource =
     typeFrame === "standard" && frameTreatment === "borderless"
-      ? getMseM15TransparentBorderlessDarkTextboxFillSource()
+      ? getMseM15BorderlessDarkTextboxFillSource()
       : null;
   // Editor always renders the pinline-restore layer. In export it is rendered
   // only when a mask-aware (foreignObject) capture backend is in use, since the
@@ -1850,18 +1829,6 @@ function CardPreviewComponent({
     (exportFlattenMasks || (!exportMode && !exportCaptureMode))
       ? getMseM15BorderlessPinlineOnlyRestoreMaskSource()
       : null;
-  const transparentBorderlessTextboxBlendSources =
-    isTransparentBorderlessTreatment
-      ? getBorderlessTreatmentFrameBlendSources(frameColors, regularMseColorBlend, securityStamped)
-      : null;
-  const transparentBorderlessTextboxSource =
-    isTransparentBorderlessTreatment && !transparentBorderlessTextboxBlendSources
-      ? getMseM15FrameTreatmentSource("borderless", regularFrameIdentity, securityStamped, regularMseColorBlend)
-      : null;
-  const transparentBorderlessDarkTextboxFillSource =
-    isTransparentBorderlessTreatment
-      ? getMseM15TransparentBorderlessDarkTextboxFillSource()
-      : null;
   const treatmentFrameSource =
     typeFrame === "standard"
       ? treatmentFrameBlendSources
@@ -1870,8 +1837,6 @@ function CardPreviewComponent({
         ? showcaseSpec.twoColorFrameBlend === "linear" && resolvedMseColorBlend && frameColors.length === 2
           ? null
           : getShowcaseFrameSource(showcaseFrame, frameIdentity, showPowerToughness)
-        : isTransparentBorderlessTreatment
-        ? null
         : getMseM15FrameTreatmentSource(
             frameTreatment,
             regularFrameIdentity,
@@ -1879,12 +1844,6 @@ function CardPreviewComponent({
             regularMseColorBlend,
           )
       : null;
-  const transparentBorderlessFrameMaskSource = isTransparentBorderlessTreatment
-    ? getMseM15TransparentBorderlessFrameMaskSource()
-    : null;
-  const transparentBorderlessFrameTextureSource = isTransparentBorderlessTreatment
-    ? artifactMainframeColorSource ?? getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
-    : null;
   const showcaseFrameUnderlaySource =
     showcaseSpec ? getShowcaseFrameUnderlaySource(showcaseFrame, frameIdentity) : null;
   const showcaseFrameBlendSources = getTwoColorShowcaseFrameBlendSources(
@@ -1895,10 +1854,9 @@ function CardPreviewComponent({
     showcaseSpec,
   );
   const hasExactTreatmentFrame = Boolean(
-    treatmentFrameSource ||
+      treatmentFrameSource ||
       treatmentFrameBlendSources ||
-      showcaseFrameBlendSources ||
-      transparentBorderlessFrameMaskSource,
+      showcaseFrameBlendSources,
   );
   const showcasePtOverlaySource =
     showcaseSpec && showPowerToughness ? getShowcasePtOverlaySource(showcaseFrame, frameIdentity) : null;
@@ -1916,16 +1874,25 @@ function CardPreviewComponent({
         }
       : null;
   const treatmentFrameMirrorX = frameTreatment === "borderless" ? regularMseColorBlend?.mirrorX : undefined;
-  const shouldRenderArtBehindTreatmentFrame = isBorderlessTreatment || showcaseSpec?.id === "dndRulebook";
+  const shouldRenderArtBehindTreatmentFrame =
+    typeFrame === "token" ||
+    isBorderlessTreatment ||
+    showcaseSpec?.id === "dndRulebook" ||
+    shouldUseSubjectMaskAsPrimaryArt;
   const showDfcColorIndicator = shouldShowDfcColorIndicator(selectedTypeFrame, card);
   const dfcColorIndicatorSource = showDfcColorIndicator
     ? getMseM15ColorIndicatorSource(frameIdentity, mseAccentColorBlend)
     : null;
+  const displayedKeywordRulesText = resolveRulesTextCardNameToken(getKeywordRulesText(faceCard.keywords), faceCard.name);
   const displayedRulesText = resolveRulesTextCardNameToken(getDisplayRulesText(faceCard), faceCard.name);
   const displayedFlavorText = activeSection === "rules"
     ? faceCard.flavorText.replace(/\r\n?/g, "\n")
     : normalizeDisplayMultilineText(faceCard.flavorText);
   const tokenFrameVariant = typeFrame === "token" ? getTokenFrameVariant(displayedRulesText, displayedFlavorText) : "normal";
+  const shouldRedrawStandardArtAperture =
+    typeFrame === "standard" &&
+    shouldRedrawStandardMaskedArtAperture(frameTreatment, faceCard) &&
+    !showArtGenerating;
   const rawTypeLineRect =
     treatmentLayout
       ? treatmentLayout.typeLine
@@ -1943,7 +1910,7 @@ function CardPreviewComponent({
   const rawPowerToughnessRect =
     showcasePowerToughnessTextRect ?? treatmentLayout?.powerToughness ?? getPowerToughnessRect(typeFrame);
   const shouldCalibrateBorderlessExportText =
-    typeFrame === "standard" && (frameTreatment === "borderless" || frameTreatment === "transparentBorderless");
+    typeFrame === "standard" && frameTreatment === "borderless";
   const powerToughnessRect =
     shouldCalibrateBorderlessExportText && !showcasePowerToughnessTextRect
       ? {
@@ -1981,6 +1948,23 @@ function CardPreviewComponent({
     isRetroTreatment ? 19.5 : frameTreatment === "etchedFoil" ? 16 : 18,
     isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroTitle : FULL_MAGIC_PACK.fontFamilies.title,
   );
+  const subjectMaskFrameApprovalRects = shouldUseSubjectMaskAsPrimaryArt
+    ? getSubjectMaskFrameApprovalRects(
+        frameTreatment,
+        artRect,
+        titleBaseRect,
+        titleManaRect,
+        typeLineRect,
+        setSymbolRect,
+      )
+    : [];
+  const subjectMaskArtBounds = shouldUseSubjectMaskAsPrimaryArt
+    ? getSubjectMaskExpandedArtBounds(artRect, subjectMaskFrameApprovalRects)
+    : artRect;
+  const subjectMaskOverlayBottomY =
+    isBorderlessTreatment && treatmentLayout?.textArea
+      ? treatmentLayout.textArea.y
+      : CARD_COORDINATES.height;
   const sagaTextLayout = typeFrame === "saga" ? parseSagaText(displayedRulesText) : null;
   const futureTypeSymbolSource = isFutureshiftedShowcase
     ? getFutureTypeSymbolSource(faceCard.typeLine)
@@ -2003,10 +1987,11 @@ function CardPreviewComponent({
     treatmentLayout,
     treatmentBodyUsesLargerTypography,
   );
+  const rulesCharsPerLine = Math.max(18, Math.floor(rulesLayout.rulesRect.width / 6.15));
   const compactRulesLineCount = rulesLayout.centerRulesContent
     ? estimateWrappedLineCount(
         displayedRulesText,
-        Math.max(18, Math.floor(rulesLayout.rulesRect.width / 6.15)),
+        rulesCharsPerLine,
       )
     : 0;
   const compactRulesContentHeight = compactRulesLineCount > 0
@@ -2019,9 +2004,13 @@ function CardPreviewComponent({
   const displayedRulesLineCount = rulesLayout.showRules
     ? estimateWrappedLineCount(
         displayedRulesText,
-        Math.max(18, Math.floor(rulesLayout.rulesRect.width / 6.15)),
+        rulesCharsPerLine,
       )
     : 0;
+  const activeKeywordRulesLineCount =
+    activeSection === "rules" && displayedKeywordRulesText.trim().length > 0
+      ? estimateWrappedLineCount(displayedKeywordRulesText, rulesCharsPerLine)
+      : 0;
   const displayedRulesContentHeight = displayedRulesLineCount > 0
     ? displayedRulesLineCount * rulesLayout.rulesLineHeight
     : 0;
@@ -2040,6 +2029,12 @@ function CardPreviewComponent({
       : rulesLayout.rulesContentVerticalAlign === "bottom"
         ? 0
         : displayedRulesVerticalInset;
+  const activeKeywordRulesHeightScaled = activeKeywordRulesLineCount * rulesLayout.rulesLineHeight * scale;
+  const activeRulesInputTop = rulesContentVerticalInset + activeKeywordRulesHeightScaled;
+  const activeRulesInputHeight = Math.max(
+    rulesLayout.rulesLineHeight * scale,
+    (rulesLayout.rulesRect.height * scale) - activeRulesInputTop - rulesContentPaddingBottom,
+  );
   const displayedFlavorLineCount = rulesLayout.showFlavor
     ? estimateWrappedLineCount(
         displayedFlavorText,
@@ -2191,7 +2186,7 @@ function CardPreviewComponent({
       ? "#f8f2df"
       : showcaseSpec?.textIsLight
       ? "#f8f2df"
-    : frameTreatment === "borderless" || frameTreatment === "transparentBorderless"
+    : frameTreatment === "borderless"
       ? "#171512"
       : frameTreatment === "etchedFoil"
       ? "#f8f2df"
@@ -2203,7 +2198,7 @@ function CardPreviewComponent({
       ? "#171512"
       : regularFrameStyle.ink;
   const statMutedInk =
-    isDfcBack || showcaseSpec?.textIsLight || frameTreatment === "borderless" || frameTreatment === "transparentBorderless"
+    isDfcBack || showcaseSpec?.textIsLight || frameTreatment === "borderless"
       ? "rgba(248, 242, 223, 0.62)"
       : regularFrameStyle.mutedInk;
   const bodyInk = treatmentLayout && treatmentBodyInk ? treatmentBodyInk : typeFrame === "token" ? "#171512" : regularFrameStyle.ink;
@@ -2241,9 +2236,9 @@ function CardPreviewComponent({
   const typeLineTextYOffset =
     Platform.OS === "ios" && typeFrame === "standard" && frameTreatment === "standard"
       ? -2.75 * scale
+      : typeFrame === "token"
+      ? 3 * scale
       : 0;
-  const hasBodyText =
-    displayedRulesText.trim().length > 0 || displayedFlavorText.trim().length > 0;
   const startArtTransform = useRef(artTransform);
   const initialPinchDistance = useRef<number | null>(null);
   const manaCostInputRef = useRef<TextInput>(null);
@@ -2357,15 +2352,12 @@ function CardPreviewComponent({
         cornerRadius={cornerRadius}
         scale={battleScale}
         frameIdentity={frameIdentity}
-        frameStyle={frameStyle}
         manaSymbols={manaSymbols}
-        manaColors={manaColors}
         exportMode={exportMode}
         imageAspectRatio={imageAspectRatio}
         isManaCostFocused={isManaCostFocused}
         setIsManaCostFocused={setIsManaCostFocused}
         updateFace={updateFace}
-        updateArtTransform={updateArtTransform}
         onChange={onChange}
         onSectionPress={onSectionPress}
         artPanHandlers={artPanResponder.panHandlers}
@@ -2395,7 +2387,6 @@ function CardPreviewComponent({
         isManaCostFocused={isManaCostFocused}
         setIsManaCostFocused={setIsManaCostFocused}
         updateFace={updateFace}
-        updateArtTransform={updateArtTransform}
         onChange={onChange}
         onSectionPress={onSectionPress}
         artPanHandlers={artPanResponder.panHandlers}
@@ -2753,17 +2744,7 @@ function CardPreviewComponent({
             />
           </>
         ) : (
-          transparentBorderlessFrameMaskSource && transparentBorderlessFrameTextureSource ? (
-            <MseTransparentBorderlessFrameLayer
-              cacheKey={`mainframe-standard-${frameTreatment}-${regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}`}
-              textureSource={transparentBorderlessFrameTextureSource}
-              maskSource={transparentBorderlessFrameMaskSource}
-              darkTextboxFillSource={transparentBorderlessDarkTextboxFillSource}
-              textboxSource={transparentBorderlessTextboxSource}
-              textboxSplitSources={transparentBorderlessTextboxBlendSources}
-              exportMode={exportMode}
-            />
-          ) : treatmentFrameBlendSources ? (
+          treatmentFrameBlendSources ? (
             <MseSplitFrameImage
               cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? frameColors.join("")}-${securityStamped ? "stamped" : "unstamped"}`}
               sources={treatmentFrameBlendSources}
@@ -2825,7 +2806,6 @@ function CardPreviewComponent({
                 splitSources={borderlessTreatmentFrameBlendSources}
                 maskSource={borderlessPinlineOnlyRestoreMaskSource}
                 mirrorX={Boolean(treatmentFrameMirrorX)}
-                exportMode={exportMode}
               />
             )
           ) : null}
@@ -2848,6 +2828,25 @@ function CardPreviewComponent({
           artTransform={artTransform}
           scale={scale}
         />
+      ) : null}
+
+      {shouldRedrawStandardArtAperture && faceCard.artUri ? (
+        <View
+          pointerEvents="none"
+          style={{
+            ...rectStyle(artRect),
+            overflow: "hidden",
+          }}
+        >
+          <TransformableArtImage
+            uri={faceCard.artUri}
+            artRect={artRect}
+            renderScale={scale}
+            artTransform={artTransform}
+            imageAspectRatio={imageAspectRatio}
+            fitRect={subjectMaskArtBounds}
+          />
+        </View>
       ) : null}
 
       {typeFrame === "saga" ? (
@@ -2877,7 +2876,11 @@ function CardPreviewComponent({
 
       {typeFrame !== "standard" && typeFrame !== "saga" ? (
         <StableFrameImage
-          cacheKey={`typeframe-${typeFrame}`}
+          cacheKey={
+            typeFrame === "token"
+              ? `typeframe-token-${frameIdentity}-${tokenFrameVariant}`
+              : `typeframe-${typeFrame}`
+          }
           source={getTypeFrameFrameSource(typeFrame, frameIdentity, mseColorBlend, card, tokenFrameVariant)}
           resizeMode="contain"
           mirrorX={false}
@@ -2913,6 +2916,20 @@ function CardPreviewComponent({
       {frameEffectSources.map((layer, index) => (
         <MseOverlayLayerView key={`frame-effect-${index}`} cacheKey={`frame-effect-${index}`} layer={layer} />
       ))}
+
+      {shouldUseSubjectMaskAsPrimaryArt && !showArtGenerating ? (
+        <SubjectMaskArtOverlay
+          faceCard={faceCard}
+          artRect={artRect}
+          artBounds={subjectMaskArtBounds}
+          artTransform={artTransform}
+          imageAspectRatio={imageAspectRatio}
+          overlayBottomY={subjectMaskOverlayBottomY}
+          approvalRects={subjectMaskFrameApprovalRects}
+          hardApprovalEdges={!isBorderlessTreatment}
+          cacheKey={`foreground-subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
+        />
+      ) : null}
 
       <WatermarkLayer
         card={card}
@@ -2958,17 +2975,6 @@ function CardPreviewComponent({
           }}
         />
       ) : null}
-
-		      {typeFrame === "standard" && shouldDrawSubjectArtOverFrame(frameTreatment, faceCard) ? (
-		        <SubjectMaskArtOverlay
-		          faceCard={faceCard}
-		          artRect={artRect}
-		          artTransform={artTransform}
-		          imageAspectRatio={imageAspectRatio}
-		          overlayBottomY={(treatmentLayout?.textArea.y ?? CARD_COORDINATES.textArea.y) - 4}
-		          cacheKey={`subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
-		        />
-		      ) : null}
 
       {futureTextboxTextureSource ? (
         futureTextureBlendColors ? (
@@ -3042,6 +3048,7 @@ function CardPreviewComponent({
               width: "100%",
               maxWidth: "100%",
               minWidth: 0,
+              textAlign: typeFrame === "token" ? "center" : "left",
               ...EXPORT_TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
               includeFontPadding: false,
@@ -3073,6 +3080,7 @@ function CardPreviewComponent({
               minWidth: 0,
               flexShrink: 1,
               height: titleLayout.lineHeight * scale,
+              textAlign: typeFrame === "token" ? "center" : "left",
               ...TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
               includeFontPadding: false,
@@ -3096,6 +3104,7 @@ function CardPreviewComponent({
               width: "100%",
               maxWidth: "100%",
               minWidth: 0,
+              textAlign: typeFrame === "token" ? "center" : "left",
               ...TITLE_KERNING_FIX,
               ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
               includeFontPadding: false,
@@ -3576,38 +3585,65 @@ function CardPreviewComponent({
           }}
         >
           {activeSection === "rules" ? (
-            <TextInput
-              accessibilityLabel="Rules text"
-              value={faceCard.rulesText}
-              onChangeText={(rulesText) => updateFace({ rulesText })}
-              onFocus={() => onSectionPress("rules")}
-              placeholder="Rules text"
-              placeholderTextColor={rulesTextMutedInk}
-              multiline
-              blurOnSubmit={false}
-              submitBehavior="newline"
-              scrollEnabled={false}
-              style={{
-                color: rulesTextInk,
-                fontFamily: isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroBody : FULL_MAGIC_PACK.fontFamilies.body,
-                ...getWebSafeEditableTextMetrics(
-                  rulesLayout.rulesFontSize * scale,
-                  rulesLayout.rulesLineHeight * scale,
-                ),
-                width: "100%",
-                height: "100%",
-                position: "absolute",
-                top: 0,
-                left: 0,
-                paddingTop: rulesContentVerticalInset,
-                paddingBottom: rulesContentPaddingBottom,
-                paddingHorizontal: 0,
-                overflow: "hidden",
-                backgroundColor: "transparent",
-                textAlign: rulesLayout.centerRulesContent ? "center" : "left",
-                textAlignVertical: "top",
-              }}
-            />
+            <>
+              {displayedKeywordRulesText.trim().length > 0 ? (
+                <View
+                  pointerEvents="none"
+                  style={{
+                    width: "100%",
+                    height: activeKeywordRulesHeightScaled,
+                    position: "absolute",
+                    top: rulesContentVerticalInset,
+                    left: 0,
+                    overflow: "hidden",
+                  }}
+                >
+                  <InlineSymbolText
+                    value={displayedKeywordRulesText}
+                    color={rulesTextInk}
+                    fontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroBody : FULL_MAGIC_PACK.fontFamilies.body}
+                    italicFontFamily={isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroItalic : FULL_MAGIC_PACK.fontFamilies.italic}
+                    fontSize={rulesLayout.rulesFontSize * scale}
+                    lineHeight={rulesLayout.rulesLineHeight * scale}
+                    symbolSize={rulesLayout.rulesFontSize * scale * 1.18}
+                    symbolVariant={isRetroTreatment ? "retro" : "modern"}
+                    textAlign={rulesLayout.centerRulesContent ? "center" : "left"}
+                  />
+                </View>
+              ) : null}
+              <TextInput
+                accessibilityLabel="Rules text"
+                value={faceCard.rulesText}
+                onChangeText={(rulesText) => updateFace({ rulesText })}
+                onFocus={() => onSectionPress("rules")}
+                placeholder={displayedKeywordRulesText.trim().length > 0 ? "" : "Rules text"}
+                placeholderTextColor={rulesTextMutedInk}
+                multiline
+                blurOnSubmit={false}
+                submitBehavior="newline"
+                scrollEnabled={false}
+                style={{
+                  color: rulesTextInk,
+                  fontFamily: isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroBody : FULL_MAGIC_PACK.fontFamilies.body,
+                  ...getWebSafeEditableTextMetrics(
+                    rulesLayout.rulesFontSize * scale,
+                    rulesLayout.rulesLineHeight * scale,
+                  ),
+                  width: "100%",
+                  height: activeRulesInputHeight,
+                  position: "absolute",
+                  top: activeRulesInputTop,
+                  left: 0,
+                  paddingTop: 0,
+                  paddingBottom: rulesContentPaddingBottom,
+                  paddingHorizontal: 0,
+                  overflow: "hidden",
+                  backgroundColor: "transparent",
+                  textAlign: rulesLayout.centerRulesContent ? "center" : "left",
+                  textAlignVertical: "top",
+                }}
+              />
+            </>
           ) : (
             <View
               pointerEvents="none"
@@ -4001,7 +4037,6 @@ function SplitCardPreview({
           scale={scale}
           exportMode={exportMode}
           artGenerating={artGenerating}
-          footerOwnerName={footerOwnerName}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -4079,7 +4114,6 @@ function ClassicSplitPreview({
           leftHalf={leftHalf}
           rightHalf={rightHalf}
           scale={scale}
-          exportMode={exportMode}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -4113,7 +4147,6 @@ function ClassicSplitHalfSlot({
   scale,
   exportMode,
   artGenerating,
-  footerOwnerName,
   onSectionPress,
   zone,
 }: {
@@ -4125,7 +4158,6 @@ function ClassicSplitHalfSlot({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
-  footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4384,7 +4416,6 @@ function FuseReminderStrip({
   leftHalf,
   rightHalf,
   scale,
-  exportMode,
   onSectionPress,
   zone,
 }: {
@@ -4392,7 +4423,6 @@ function FuseReminderStrip({
   leftHalf: SplitCardHalf;
   rightHalf: SplitCardHalf;
   scale: number;
-  exportMode: boolean;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4625,7 +4655,6 @@ function AftermathSplitPreview({
   scale,
   exportMode,
   artGenerating,
-  footerOwnerName,
   onSectionPress,
   zone,
 }: {
@@ -4635,7 +4664,6 @@ function AftermathSplitPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
-  footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -5395,12 +5423,13 @@ function getSplitHalfRulesMetrics(
     Math.max(1, flavorLineCount) * baseFlavorLineHeight,
     Math.max(1, flavorHeight - 2),
   );
+  const sharedTextScale = Math.min(rulesScale, flavorScale);
 
   return {
-    rulesFontSize: baseRulesFontSize * rulesScale,
-    rulesLineHeight: baseRulesLineHeight * rulesScale,
-    flavorFontSize: baseFlavorFontSize * flavorScale,
-    flavorLineHeight: baseFlavorLineHeight * flavorScale,
+    rulesFontSize: baseRulesFontSize * sharedTextScale,
+    rulesLineHeight: baseRulesLineHeight * sharedTextScale,
+    flavorFontSize: baseFlavorFontSize * sharedTextScale,
+    flavorLineHeight: baseFlavorLineHeight * sharedTextScale,
   };
 }
 
@@ -5459,7 +5488,6 @@ function PlaneswalkerPreview({
   isManaCostFocused,
   setIsManaCostFocused,
   updateFace,
-  updateArtTransform,
   onChange,
   onSectionPress,
   artPanHandlers,
@@ -5483,7 +5511,6 @@ function PlaneswalkerPreview({
   isManaCostFocused: boolean;
   setIsManaCostFocused: (focused: boolean) => void;
   updateFace: (patch: Partial<CardDraft>) => void;
-  updateArtTransform: (nextTransform: ArtTransform) => void;
   onChange: (patch: Partial<CardDraft>) => void;
   onSectionPress: SectionPressHandler;
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
@@ -6145,15 +6172,12 @@ function BattleFrontPreview({
   cornerRadius,
   scale,
   frameIdentity,
-  frameStyle,
   manaSymbols,
-  manaColors,
   exportMode,
   imageAspectRatio,
   isManaCostFocused,
   setIsManaCostFocused,
   updateFace,
-  updateArtTransform,
   onChange,
   onSectionPress,
   artPanHandlers,
@@ -6169,15 +6193,12 @@ function BattleFrontPreview({
   cornerRadius: number;
   scale: number;
   frameIdentity: ReturnType<typeof inferFrameIdentity>;
-  frameStyle: ReturnType<typeof inferFrameStyle>;
   manaSymbols: string[];
-  manaColors: ManaColor[];
   exportMode: boolean;
   imageAspectRatio?: number | null;
   isManaCostFocused: boolean;
   setIsManaCostFocused: (focused: boolean) => void;
   updateFace: (patch: Partial<CardDraft>) => void;
-  updateArtTransform: (nextTransform: ArtTransform) => void;
   onChange: (patch: Partial<CardDraft>) => void;
   onSectionPress: SectionPressHandler;
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
@@ -6652,35 +6673,6 @@ function BattleFrontPreview({
         coordinateSystem="portrait"
         backingSource={stampBackingConfig.backingSource}
       />
-    </View>
-  );
-}
-
-function BattleRotatedSlot({
-  rect,
-  scale,
-  style,
-  children,
-}: {
-  rect: CoordinateRect;
-  scale: number;
-  style?: Record<string, unknown>;
-  children: React.ReactNode;
-}) {
-  return (
-    <View
-      style={{
-        ...battleRectStyle(rect),
-        overflow: "hidden",
-        borderRadius: 10,
-        borderCurve: "continuous",
-        borderWidth: 2,
-        ...style,
-      }}
-    >
-      <BattleRotatedInner rect={rect} scale={scale}>
-        {children}
-      </BattleRotatedInner>
     </View>
   );
 }
@@ -7846,6 +7838,67 @@ function DirectFrameImage({
   );
 }
 
+function readBlobUriAsDataUri(uri: string): Promise<string> {
+  return fetch(uri)
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`Image fetch failed with ${response.status}.`);
+      }
+
+      return response.blob();
+    })
+    .then((blob) => new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        typeof reader.result === "string"
+          ? resolve(reader.result)
+          : reject(new Error("Image blob could not be converted to a data URI."));
+      };
+      reader.onerror = () => {
+        reject(reader.error ?? new Error("Image blob could not be read."));
+      };
+      reader.readAsDataURL(blob);
+    }));
+}
+
+function useSvgCompatibleArtUri(uri?: string | null) {
+  const [resolvedUri, setResolvedUri] = useState(uri ?? null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setResolvedUri(uri ?? null);
+
+    if (
+      Platform.OS !== "web" ||
+      !uri ||
+      !uri.startsWith("blob:") ||
+      typeof fetch !== "function" ||
+      typeof FileReader === "undefined"
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    readBlobUriAsDataUri(uri)
+      .then((dataUri) => {
+        if (!cancelled) {
+          setResolvedUri(dataUri);
+        }
+      })
+      .catch((error) => {
+        console.warn("Unable to stabilize uploaded art URI for preview rendering.", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uri]);
+
+  return resolvedUri;
+}
+
 function ShowcaseMaskedArt({
   artUri,
   artRect,
@@ -7861,6 +7914,8 @@ function ShowcaseMaskedArt({
   spec: ShowcaseFrameSpec;
   cacheKey: string;
 }) {
+  const resolvedArtUri = useSvgCompatibleArtUri(artUri);
+
   if (!spec.artMask && !spec.artFilter && !spec.artOverlay) {
     return null;
   }
@@ -7877,7 +7932,7 @@ function ShowcaseMaskedArt({
   const maskBoundsHeight =
     spec.artMask?.coordinateSpace === "card" && spec.artMask.clipHeight
       ? (spec.artMask.clipHeight / spec.designHeight) * CARD_COORDINATES.height
-      : maskRect.height;
+      : maskRect.y + maskRect.height;
   const centerX = artRect.x + artRect.width / 2;
   const centerY = artRect.y + artRect.height / 2;
   const fittedLayout = getCoverFittedImageLayout(
@@ -7969,10 +8024,10 @@ function ShowcaseMaskedArt({
         clipPath={spec.artMask ? undefined : `url(#${clipId})`}
         filter={grayscaleFilter}
       >
-        {artUri ? (
+        {resolvedArtUri ? (
           <G transform={artTransformSvg}>
             <SvgImage
-              href={{ uri: artUri } as never}
+              href={{ uri: resolvedArtUri } as never}
               x={artRect.x + fittedLayout.left}
               y={artRect.y + fittedLayout.top}
               width={fittedLayout.width}
@@ -8741,206 +8796,6 @@ function MseFrameImage({
   return <StableFrameImage cacheKey={cacheKey} source={source} mirrorX={mirrorX} resizeMode="stretch" />;
 }
 
-function MseTransparentBorderlessFrameLayer({
-  textureSource,
-  maskSource,
-  darkTextboxFillSource,
-  textboxSource,
-  textboxSplitSources,
-  exportMode,
-  cacheKey,
-}: {
-  textureSource: ImageSourcePropType;
-  maskSource: ImageSourcePropType;
-  darkTextboxFillSource?: ImageSourcePropType | null;
-  textboxSource?: ImageSourcePropType | null;
-  textboxSplitSources?: SplitFrameSources | null;
-  exportMode: boolean;
-  cacheKey: string;
-}) {
-  const maskId = `${cacheKey}-transparent-borderless-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const textboxBlendMaskId = `${cacheKey}-transparent-borderless-textbox-blend-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const textboxBlendGradientId = `${cacheKey}-transparent-borderless-textbox-blend-gradient`.replace(
-    /[^a-zA-Z0-9_-]/g,
-    "-",
-  );
-  const textboxTextureOpacity = 0.22;
-
-  return (
-    <>
-      {darkTextboxFillSource ? (
-        <StableFrameImage
-          cacheKey={`${cacheKey}-transparent-dark-textbox-fill`}
-          source={darkTextboxFillSource}
-          resizeMode="stretch"
-        />
-      ) : null}
-      {!textboxSplitSources && textboxSource ? (
-        <StableFrameImage
-          cacheKey={`${cacheKey}-transparent-textbox`}
-          source={textboxSource}
-          imageStyle={{ opacity: textboxTextureOpacity }}
-          resizeMode="stretch"
-        />
-      ) : null}
-      <Svg
-        pointerEvents="none"
-        width="100%"
-        height="100%"
-        viewBox={`0 0 ${CARD_COORDINATES.width} ${CARD_COORDINATES.height}`}
-        preserveAspectRatio="none"
-        style={{
-          position: "absolute",
-          top: 0,
-          right: 0,
-          bottom: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-        }}
-      >
-        <Defs>
-          <Mask
-            id={maskId}
-            x="0"
-            y="0"
-            width={CARD_COORDINATES.width}
-            height={CARD_COORDINATES.height}
-            maskUnits="userSpaceOnUse"
-            maskType="luminance"
-          >
-            <SvgImage
-              href={maskSource as never}
-              x="0"
-              y="0"
-              width={CARD_COORDINATES.width}
-              height={CARD_COORDINATES.height}
-              preserveAspectRatio="none"
-            />
-          </Mask>
-          {textboxSplitSources ? (
-            <>
-              <SvgLinearGradient id={textboxBlendGradientId} x1="0" y1="0" x2="1" y2="0">
-                <Stop offset="0" stopColor="black" stopOpacity="0" />
-                <Stop offset="0.34" stopColor="black" stopOpacity="0" />
-                <Stop offset="0.66" stopColor="white" stopOpacity="1" />
-                <Stop offset="1" stopColor="white" stopOpacity="1" />
-              </SvgLinearGradient>
-              <Mask
-                id={textboxBlendMaskId}
-                x="0"
-                y="0"
-                width={CARD_COORDINATES.width}
-                height={CARD_COORDINATES.height}
-                maskUnits="userSpaceOnUse"
-              >
-                <Rect
-                  x="0"
-                  y="0"
-                  width={CARD_COORDINATES.width}
-                  height={CARD_COORDINATES.height}
-                  fill={`url(#${textboxBlendGradientId})`}
-                />
-              </Mask>
-            </>
-          ) : null}
-        </Defs>
-        {textboxSplitSources ? (
-          <>
-            <SvgImage
-              href={textboxSplitSources.left as never}
-              x="0"
-              y="0"
-              width={CARD_COORDINATES.width}
-              height={CARD_COORDINATES.height}
-              preserveAspectRatio="none"
-              opacity={textboxTextureOpacity}
-            />
-            <SvgImage
-              href={textboxSplitSources.right as never}
-              x="0"
-              y="0"
-              width={CARD_COORDINATES.width}
-              height={CARD_COORDINATES.height}
-              preserveAspectRatio="none"
-              opacity={textboxTextureOpacity}
-              mask={`url(#${textboxBlendMaskId})`}
-            />
-          </>
-        ) : null}
-        {Platform.OS === "web" && exportMode ? null : (
-          <SvgImage
-            href={textureSource as never}
-            x="0"
-            y="0"
-            width={CARD_COORDINATES.width}
-            height={CARD_COORDINATES.height}
-            preserveAspectRatio="none"
-            mask={`url(#${maskId})`}
-          />
-        )}
-      </Svg>
-      {Platform.OS === "web" && exportMode ? (
-        <CssMaskedFrameImage
-          cacheKey={`${cacheKey}-transparent-export-frame`}
-          source={textureSource}
-          maskSource={maskSource}
-        />
-      ) : null}
-    </>
-  );
-}
-
-function CssMaskedFrameImage({
-  source,
-  splitSources,
-  maskSource,
-  cacheKey,
-}: {
-  source: ImageSourcePropType;
-  splitSources?: SplitFrameSources | null;
-  maskSource: ImageSourcePropType;
-  cacheKey: string;
-}) {
-  const maskUri = getImageSourceUri(maskSource);
-
-  if (!maskUri) {
-    return <StableFrameImage cacheKey={cacheKey} source={source} resizeMode="stretch" />;
-  }
-
-  const containerStyle = {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    width: "100%",
-    height: "100%",
-    overflow: "hidden",
-    WebkitMaskImage: `url("${maskUri}")`,
-    maskImage: `url("${maskUri}")`,
-    WebkitMaskPosition: "center",
-    maskPosition: "center",
-    WebkitMaskRepeat: "no-repeat",
-    maskRepeat: "no-repeat",
-    WebkitMaskSize: "100% 100%",
-    maskSize: "100% 100%",
-  } as unknown as ViewStyle;
-
-  return (
-    <View
-      pointerEvents="none"
-      style={containerStyle}
-    >
-      {splitSources ? (
-        <MseSplitFrameImage cacheKey={`${cacheKey}-split`} sources={splitSources} exportMode />
-      ) : (
-        <StableFrameImage cacheKey={cacheKey} source={source} resizeMode="stretch" />
-      )}
-    </View>
-  );
-}
-
 function getImageSourceUri(source: ImageSourcePropType): string | null {
   if (source && typeof source === "object" && "uri" in source && typeof source.uri === "string") {
     return source.uri;
@@ -9019,14 +8874,12 @@ function MsePinlineOnlyRestoreLayer({
   maskSource,
   cacheKey,
   mirrorX = false,
-  exportMode,
 }: {
   source: ImageSourcePropType;
   splitSources?: SplitFrameSources | null;
   maskSource: ImageSourcePropType;
   cacheKey: string;
   mirrorX?: boolean;
-  exportMode: boolean;
 }) {
   // SVG mask path, used by the editor and by native export (react-native-view-shot
   // rasterizes react-native-svg fine). Web export instead pre-flattens via
@@ -9061,7 +8914,7 @@ function MsePinlineOnlyRestoreLayer({
           width={CARD_COORDINATES.width}
           height={CARD_COORDINATES.height}
           maskUnits="userSpaceOnUse"
-          maskType="luminance"
+          {...getSvgMaskTypeProps("luminance")}
         >
           <SvgImage
             href={maskSource as never}
@@ -9749,27 +9602,47 @@ function FrameTreatmentArtOverlay({
 function SubjectMaskArtOverlay({
   faceCard,
   artRect,
+  artBounds,
   artTransform,
   imageAspectRatio,
   overlayBottomY,
+  approvalMaskSource,
+  approvalRects,
+  hardApprovalEdges = false,
   cacheKey,
 }: {
   faceCard: CardDraft;
   artRect: CoordinateRect;
+  artBounds?: CoordinateRect;
   artTransform: ArtTransform;
   imageAspectRatio?: number | null;
   overlayBottomY: number;
+  approvalMaskSource?: ImageSourcePropType | null;
+  approvalRects?: CoordinateRect[];
+  // When set, snap the approval mask's soft (feathered) alpha to a hard 0/1 edge
+  // so the subject shows at full opacity within the approved region instead of
+  // fading. Used for non-borderless frames; borderless keeps the soft fade.
+  hardApprovalEdges?: boolean;
   cacheKey: string;
 }) {
+  const resolvedArtUri = useSvgCompatibleArtUri(faceCard.artUri);
+
   if (!faceCard.artUri || !faceCard.artSubjectMaskUri) {
     return null;
   }
 
   const maskId = `${cacheKey}-alpha-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const approvalMaskId = `${cacheKey}-approval-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const approvalThresholdId = `${cacheKey}-approval-threshold`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const clipId = `${cacheKey}-subject-overlay-clip`.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const fittedLayout = getCoverFittedImageLayout(artRect.width, artRect.height, imageAspectRatio);
-  const artX = artRect.x + fittedLayout.left;
-  const artY = artRect.y + fittedLayout.top;
+  const normalizedApprovalRects = (approvalRects ?? []).filter(
+    (rect) => rect.width > 0 && rect.height > 0,
+  );
+  const hasApprovalMask = Boolean(approvalMaskSource || normalizedApprovalRects.length > 0);
+  const fitBounds = artBounds ?? artRect;
+  const fittedLayout = getCoverFittedImageLayout(fitBounds.width, fitBounds.height, imageAspectRatio);
+  const artX = fitBounds.x + fittedLayout.left;
+  const artY = fitBounds.y + fittedLayout.top;
   const transformedArtRect = getTransformedCoverImageRect(
     { x: artX, y: artY, width: fittedLayout.width, height: fittedLayout.height },
     artTransform,
@@ -9800,7 +9673,7 @@ function SubjectMaskArtOverlay({
           width={CARD_COORDINATES.width}
           height={CARD_COORDINATES.height}
           maskUnits="userSpaceOnUse"
-          maskType="luminance"
+          {...getSvgMaskTypeProps("alpha")}
 	        >
 	          <SvgImage
 	            href={{ uri: faceCard.artSubjectMaskUri } as never}
@@ -9811,6 +9684,54 @@ function SubjectMaskArtOverlay({
 	            preserveAspectRatio="none"
 	          />
 	        </Mask>
+        {hasApprovalMask ? (
+          <>
+            {approvalMaskSource && hardApprovalEdges ? (
+              // Snap the approval alpha to a near-binary 0/1 edge: alpha' =
+              // clamp(20*alpha - 9.5), so soft feather collapses to a hard cut at
+              // ~50%. Removes the partial-transparency bleed on framed cards.
+              <Filter id={approvalThresholdId} x="0" y="0" width="100%" height="100%">
+                <FeColorMatrix
+                  type="matrix"
+                  values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9.5"
+                />
+              </Filter>
+            ) : null}
+            <Mask
+              id={approvalMaskId}
+              x="0"
+              y="0"
+              width={CARD_COORDINATES.width}
+              height={CARD_COORDINATES.height}
+              maskUnits="userSpaceOnUse"
+              {...getSvgMaskTypeProps("alpha")}
+            >
+              {approvalMaskSource ? (
+                <SvgImage
+                  href={approvalMaskSource as never}
+                  x="0"
+                  y="0"
+                  width={CARD_COORDINATES.width}
+                  height={CARD_COORDINATES.height}
+                  preserveAspectRatio="none"
+                  filter={hardApprovalEdges ? `url(#${approvalThresholdId})` : undefined}
+                />
+              ) : null}
+              {normalizedApprovalRects.map((rect, index) => (
+                <Rect
+                  key={`subject-approval-${index}`}
+                  x={rect.x}
+                  y={rect.y}
+                  width={rect.width}
+                  height={rect.height}
+                  rx={3}
+                  ry={3}
+                  fill="#ffffff"
+                />
+              ))}
+            </Mask>
+          </>
+        ) : null}
         <ClipPath id={clipId}>
           <Rect
             x="0"
@@ -9821,19 +9742,81 @@ function SubjectMaskArtOverlay({
         </ClipPath>
       </Defs>
       <G clipPath={`url(#${clipId})`}>
-        <G mask={`url(#${maskId})`}>
-          <SvgImage
-            href={{ uri: faceCard.artUri } as never}
-            x={transformedArtRect.x}
-            y={transformedArtRect.y}
-            width={transformedArtRect.width}
-            height={transformedArtRect.height}
-            preserveAspectRatio="none"
-          />
+        <G mask={hasApprovalMask ? `url(#${approvalMaskId})` : undefined}>
+          <G mask={`url(#${maskId})`}>
+            {resolvedArtUri ? (
+              <SvgImage
+                href={{ uri: resolvedArtUri } as never}
+                x={transformedArtRect.x}
+                y={transformedArtRect.y}
+                width={transformedArtRect.width}
+                height={transformedArtRect.height}
+                preserveAspectRatio="none"
+              />
+            ) : null}
+          </G>
         </G>
       </G>
     </Svg>
   );
+}
+
+function getSubjectMaskFrameApprovalRects(
+  treatment: FrameTreatment,
+  artRect: CoordinateRect,
+  titleRect: CoordinateRect,
+  manaRect: CoordinateRect,
+  typeLineRect: CoordinateRect,
+  setSymbolRect: CoordinateRect,
+): CoordinateRect[] {
+  const allowsTypeLineOverlap = treatment === "borderless";
+  const upperArtSurroundRect: CoordinateRect = {
+    x: 18,
+    y: 18,
+    width: CARD_COORDINATES.width - 36,
+    height: Math.max(0, typeLineRect.y - 18),
+  };
+
+  return [
+    expandRect(unionNonEmptyRects([upperArtSurroundRect, artRect]), 0, 0),
+    expandRect(unionNonEmptyRects([titleRect, manaRect]), 18, 6),
+    allowsTypeLineOverlap ? expandRect(unionNonEmptyRects([typeLineRect, setSymbolRect]), 4, 2) : null,
+  ].filter((rect): rect is CoordinateRect => Boolean(rect));
+}
+
+function getSubjectMaskExpandedArtBounds(
+  artRect: CoordinateRect,
+  approvalRects: CoordinateRect[],
+): CoordinateRect {
+  return unionNonEmptyRects([artRect, ...approvalRects]) ?? artRect;
+}
+
+function unionNonEmptyRects(rects: CoordinateRect[]): CoordinateRect | null {
+  const nonEmptyRects = rects.filter((rect) => rect.width > 0 && rect.height > 0);
+
+  if (nonEmptyRects.length === 0) {
+    return null;
+  }
+
+  const left = Math.min(...nonEmptyRects.map((rect) => rect.x));
+  const top = Math.min(...nonEmptyRects.map((rect) => rect.y));
+  const right = Math.max(...nonEmptyRects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...nonEmptyRects.map((rect) => rect.y + rect.height));
+
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function expandRect(rect: CoordinateRect | null, horizontalInset: number, verticalInset: number): CoordinateRect | null {
+  if (!rect) {
+    return null;
+  }
+
+  const left = Math.max(0, rect.x - horizontalInset);
+  const top = Math.max(0, rect.y - verticalInset);
+  const right = Math.min(CARD_COORDINATES.width, rect.x + rect.width + horizontalInset);
+  const bottom = Math.min(CARD_COORDINATES.height, rect.y + rect.height + verticalInset);
+
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 function getTransformedCoverImageRect(rect: CoordinateRect, transform: ArtTransform): CoordinateRect {
@@ -9852,42 +9835,18 @@ function shouldDrawTreatmentArtOverFrame(treatment: FrameTreatment): boolean {
   return treatment === "retro";
 }
 
-function shouldDrawSubjectArtOverFrame(treatment: FrameTreatment, faceCard: CardDraft): boolean {
+function shouldRedrawStandardMaskedArtAperture(treatment: FrameTreatment, faceCard: CardDraft): boolean {
   return (
-    (treatment === "borderless" || treatment === "transparentBorderless") &&
+    treatment === "standard" &&
     Boolean(faceCard.artUri) &&
-    Boolean(faceCard.artSubjectMaskUri)
+    Boolean(faceCard.artSubjectMaskUri) &&
+    faceCard.artSubjectMaskDisabled !== true
   );
-}
-
-function supportsFrameEffectOverlays(typeFrame: TypeFrame): boolean {
-  return (
-    typeFrame === "standard" ||
-    typeFrame === "token" ||
-    typeFrame === "dfc" ||
-    typeFrame === "adventure"
-  );
-}
-
-function shouldUseMseM15ColorBlend(card: CardDraft, frameColors: ManaColor[]): boolean {
-  if (getManualFrameColors(card).length > 0) {
-    return frameColors.length > 1;
-  }
-
-  return (!card.frameSelection || card.frameSelection === "auto") && frameColors.length > 1;
-}
-
-function shouldShowDfcColorIndicator(typeFrame: TypeFrame, card: CardDraft): boolean {
-  return typeFrame === "dfc" && isDfcBackFace(card) && getDfcMode(card) !== "modal";
 }
 
 function getSetSymbolMarkSize(baseSize: number, card: CardDraft): number {
   const visualBaseSize = baseSize * 0.9;
   return card.setSymbolUri && card.setSymbolUsesRarityTreatment ? visualBaseSize * 1.32 : visualBaseSize;
-}
-
-function shouldRenderDfcFrontWithStandardTreatmentGeometry(treatment: FrameTreatment): boolean {
-  return treatment === "borderless" || treatment === "transparentBorderless";
 }
 
 function getTreatmentArtRect(treatment: FrameTreatment): CoordinateRect {
@@ -9975,10 +9934,6 @@ function getTreatmentHeaderInk(treatment: FrameTreatment, frameIdentity: FrameId
     return "#f8f2df";
   }
 
-  if (treatment === "transparentBorderless") {
-    return "#f8f2df";
-  }
-
   if (treatment === "borderless") {
     return "#f8f2df";
   }
@@ -9997,10 +9952,6 @@ function getTreatmentHeaderInk(treatment: FrameTreatment, frameIdentity: FrameId
 function getTreatmentBodyInk(treatment: FrameTreatment): string | null {
   if (treatment === "retro") {
     return "#050505";
-  }
-
-  if (treatment === "transparentBorderless") {
-    return "#f8f2df";
   }
 
   if (treatment === "borderless") {
@@ -10520,7 +10471,7 @@ function getSagaTextBoxes(
 }
 
 function getSagaBookmarkIdentities(
-  manaColors: ReturnType<typeof getManaColors>,
+  manaColors: ManaColor[],
   fallbackIdentity: FrameIdentity,
 ): FrameIdentity[] {
   const colorToFrameIdentity = {
@@ -10959,6 +10910,7 @@ function getRulesFlavorLayout(
     const dividerY = y + rulesHeight + dividerGap;
     const rulesScale = getTextScale(neededRulesHeight, rulesHeight);
     const flavorScale = getTextScale(neededFlavorHeight, flavorHeight);
+    const sharedTextScale = Math.min(rulesScale, flavorScale);
 
     return {
       showRules: true,
@@ -10978,14 +10930,13 @@ function getRulesFlavorLayout(
         width: dividerRect.width,
         height: dividerHeight,
       },
-      rulesFontSize: baseRulesFontSize * rulesScale,
-      rulesLineHeight: baseRulesLineHeight * rulesScale,
-      flavorFontSize: baseFlavorFontSize * flavorScale,
-      flavorLineHeight: baseFlavorLineHeight * flavorScale,
+      rulesFontSize: baseRulesFontSize * sharedTextScale,
+      rulesLineHeight: baseRulesLineHeight * sharedTextScale,
+      flavorFontSize: baseFlavorFontSize * sharedTextScale,
+      flavorLineHeight: baseFlavorLineHeight * sharedTextScale,
     };
   }
 
-  const singleLineHeight = hasFlavor ? baseFlavorLineHeight : baseRulesLineHeight;
   const neededHeight = hasFlavor ? neededFlavorHeight : neededRulesHeight;
   const showFlavor = hasFlavor && !hasRules;
   const showRules = hasRules || !showFlavor;
@@ -11106,16 +11057,20 @@ function TransformableArtImage({
   renderScale,
   artTransform,
   imageAspectRatio,
+  fitRect,
 }: {
   uri: string;
   artRect: CoordinateRect;
   renderScale: number;
   artTransform: ArtTransform;
   imageAspectRatio?: number | null;
+  fitRect?: CoordinateRect;
 }) {
+  const resolvedUri = useSvgCompatibleArtUri(uri) ?? uri;
+  const resolvedFitRect = fitRect ?? artRect;
   const fittedLayout = getCoverFittedImageLayout(
-    artRect.width * renderScale,
-    artRect.height * renderScale,
+    resolvedFitRect.width * renderScale,
+    resolvedFitRect.height * renderScale,
     imageAspectRatio,
   );
 
@@ -11124,8 +11079,8 @@ function TransformableArtImage({
       pointerEvents="none"
       style={{
         position: "absolute",
-        left: fittedLayout.left,
-        top: fittedLayout.top,
+        left: (resolvedFitRect.x - artRect.x) * renderScale + fittedLayout.left,
+        top: (resolvedFitRect.y - artRect.y) * renderScale + fittedLayout.top,
         width: fittedLayout.width,
         height: fittedLayout.height,
         transform: [
@@ -11137,7 +11092,7 @@ function TransformableArtImage({
     >
       <Image
         accessibilityIgnoresInvertColors
-        source={{ uri }}
+        source={{ uri: resolvedUri }}
         resizeMode={fittedLayout.resizeMode}
         style={{
           width: "100%",

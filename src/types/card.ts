@@ -43,7 +43,6 @@ export type FrameTreatment =
   | "fullArt"
   | "extendedArt"
   | "borderless"
-  | "transparentBorderless"
   | "promo"
   | "showcase"
   | "textless"
@@ -197,10 +196,12 @@ export type CardDraft = {
   cardBackId?: CardBackId;
   artUri?: string;
   artSubjectMaskUri?: string;
+  artSubjectMaskDisabled?: boolean;
   artSubjectMaskComponents?: SubjectMaskComponent[];
   artTransform?: ArtTransform;
   backArtUri?: string;
   backArtSubjectMaskUri?: string;
+  backArtSubjectMaskDisabled?: boolean;
   backArtSubjectMaskComponents?: SubjectMaskComponent[];
   backArtTransform?: ArtTransform;
   setSymbolPreset?: string;

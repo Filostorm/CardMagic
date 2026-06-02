@@ -1143,42 +1143,6 @@ function LegalLink({ label, url, color = "#0b7180" }: { label: string; url: stri
   );
 }
 
-function StoreMetric({ label, value, icon }: { label: string; value: number; icon: ReactNode }) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        minHeight: 58,
-        borderRadius: 14,
-        borderCurve: "continuous",
-        backgroundColor: "rgba(255,255,255,0.12)",
-        borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.14)",
-        padding: 9,
-        gap: 5,
-      }}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-        {icon}
-        <Text selectable={false} numberOfLines={1} style={{ color: "rgba(255,255,255,0.76)", fontSize: 10.5, fontWeight: "800" }}>
-          {label}
-        </Text>
-      </View>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <Zap size={18} color="#72e6ff" strokeWidth={2.8} />
-        <Text
-          selectable={false}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          style={{ color: "#ffffff", fontSize: 18, fontWeight: "900", fontVariant: ["tabular-nums"] }}
-        >
-          {value}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 function CreditPackPurchaseRow({
   pack,
   width,

@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-const outputDirectory = "dist";
+const outputDirectory = process.env.CARDMAGIC_CLOUDFLARE_OUTPUT_DIR || "dist";
 
 await mkdir(outputDirectory, { recursive: true });
 

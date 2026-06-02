@@ -13,6 +13,13 @@ const outputPath = path.join(
   "card-data",
   "scryfall-oracle-cards.compact.json",
 );
+const searchIndexOutputPath = path.join(
+  projectRoot,
+  "assets",
+  "card-data",
+  "scryfall-oracle-card-search-index.compact.json",
+);
+const BASE_CARD_EXCLUDED_LAYOUTS = new Set(["art_series", "token"]);
 
 async function fetchJson(url) {
   const response = await fetch(url, {
@@ -70,6 +77,33 @@ function compactCard(card) {
   };
 }
 
+function compactSearchCard(card) {
+  const labels = [
+    normalizeSearchText(card.name),
+    ...card.faces.map((face) => normalizeSearchText(face.name)).filter((label) => label && label !== normalizeSearchText(card.name)),
+  ].filter(Boolean);
+  const primaryFace = card.faces[0];
+
+  return [
+    card.id,
+    card.name,
+    card.layout,
+    primaryFace?.typeLine || card.typeLine || "Card",
+    labels,
+  ];
+}
+
+function normalizeSearchText(value) {
+  return cleanString(value)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 async function main() {
   const bulkObject = await fetchJson(SCRYFALL_ORACLE_BULK_URI);
 
@@ -95,10 +129,31 @@ async function main() {
   await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(output)}\n`, "utf8");
 
+  const searchCards = compactCards
+    .filter((card) => !BASE_CARD_EXCLUDED_LAYOUTS.has(card.layout))
+    .map(compactSearchCard);
+  const searchIndexOutput = {
+    source: output.source,
+    sourceUri: output.sourceUri,
+    downloadUri: output.downloadUri,
+    updatedAt: output.updatedAt,
+    generatedAt: output.generatedAt,
+    cardCount: searchCards.length,
+    cards: searchCards,
+  };
+
+  await writeFile(searchIndexOutputPath, `${JSON.stringify(searchIndexOutput)}\n`, "utf8");
+
   console.log(
     `Wrote ${compactCards.length.toLocaleString("en-US")} cards from ${bulkObject.updated_at} to ${path.relative(
       projectRoot,
       outputPath,
+    )}`,
+  );
+  console.log(
+    `Wrote ${searchCards.length.toLocaleString("en-US")} searchable cards to ${path.relative(
+      projectRoot,
+      searchIndexOutputPath,
     )}`,
   );
 }

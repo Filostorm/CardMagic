@@ -1,4 +1,10 @@
 import { supabase, supabaseUrl } from "@/lib/supabase";
+import {
+  materializeRemoteCardDraftMedia,
+  materializeRemoteImageUri,
+  persistRemoteCardDraftMedia,
+  persistRemoteImageUri,
+} from "@/lib/account-media";
 import type { CardDraft } from "@/types/card";
 
 export type AccountCardSetPayload = {
@@ -120,6 +126,73 @@ export type CommunityPollPayload = {
   options: CommunityPollOptionPayload[];
 };
 
+export type CollaborationSetRole = "owner" | "editor";
+
+export type CollaborationSetPayload = {
+  id: string;
+  ownerUserId: string;
+  role: CollaborationSetRole;
+  name: string;
+  code?: string;
+  cardBackId?: string;
+  setSymbolPreset?: string;
+  setSymbolUri?: string;
+  setSymbolUsesRarityTreatment?: boolean;
+  ownerName: string;
+  memberCount: number;
+  cardCount: number;
+  commentCount: number;
+  pollCount: number;
+  openChecklistCount: number;
+  updatedAt: string;
+};
+
+export type CollaborationSetCommentPayload = {
+  id: string;
+  setId: string;
+  cardId?: string;
+  userId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CollaborationSetChecklistItemPayload = {
+  id: string;
+  setId: string;
+  userId: string;
+  authorName: string;
+  body: string;
+  completed: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CollaborationInviteProfileSuggestion = {
+  userId: string;
+  username: string;
+  displayName?: string;
+};
+
+export type CollaborationPendingInvitePayload = {
+  id: string;
+  invitedEmail: string;
+  role: CollaborationSetRole;
+  createdAt: string;
+};
+
+export type CollaborationSetMemberPayload = {
+  id: string;
+  userId: string;
+  role: CollaborationSetRole;
+  username?: string;
+  displayName?: string;
+  memberName: string;
+  acceptedAt?: string;
+  createdAt: string;
+};
+
 export type PublishCommunityCardPayload = {
   id: string;
   userId: string;
@@ -213,6 +286,71 @@ type CommunityPollRow = {
   option_position: number | string | null;
   vote_count: number | string | null;
   selected_by_viewer: boolean | null;
+};
+
+type CollaborationSetRow = {
+  set_id: string;
+  owner_user_id: string;
+  role: string;
+  set_name: string;
+  set_code: string | null;
+  card_back_id: string | null;
+  set_symbol_preset: string | null;
+  set_symbol_uri: string | null;
+  set_symbol_uses_rarity_treatment: boolean | null;
+  owner_name: string | null;
+  member_count: number | string | null;
+  card_count: number | string | null;
+  comment_count: number | string | null;
+  poll_count: number | string | null;
+  open_checklist_count: number | string | null;
+  updated_at: string;
+};
+
+type CollaborationSetCommentRow = {
+  id: string;
+  set_id: string;
+  card_id: string | null;
+  user_id: string;
+  author_name: string | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type CollaborationSetChecklistItemRow = {
+  id: string;
+  set_id: string;
+  user_id: string;
+  author_name: string | null;
+  body: string;
+  completed: boolean | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type CollaborationInviteProfileSuggestionRow = {
+  user_id: string;
+  username: string | null;
+  display_name: string | null;
+};
+
+type CollaborationPendingInviteRow = {
+  id: string;
+  invited_email: string | null;
+  role: string | null;
+  created_at: string;
+};
+
+type CollaborationSetMemberRow = {
+  id: string;
+  user_id: string;
+  role: string | null;
+  username: string | null;
+  display_name: string | null;
+  member_name: string | null;
+  accepted_at: string | null;
+  created_at: string;
 };
 
 type CardSetMembershipRow = {
@@ -356,7 +494,7 @@ export async function fetchRemoteCardSets(userId: string): Promise<AccountCardSe
     return sets;
   }
 
-  return hydrateRemoteSetCards(userId, sets);
+  return materializeRemoteCardSetPayloads(await hydrateRemoteSetCards(userId, sets));
 }
 
 async function fetchLegacyRemoteCardSets(userId: string): Promise<AccountCardSetPayload[]> {
@@ -375,12 +513,12 @@ async function fetchLegacyRemoteCardSets(userId: string): Promise<AccountCardSet
     throw new Error(error.message);
   }
 
-  return (data ?? []).map((row) => ({
+  return materializeRemoteCardSetPayloads((data ?? []).map((row) => ({
     id: row.id,
     name: row.name,
     cardBackId: row.card_back_id ?? undefined,
     cards: normalizeAccountCardSnapshots(row.cards),
-  }));
+  })));
 }
 
 export async function replaceRemoteCardSets(userId: string, sets: AccountCardSetPayload[]) {
@@ -388,7 +526,8 @@ export async function replaceRemoteCardSets(userId: string, sets: AccountCardSet
     throw new Error("Supabase is not configured.");
   }
 
-  const normalizedSets = sets.map((set) => ({
+  const remoteMediaSets = await persistRemoteCardSetPayloads(userId, sets);
+  const normalizedSets = remoteMediaSets.map((set) => ({
     user_id: userId,
     id: set.id,
     name: set.name,
@@ -407,7 +546,7 @@ export async function replaceRemoteCardSets(userId: string, sets: AccountCardSet
 
     if (error) {
       if (isMissingCardSetSchemaColumnsError(error)) {
-        await replaceLegacyRemoteCardSets(userId, sets);
+        await replaceLegacyRemoteCardSets(userId, remoteMediaSets);
         return;
       }
 
@@ -415,8 +554,52 @@ export async function replaceRemoteCardSets(userId: string, sets: AccountCardSet
     }
   }
 
-  await replaceRemoteCards(userId, sets);
-  await deleteStaleRemoteSets(userId, sets);
+  await replaceRemoteCards(userId, remoteMediaSets);
+  await deleteStaleRemoteSets(userId, remoteMediaSets);
+}
+
+async function persistRemoteCardSetPayloads(
+  userId: string,
+  sets: AccountCardSetPayload[],
+): Promise<AccountCardSetPayload[]> {
+  return Promise.all(sets.map(async (set) => ({
+    ...set,
+    setSymbolUri: await persistRemoteImageUri(
+      set.setSymbolUri,
+      { kind: "account", userId },
+      `set-${set.id}-default-symbol`,
+    ),
+    cards: await Promise.all(set.cards.map(async (snapshot) => ({
+      ...snapshot,
+      card: await persistRemoteCardDraftMedia(
+        snapshot.card,
+        { kind: "account", userId },
+        `set-${set.id}-card-${snapshot.id}`,
+      ),
+    }))),
+  })));
+}
+
+async function materializeRemoteCardSetPayloads(
+  sets: AccountCardSetPayload[],
+): Promise<AccountCardSetPayload[]> {
+  return Promise.all(sets.map(async (set) => ({
+    ...set,
+    setSymbolUri: await materializeRemoteImageUriSafely(set.setSymbolUri, `set-${set.id}-default-symbol`),
+    cards: await Promise.all(set.cards.map(async (snapshot) => ({
+      ...snapshot,
+      card: await materializeRemoteCardDraftMedia(snapshot.card),
+    }))),
+  })));
+}
+
+async function materializeRemoteImageUriSafely(uri: string | undefined, sourceLabel: string) {
+  try {
+    return await materializeRemoteImageUri(uri);
+  } catch (error) {
+    console.warn(`Unable to materialize Supabase media reference for ${sourceLabel}.`, error);
+    return uri;
+  }
 }
 
 // Inline base64 art/mask data URIs can be multiple MB each; storing them in the
@@ -605,12 +788,12 @@ export async function fetchRemoteCustomSetSymbols(userId: string): Promise<Accou
     throw new Error(error.message);
   }
 
-  return (data ?? []).map((row) => ({
+  return Promise.all((data ?? []).map(async (row) => ({
     id: row.id,
     label: row.label,
-    uri: row.uri,
+    uri: await materializeRemoteImageUriSafely(row.uri, `custom-set-symbol-${row.id}`) ?? row.uri,
     createdAt: row.created_at,
-  }));
+  })));
 }
 
 export async function replaceRemoteCustomSetSymbols(userId: string, symbols: AccountCustomSetSymbolPayload[]) {
@@ -618,7 +801,12 @@ export async function replaceRemoteCustomSetSymbols(userId: string, symbols: Acc
     throw new Error("Supabase is not configured.");
   }
 
-  const normalizedSymbols = symbols.map((symbol) => ({
+  const remoteMediaSymbols = await Promise.all(symbols.map(async (symbol) => ({
+    ...symbol,
+    uri: await persistRemoteImageUri(symbol.uri, { kind: "account", userId }, `custom-set-symbol-${symbol.id}`) ?? symbol.uri,
+  })));
+
+  const normalizedSymbols = remoteMediaSymbols.map((symbol) => ({
     user_id: userId,
     id: symbol.id,
     label: symbol.label,
@@ -654,7 +842,7 @@ export async function replaceRemoteCustomSetSymbols(userId: string, symbols: Acc
     throw new Error(fetchError.message);
   }
 
-  const retainedIds = new Set(symbols.map((symbol) => symbol.id));
+  const retainedIds = new Set(remoteMediaSymbols.map((symbol) => symbol.id));
   const staleIds = (remoteRows ?? []).map((row) => row.id).filter((id) => !retainedIds.has(id));
 
   if (staleIds.length > 0) {
@@ -766,7 +954,7 @@ export async function fetchCommunityCards(
 
   const rows = (data ?? []) as CommunityCardRow[];
   const pageRows = rows.slice(0, pageSize);
-  const cards = pageRows.flatMap(mapCommunityCardRow);
+  const cards = await mapCommunityCardRows(pageRows);
 
   return {
     cards,
@@ -817,7 +1005,7 @@ export async function fetchCommunityFeaturedCard(): Promise<CommunityCardPayload
     });
   }
 
-  return ((data ?? []) as CommunityCardRow[]).flatMap(mapCommunityCardRow)[0] ?? null;
+  return (await mapCommunityCardRows((data ?? []) as CommunityCardRow[]))[0] ?? null;
 }
 
 export async function fetchCommunitySets(limit = 24, offset = 0): Promise<CommunitySetPayload[]> {
@@ -904,7 +1092,377 @@ export async function fetchCommunitySetCards(setId: string): Promise<CommunitySe
     });
   }
 
-  return ((data ?? []) as CommunityCardRow[]).flatMap(mapCommunityCardRow);
+  return mapCommunityCardRows((data ?? []) as CommunityCardRow[]);
+}
+
+export async function fetchCollaborationSets(): Promise<CollaborationSetPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error: acceptError } = await supabase.rpc("accept_collaboration_set_invites");
+
+  if (acceptError) {
+    throw new Error(acceptError.message);
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_dashboard");
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return ((data ?? []) as CollaborationSetRow[]).map((row) => ({
+    id: row.set_id,
+    ownerUserId: row.owner_user_id,
+    role: row.role === "owner" ? "owner" : "editor",
+    name: row.set_name,
+    code: row.set_code ?? undefined,
+    cardBackId: row.card_back_id ?? undefined,
+    setSymbolPreset: row.set_symbol_preset ?? undefined,
+    setSymbolUri: row.set_symbol_uri ?? undefined,
+    setSymbolUsesRarityTreatment: row.set_symbol_uses_rarity_treatment ?? undefined,
+    ownerName: row.owner_name ?? getFallbackAuthorName(row.owner_user_id),
+    memberCount: normalizePositiveInteger(row.member_count, 0),
+    cardCount: normalizePositiveInteger(row.card_count, 0),
+    commentCount: normalizePositiveInteger(row.comment_count, 0),
+    pollCount: normalizePositiveInteger(row.poll_count, 0),
+    openChecklistCount: normalizePositiveInteger(row.open_checklist_count, 0),
+    updatedAt: row.updated_at,
+  }));
+}
+
+export async function inviteCollaborationSetMember(setId: string, inviteIdentifier: string): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.rpc("invite_collaboration_set_member", {
+    p_set_id: setId,
+    p_invite_identifier: inviteIdentifier,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function searchCollaborationInviteProfiles(query: string): Promise<CollaborationInviteProfileSuggestion[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("search_collaboration_invite_profiles", {
+    p_query: query,
+    p_limit: 8,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return ((data ?? []) as CollaborationInviteProfileSuggestionRow[])
+    .filter((row) => row.username)
+    .map((row) => ({
+      userId: row.user_id,
+      username: row.username ?? "",
+      displayName: row.display_name ?? undefined,
+    }));
+}
+
+export async function fetchCollaborationSetPendingInvites(setId: string): Promise<CollaborationPendingInvitePayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_pending_invites", {
+    p_set_id: setId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return ((data ?? []) as CollaborationPendingInviteRow[])
+    .filter((row) => row.invited_email)
+    .map((row) => ({
+      id: row.id,
+      invitedEmail: row.invited_email ?? "",
+      role: row.role === "owner" ? "owner" : "editor",
+      createdAt: row.created_at,
+    }));
+}
+
+export async function fetchCollaborationSetMembers(setId: string): Promise<CollaborationSetMemberPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_member_list", {
+    p_set_id: setId,
+  });
+
+  if (!error) {
+    return ((data ?? []) as CollaborationSetMemberRow[])
+      .filter((row) => row.user_id)
+      .map((row) => ({
+        id: row.id,
+        userId: row.user_id,
+        role: row.role === "owner" ? "owner" : "editor",
+        username: row.username ?? undefined,
+        displayName: row.display_name ?? undefined,
+        memberName: row.username ? `@${row.username}` : row.display_name ?? row.member_name ?? getFallbackAuthorName(row.user_id),
+        acceptedAt: row.accepted_at ?? undefined,
+        createdAt: row.created_at,
+      }));
+  }
+
+  const missingRpc =
+    getSupabaseErrorCode(error) === "PGRST202" ||
+    getSupabaseErrorCode(error) === "PGRST205" ||
+    getErrorMessage(error).toLowerCase().includes("could not find the function");
+
+  if (!missingRpc) {
+    throw new Error(error.message);
+  }
+
+  const { data: fallbackData, error: fallbackError } = await supabase
+    .from("collaboration_set_members")
+    .select("id, user_id, role, accepted_at, created_at")
+    .eq("set_id", setId)
+    .eq("status", "accepted")
+    .not("user_id", "is", null)
+    .order("role", { ascending: false })
+    .order("created_at", { ascending: true });
+
+  if (fallbackError) {
+    throw new Error(fallbackError.message);
+  }
+
+  return ((fallbackData ?? []) as Array<{
+    id: string;
+    user_id: string | null;
+    role: string | null;
+    accepted_at: string | null;
+    created_at: string;
+  }>)
+    .filter((row): row is {
+      id: string;
+      user_id: string;
+      role: string | null;
+      accepted_at: string | null;
+      created_at: string;
+    } => Boolean(row.user_id))
+    .map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      role: row.role === "owner" ? "owner" : "editor",
+      memberName: getFallbackAuthorName(row.user_id),
+      acceptedAt: row.accepted_at ?? undefined,
+      createdAt: row.created_at,
+    }));
+}
+
+export async function fetchCollaborationSetCards(setId: string): Promise<CommunitySetCardPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_cards", {
+    p_set_id: setId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return mapCommunityCardRows((data ?? []) as CommunityCardRow[]);
+}
+
+export async function addCollaborationSetCard(payload: {
+  setId: string;
+  localSnapshotId: string;
+  card: CardDraft;
+}): Promise<string> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("add_collaboration_set_card", {
+    p_set_id: payload.setId,
+    p_local_snapshot_id: payload.localSnapshotId,
+    p_card: compactCardForPublish(
+      await persistRemoteCardDraftMedia(
+        payload.card,
+        { kind: "collaboration-set", setId: payload.setId },
+        `collaboration-set-${payload.setId}-${payload.localSnapshotId}`,
+      ),
+    ),
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return String(data);
+}
+
+export async function fetchCollaborationSetComments(setId: string): Promise<CollaborationSetCommentPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_comments", {
+    p_set_id: setId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return ((data ?? []) as CollaborationSetCommentRow[]).map((row) => ({
+    id: row.id,
+    setId: row.set_id,
+    cardId: row.card_id ?? undefined,
+    userId: row.user_id,
+    authorName: row.author_name ?? getFallbackAuthorName(row.user_id),
+    body: row.body,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+export async function addCollaborationSetComment(setId: string, body: string): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.rpc("add_collaboration_set_comment", {
+    p_set_id: setId,
+    p_body: body,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function fetchCollaborationSetPolls(setId: string): Promise<CommunityPollPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_poll_list", {
+    p_set_id: setId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const rows = ((data ?? []) as Omit<CommunityPollRow, "description">[]).map((row) => ({
+    ...row,
+    description: null,
+  })) as CommunityPollRow[];
+
+  return mapCommunityPollRows(rows);
+}
+
+export async function createCollaborationSetPoll(payload: {
+  setId: string;
+  title: string;
+  selectionType: CommunityPollSelectionType;
+  options: string[];
+}): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.rpc("create_collaboration_set_poll", {
+    p_set_id: payload.setId,
+    p_title: payload.title,
+    p_selection_type: payload.selectionType,
+    p_options: payload.options,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function submitCollaborationSetPollVote(pollId: string, optionIds: string[]): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.rpc("submit_collaboration_set_poll_vote", {
+    p_poll_id: pollId,
+    p_option_ids: optionIds,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function fetchCollaborationSetChecklist(
+  setId: string,
+): Promise<CollaborationSetChecklistItemPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_checklist", {
+    p_set_id: setId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return ((data ?? []) as CollaborationSetChecklistItemRow[]).map((row) => ({
+    id: row.id,
+    setId: row.set_id,
+    userId: row.user_id,
+    authorName: row.author_name ?? getFallbackAuthorName(row.user_id),
+    body: row.body,
+    completed: Boolean(row.completed),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+export async function addCollaborationSetChecklistItem(setId: string, body: string): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.rpc("add_collaboration_set_checklist_item", {
+    p_set_id: setId,
+    p_body: body,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function setCollaborationSetChecklistItemCompleted(
+  itemId: string,
+  completed: boolean,
+): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.rpc("set_collaboration_set_checklist_item_completed", {
+    p_item_id: itemId,
+    p_completed: completed,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
 }
 
 export async function toggleCommunityCardLike(cardId: string, liked: boolean): Promise<void> {
@@ -1312,23 +1870,34 @@ function getFeedbackScreenshotExtension(mimeType: string, uri: string) {
   return "jpg";
 }
 
-function mapCommunityCardRow(row: CommunityCardRow): CommunityCardPayload[] {
+async function mapCommunityCardRows(rows: CommunityCardRow[]): Promise<CommunityCardPayload[]> {
+  const mappedRows = await Promise.all(rows.map(mapCommunityCardRow));
+
+  return mappedRows.flat();
+}
+
+async function mapCommunityCardRow(row: CommunityCardRow): Promise<CommunityCardPayload[]> {
   if (!isCardDraft(row.card)) {
     return [];
   }
+
+  const imageUrl = row.image_url ?? undefined;
+  const card = imageUrl
+    ? compactCardForPublish(row.card)
+    : await materializeRemoteCardDraftMedia(row.card);
 
   return [{
     id: row.id,
     userId: row.user_id,
     authorName: row.author_name ?? getFallbackAuthorName(row.user_id),
     authorLevel: normalizePositiveInteger(row.author_level, 1),
-    name: row.name ?? row.card.name ?? "",
-    typeLine: row.type_line ?? row.card.typeLine ?? "",
+    name: row.name ?? card.name ?? "",
+    typeLine: row.type_line ?? card.typeLine ?? "",
     rarity: row.rarity ?? undefined,
     colors: Array.isArray(row.colors) ? row.colors : [],
     frameTreatment: row.frame_treatment ?? undefined,
-    imageUrl: row.image_url ?? undefined,
-    card: row.card,
+    imageUrl,
+    card,
     likeCount: normalizePositiveInteger(row.like_count, 0),
     commentCount: normalizePositiveInteger(row.comment_count, 0),
     likedByViewer: Boolean(row.liked_by_viewer),
@@ -1440,12 +2009,6 @@ async function replaceRemoteCards(userId: string, sets: AccountCardSetPayload[])
     })),
   );
 
-  const { error: deleteJoinError } = await supabase.from("card_set_cards").delete().eq("user_id", userId);
-
-  if (deleteJoinError) {
-    throw new Error(deleteJoinError.message);
-  }
-
   if (joinRows.length > 0) {
     const { error } = await supabase.from("card_set_cards").upsert(joinRows, {
       onConflict: "user_id,set_id,card_id",
@@ -1455,6 +2018,11 @@ async function replaceRemoteCards(userId: string, sets: AccountCardSetPayload[])
       throw new Error(error.message);
     }
   }
+
+  await deleteStaleRemoteCardSetMemberships(
+    userId,
+    new Set(joinRows.map((row) => getRemoteCardSetMembershipKey(row.set_id, row.card_id))),
+  );
 
   const retainedCardIds = new Set(cardRows.map((row) => row.id));
   const { data: remoteCardRows, error: fetchCardsError } = await supabase
@@ -1476,6 +2044,63 @@ async function replaceRemoteCards(userId: string, sets: AccountCardSetPayload[])
       throw new Error(error.message);
     }
   }
+}
+
+async function deleteStaleRemoteCardSetMemberships(userId: string, retainedMembershipKeys: Set<string>) {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase
+    .from("card_set_cards")
+    .select("set_id, card_id")
+    .eq("user_id", userId)
+    .returns<Array<{ set_id: string; card_id: string }>>();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const staleCardIdsBySetId = new Map<string, string[]>();
+
+  for (const row of data ?? []) {
+    if (retainedMembershipKeys.has(getRemoteCardSetMembershipKey(row.set_id, row.card_id))) {
+      continue;
+    }
+
+    const staleCardIds = staleCardIdsBySetId.get(row.set_id) ?? [];
+    staleCardIds.push(row.card_id);
+    staleCardIdsBySetId.set(row.set_id, staleCardIds);
+  }
+
+  for (const [setId, staleCardIds] of staleCardIdsBySetId) {
+    for (const chunk of chunkArray(staleCardIds, 100)) {
+      const { error: deleteError } = await supabase
+        .from("card_set_cards")
+        .delete()
+        .eq("user_id", userId)
+        .eq("set_id", setId)
+        .in("card_id", chunk);
+
+      if (deleteError) {
+        throw new Error(deleteError.message);
+      }
+    }
+  }
+}
+
+function getRemoteCardSetMembershipKey(setId: string, cardId: string) {
+  return `${setId}:${cardId}`;
+}
+
+function chunkArray<T>(values: T[], chunkSize: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+
+  return chunks;
 }
 
 function normalizeAccountCardSnapshots(value: unknown): AccountCardSnapshotPayload[] {

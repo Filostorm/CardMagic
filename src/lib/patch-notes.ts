@@ -20,6 +20,15 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.32.1",
+    date: "2026-06-02",
+    title: "Token title spacing",
+    bullets: [
+      "Card titles no longer reserve mana-symbol space when the current face has no mana cost symbols.",
+      "Empty mana-cost hit areas now collapse with the title layout so token names can use the full title plate.",
+    ],
+  },
+  {
     version: "3.32.0",
     date: "2026-06-02",
     title: "Set viewer notifications",

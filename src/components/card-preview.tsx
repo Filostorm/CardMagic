@@ -1740,8 +1740,9 @@ function CardPreviewComponent({
   const isBorderlessTreatment =
     typeFrame === "standard" && frameTreatment === "borderless";
   const [isManaCostFocused, setIsManaCostFocused] = useState(false);
+  const hasManaSymbols = manaSymbols.length > 0;
   const shouldReserveTitleManaCostSpace =
-    showManaCost && (!isDfcBackFace(card) || manaSymbols.length > 0 || isManaCostFocused);
+    showManaCost && (hasManaSymbols || isManaCostFocused);
   const artifactMainframeColorSource =
     typeFrame === "standard" &&
     (frameTreatment === "standard" || frameTreatment === "borderless") &&
@@ -2243,7 +2244,9 @@ function CardPreviewComponent({
   const initialPinchDistance = useRef<number | null>(null);
   const manaCostInputRef = useRef<TextInput>(null);
   const rawManaCostRenderRect =
-    isFutureshiftedShowcase && !isManaCostFocused
+    !hasManaSymbols && !isManaCostFocused
+      ? { ...defaultManaRect, x: titleBaseRect.x + titleBaseRect.width + 8, width: 0 }
+      : isFutureshiftedShowcase && !isManaCostFocused
       ? FUTURESHIFTED_MANA_COST_RECT
       : isManaCostFocused
       ? CARD_COORDINATES.manaCost

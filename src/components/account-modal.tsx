@@ -1,6 +1,6 @@
-import { User, X } from "lucide-react-native";
+import { Bell, BookOpen, Check, RefreshCw, User, UserPlus, X } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
 import {
@@ -10,6 +10,7 @@ import {
   fetchAccountProfile,
   updateAccountUsername,
 } from "@/lib/account-profile";
+import type { CommunityNotificationPayload } from "@/lib/account-sets";
 import { authRedirectUrl, isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type AccountModalProps = {
@@ -18,10 +19,26 @@ type AccountModalProps = {
   onClose: () => void;
   onAuthSuccess: () => void;
   onProfileChange?: (profile: AccountProfile) => void;
+  notifications?: CommunityNotificationPayload[];
+  notificationsLoading?: boolean;
+  notificationsError?: string | null;
+  onRefreshNotifications?: () => void;
+  onMarkNotificationsRead?: (notificationIds: string[]) => void;
 };
 
-export function AccountModal({ visible, user, onClose, onAuthSuccess, onProfileChange }: AccountModalProps) {
-  const { width } = useWindowDimensions();
+export function AccountModal({
+  visible,
+  user,
+  onClose,
+  onAuthSuccess,
+  onProfileChange,
+  notifications = [],
+  notificationsLoading = false,
+  notificationsError = null,
+  onRefreshNotifications,
+  onMarkNotificationsRead,
+}: AccountModalProps) {
+  const { width, height } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
@@ -29,6 +46,11 @@ export function AccountModal({ visible, user, onClose, onAuthSuccess, onProfileC
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const accountLabel = useMemo(() => user?.email ?? "Not signed in", [user?.email]);
+  const unreadNotificationIds = useMemo(
+    () => notifications.filter((notification) => !notification.readAt).map((notification) => notification.id),
+    [notifications],
+  );
+  const panelMaxHeight = Math.max(360, Math.min(720, height - 28));
 
   useEffect(() => {
     let active = true;
@@ -199,6 +221,7 @@ export function AccountModal({ visible, user, onClose, onAuthSuccess, onProfileC
           style={{
             width: "100%",
             maxWidth: Math.min(500, width - 20),
+            maxHeight: panelMaxHeight,
             borderRadius: 22,
             borderCurve: "continuous",
             backgroundColor: "#f7f8fb",
@@ -243,7 +266,11 @@ export function AccountModal({ visible, user, onClose, onAuthSuccess, onProfileC
             </View>
           </View>
 
-          <View style={{ padding: 14, gap: 12 }}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            style={{ maxHeight: Math.max(260, panelMaxHeight - 86) }}
+            contentContainerStyle={{ padding: 14, gap: 12 }}
+          >
             {!isSupabaseConfigured ? (
               <AccountNotice text="Supabase is not configured. Add EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY." />
             ) : null}
@@ -251,6 +278,14 @@ export function AccountModal({ visible, user, onClose, onAuthSuccess, onProfileC
             {user ? (
               <>
                 <AccountNotice text="Purchases, credit balances, saved sets, and community profile data are stored in Supabase." />
+                <AccountNotificationsSection
+                  notifications={notifications}
+                  loading={notificationsLoading}
+                  error={notificationsError}
+                  unreadNotificationIds={unreadNotificationIds}
+                  onRefresh={onRefreshNotifications}
+                  onMarkRead={onMarkNotificationsRead}
+                />
                 <View style={{ gap: 8 }}>
                   <TextInput
                     accessibilityLabel="Username"
@@ -347,11 +382,188 @@ export function AccountModal({ visible, user, onClose, onAuthSuccess, onProfileC
 
             {busy ? <ActivityIndicator color="#0b7180" /> : null}
             {message ? <Text style={{ color: "#5f6570", fontSize: 12, fontWeight: "800" }}>{message}</Text> : null}
-          </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
   );
+}
+
+function AccountNotificationsSection({
+  notifications,
+  loading,
+  error,
+  unreadNotificationIds,
+  onRefresh,
+  onMarkRead,
+}: {
+  notifications: CommunityNotificationPayload[];
+  loading: boolean;
+  error: string | null;
+  unreadNotificationIds: string[];
+  onRefresh?: () => void;
+  onMarkRead?: (notificationIds: string[]) => void;
+}) {
+  const unreadCount = unreadNotificationIds.length;
+
+  return (
+    <View
+      style={{
+        borderRadius: 12,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: "#d8dbe2",
+        backgroundColor: "#ffffff",
+        overflow: "hidden",
+      }}
+    >
+      <View
+        style={{
+          minHeight: 44,
+          paddingHorizontal: 12,
+          paddingVertical: 9,
+          borderBottomWidth: 1,
+          borderBottomColor: "#eceef2",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <Bell size={17} color="#151820" strokeWidth={2.5} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+            Notifications
+          </Text>
+          <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
+            {unreadCount > 0 ? `${unreadCount} unread` : "All caught up"}
+          </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh notifications"
+          disabled={loading || !onRefresh}
+          onPress={onRefresh}
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 17,
+            borderWidth: 1,
+            borderColor: "#d8dbe2",
+            backgroundColor: loading ? "#eef1f5" : "#ffffff",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {loading ? <ActivityIndicator color="#0b7180" size="small" /> : <RefreshCw size={15} color="#151820" strokeWidth={2.5} />}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Mark notifications read"
+          disabled={unreadCount === 0 || !onMarkRead}
+          onPress={() => onMarkRead?.(unreadNotificationIds)}
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 17,
+            borderWidth: 1,
+            borderColor: unreadCount > 0 ? "#b8d7df" : "#d8dbe2",
+            backgroundColor: unreadCount > 0 ? "#eef8fb" : "#f4f5f7",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Check size={15} color={unreadCount > 0 ? "#0b7180" : "#9aa1ad"} strokeWidth={2.7} />
+        </Pressable>
+      </View>
+
+      <View style={{ padding: 10, gap: 8 }}>
+        {error ? (
+          <Text selectable style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+            {error}
+          </Text>
+        ) : null}
+        {notifications.length === 0 && !loading ? (
+          <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+            Follow community sets to get card-addition notifications. Set owners will also see viewer follows here.
+          </Text>
+        ) : (
+          notifications.map((notification) => (
+            <AccountNotificationRow key={notification.id} notification={notification} />
+          ))
+        )}
+      </View>
+    </View>
+  );
+}
+
+function AccountNotificationRow({ notification }: { notification: CommunityNotificationPayload }) {
+  const unread = !notification.readAt;
+  const title =
+    notification.kind === "set_followed"
+      ? `${notification.actorName} followed ${notification.setName}`
+      : `${notification.cardName ?? "A card"} was added to ${notification.setName}`;
+  const detail =
+    notification.kind === "set_followed"
+      ? "A viewer subscribed to one of your community sets."
+      : `${notification.actorName} updated a set you follow.`;
+
+  return (
+    <View
+      style={{
+        borderRadius: 10,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: unread ? "#b8d7df" : "#eceef2",
+        backgroundColor: unread ? "#f2fbfd" : "#fbfcfe",
+        padding: 10,
+        flexDirection: "row",
+        gap: 9,
+      }}
+    >
+      <View
+        style={{
+          width: 30,
+          height: 30,
+          borderRadius: 15,
+          backgroundColor: unread ? "#0b7180" : "#eef1f5",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {notification.kind === "set_followed" ? (
+          <UserPlus size={15} color={unread ? "#ffffff" : "#68707d"} strokeWidth={2.5} />
+        ) : (
+          <BookOpen size={15} color={unread ? "#ffffff" : "#68707d"} strokeWidth={2.5} />
+        )}
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text selectable={false} numberOfLines={2} style={{ color: "#151820", fontSize: 12, lineHeight: 16, fontWeight: "900" }}>
+          {title}
+        </Text>
+        <Text selectable={false} numberOfLines={2} style={{ color: "#68707d", fontSize: 11, lineHeight: 15, fontWeight: "800" }}>
+          {detail}
+        </Text>
+        <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: 10, fontWeight: "900", textTransform: "uppercase" }}>
+          {formatNotificationDate(notification.createdAt)}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function formatNotificationDate(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 const inputStyle = {

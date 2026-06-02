@@ -4,7 +4,7 @@ import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
-import { ArrowDown, ArrowUp, BookOpen, Bug, Check, ChevronDown, ChevronUp, Database, Download, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, UserPlus, Users, X } from "lucide-react-native";
+import { ArrowDown, ArrowUp, BookOpen, Bug, Check, ChevronDown, ChevronUp, Database, Download, Eye, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, UserPlus, Users, X } from "lucide-react-native";
 import { Component, memo, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -112,6 +112,7 @@ import {
   fetchCommunityCards,
   fetchCommunityCardComments,
   fetchCommunityFeaturedCard,
+  fetchCommunityNotifications,
   fetchCommunityPolls,
   fetchCommunitySetCards,
   fetchCommunitySets,
@@ -122,6 +123,7 @@ import {
   fetchRemoteCustomSetSymbols,
   fetchRemoteCardSets,
   markCommunityCardsSeen,
+  markCommunityNotificationsRead,
   createCommunityPoll,
   inviteCollaborationSetMember,
   publishCommunityCard,
@@ -133,7 +135,7 @@ import {
   submitCommunityFeedback,
   submitCommunityPollVote,
   toggleCommunityCardLike,
-  toggleCommunityUserFollow,
+  toggleCommunitySetFollow,
   updateCommunityDisplayName,
   uploadCommunityCardImage,
   uploadCommunityFeedbackScreenshot,
@@ -143,6 +145,7 @@ import {
   type CommunityCardPagePayload,
   type CommunityCardCommentPayload,
   type CommunityCardPayload,
+  type CommunityNotificationPayload,
   type CollaborationSetPayload,
   type CommunityFeedbackType,
   type CommunityPollPayload,
@@ -5827,6 +5830,9 @@ export default function App() {
   const [earlyAccessCodeOpen, setEarlyAccessCodeOpen] = useState(false);
   const [accountUser, setAccountUser] = useState<SupabaseUser | null>(null);
   const [accountProfile, setAccountProfile] = useState<AccountProfile | null>(null);
+  const [communityNotifications, setCommunityNotifications] = useState<CommunityNotificationPayload[]>([]);
+  const [communityNotificationsLoading, setCommunityNotificationsLoading] = useState(false);
+  const [communityNotificationsError, setCommunityNotificationsError] = useState<string | null>(null);
   const [accountSyncBusy, setAccountSyncBusy] = useState(false);
   const [accountSetsHydrated, setAccountSetsHydrated] = useState(false);
   const [checkoutBusyProductId, setCheckoutBusyProductId] = useState<CheckoutProductId | null>(null);
@@ -6911,6 +6917,67 @@ export default function App() {
       subscription.subscription.unsubscribe();
     };
   }, []);
+
+  const loadAccountNotifications = useCallback(async () => {
+    if (!accountUser) {
+      setCommunityNotifications([]);
+      setCommunityNotificationsError(null);
+      setCommunityNotificationsLoading(false);
+      return;
+    }
+
+    setCommunityNotificationsLoading(true);
+    setCommunityNotificationsError(null);
+
+    try {
+      const notifications = await fetchCommunityNotifications(40);
+      setCommunityNotifications(notifications);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load community notifications.";
+      setCommunityNotificationsError(message);
+    } finally {
+      setCommunityNotificationsLoading(false);
+    }
+  }, [accountUser]);
+
+  const markAccountNotificationsRead = useCallback(async (notificationIds: string[]) => {
+    const uniqueIds = Array.from(new Set(notificationIds));
+
+    if (uniqueIds.length === 0) {
+      return;
+    }
+
+    const readAt = new Date().toISOString();
+
+    setCommunityNotifications((current) => current.map((notification) => (
+      uniqueIds.includes(notification.id) ? { ...notification, readAt } : notification
+    )));
+
+    try {
+      await markCommunityNotificationsRead(uniqueIds);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to mark notifications as read.";
+      setCommunityNotificationsError(message);
+      void loadAccountNotifications();
+    }
+  }, [loadAccountNotifications]);
+
+  useEffect(() => {
+    if (!accountUser) {
+      setCommunityNotifications([]);
+      setCommunityNotificationsError(null);
+      setCommunityNotificationsLoading(false);
+      return;
+    }
+
+    void loadAccountNotifications();
+  }, [accountUser, loadAccountNotifications]);
+
+  useEffect(() => {
+    if (accountOpen && accountUser) {
+      void loadAccountNotifications();
+    }
+  }, [accountOpen, accountUser, loadAccountNotifications]);
 
   useEffect(() => {
     if (!accountUser || !userProgressHydrated) {
@@ -10440,6 +10507,11 @@ export default function App() {
           onClose={() => setAccountOpen(false)}
           onAuthSuccess={showLoginSuccessToast}
           onProfileChange={setAccountProfile}
+          notifications={communityNotifications}
+          notificationsLoading={communityNotificationsLoading}
+          notificationsError={communityNotificationsError}
+          onRefreshNotifications={() => void loadAccountNotifications()}
+          onMarkNotificationsRead={(notificationIds) => void markAccountNotificationsRead(notificationIds)}
         />
         <AchievementsModal
           visible={achievementsOpen}
@@ -16180,6 +16252,7 @@ function CommunityPanel({
   const [feedbackPopoverOpen, setFeedbackPopoverOpen] = useState(false);
   const [communityScrollWindow, setCommunityScrollWindow] = useState<MainScrollWindow | null>(null);
   const communityCardsRef = useRef<CommunityCardPayload[]>([]);
+  const communitySetsRef = useRef<CommunitySetPayload[]>([]);
   const featuredCardRef = useRef<CommunityCardPayload | null>(null);
   const communityAutoLoadInFlightRef = useRef(false);
   const communitySeenMarkIdsRef = useRef<Set<string>>(new Set());
@@ -16348,6 +16421,10 @@ function CommunityPanel({
   }, [communityCards]);
 
   useEffect(() => {
+    communitySetsRef.current = communitySets;
+  }, [communitySets]);
+
+  useEffect(() => {
     featuredCardRef.current = featuredCard;
   }, [featuredCard]);
 
@@ -16379,30 +16456,36 @@ function CommunityPanel({
     }
   }, [patchCommunityCard]);
 
-  const handleToggleCommunityFollow = useCallback(async (userId: string, followed: boolean) => {
-    const previousCards = communityCardsRef.current.filter((entry) => entry.userId === userId);
-    const previousFeatured = featuredCardRef.current?.userId === userId ? featuredCardRef.current : null;
+  const handleToggleCommunitySetFollow = useCallback(async (setId: string, followed: boolean) => {
+    const previousSet = communitySetsRef.current.find((entry) => entry.id === setId);
 
-    setCommunityCards((current) => current.map((entry) => (
-      entry.userId === userId ? { ...entry, followedByViewer: followed } : entry
+    if (!previousSet) {
+      return;
+    }
+
+    setCommunitySets((current) => current.map((entry) => (
+      entry.id === setId
+        ? {
+            ...entry,
+            followedByViewer: followed,
+            followerCount: Math.max(0, entry.followerCount + (followed ? 1 : -1)),
+          }
+        : entry
     )));
-    setFeaturedCard((current) => (
-      current?.userId === userId ? { ...current, followedByViewer: followed } : current
-    ));
 
     try {
-      await toggleCommunityUserFollow(userId, followed);
+      await toggleCommunitySetFollow(setId, followed);
     } catch (error) {
-      setCommunityCards((current) => current.map((entry) => {
-        const previous = previousCards.find((card) => card.id === entry.id);
-        return previous ? { ...entry, followedByViewer: previous.followedByViewer } : entry;
-      }));
-      if (previousFeatured) {
-        setFeaturedCard((current) => (
-          current?.id === previousFeatured.id ? { ...current, followedByViewer: previousFeatured.followedByViewer } : current
-        ));
-      }
-      Alert.alert("Follow unavailable", error instanceof Error ? error.message : "CardMagic could not update this follow.");
+      setCommunitySets((current) => current.map((entry) => (
+        entry.id === setId
+          ? {
+              ...entry,
+              followedByViewer: previousSet.followedByViewer,
+              followerCount: previousSet.followerCount,
+            }
+          : entry
+      )));
+      Alert.alert("Set follow unavailable", error instanceof Error ? error.message : "CardMagic could not update this set follow.");
     }
   }, []);
 
@@ -16482,7 +16565,16 @@ function CommunityPanel({
 
   useEffect(() => {
     void loadCommunityCards();
-  }, [loadCommunityCards]);
+  }, [accountUser?.id, loadCommunityCards]);
+
+  useEffect(() => {
+    setCommunitySets([]);
+    setCommunitySetsLoaded(false);
+    setSelectedCommunitySetId(null);
+    setCommunitySetCardsBySetId({});
+    setCommunitySetCardsErrorBySetId({});
+    setCommunitySetCardsLoadingId(null);
+  }, [accountUser?.id]);
 
   useEffect(() => {
     if (browseMode === "sets") {
@@ -16762,18 +16854,19 @@ function CommunityPanel({
             loadingMore={communityLoadingMore}
             onVisibleCommunityCardIdsChange={markVisibleCommunityCardsSeen}
             onToggleLike={handleToggleCommunityLike}
-            onToggleFollow={handleToggleCommunityFollow}
             onOpenComments={openCommunityComments}
             onExportCardImage={onExportCardImage}
           />
         ) : (
           <CommunitySetsPreview
             sets={filteredSets}
+            viewerUserId={accountUser?.id}
             selectedSetId={selectedCommunitySetId}
             cardsBySetId={communitySetCardsBySetId}
             loadingSetId={communitySetCardsLoadingId}
             errorBySetId={communitySetCardsErrorBySetId}
             onOpenSet={openCommunitySet}
+            onToggleSetFollow={handleToggleCommunitySetFollow}
             onExportCardImage={onExportCardImage}
           />
         )}
@@ -18234,7 +18327,6 @@ function CommunityCardsPreview({
   loadingMore,
   onVisibleCommunityCardIdsChange,
   onToggleLike,
-  onToggleFollow,
   onOpenComments,
   onExportCardImage,
 }: {
@@ -18246,7 +18338,6 @@ function CommunityCardsPreview({
   loadingMore: boolean;
   onVisibleCommunityCardIdsChange: (cardIds: string[]) => void;
   onToggleLike: (cardId: string, liked: boolean) => void;
-  onToggleFollow: (userId: string, followed: boolean) => void;
   onOpenComments: (cardId: string) => void;
   onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
@@ -18390,7 +18481,6 @@ function CommunityCardsPreview({
               entry={item.entry}
               cardPreviewWidth={cardPreviewWidth}
               onToggleLike={onToggleLike}
-              onToggleFollow={onToggleFollow}
               onOpenComments={onOpenComments}
               onExportCardImage={onExportCardImage}
             />
@@ -18435,14 +18525,12 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
   entry,
   cardPreviewWidth,
   onToggleLike,
-  onToggleFollow,
   onOpenComments,
   onExportCardImage,
 }: {
   entry: CommunityCardPayload;
   cardPreviewWidth: number;
   onToggleLike: (cardId: string, liked: boolean) => void;
-  onToggleFollow: (userId: string, followed: boolean) => void;
   onOpenComments: (cardId: string) => void;
   onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
@@ -18482,26 +18570,6 @@ const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
             {entry.authorName} · Level {entry.authorLevel} · {label}
           </Text>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ selected: entry.followedByViewer }}
-          accessibilityLabel={`${entry.followedByViewer ? "Unfollow" : "Follow"} ${entry.authorName}`}
-          onPress={() => onToggleFollow(entry.userId, !entry.followedByViewer)}
-          style={{
-            minHeight: 34,
-            borderRadius: 999,
-            borderWidth: 1,
-            borderColor: entry.followedByViewer ? "#0b7180" : "#d8dbe2",
-            backgroundColor: entry.followedByViewer ? "rgba(11,113,128,0.1)" : "#ffffff",
-            alignItems: "center",
-            justifyContent: "center",
-            paddingHorizontal: 10,
-          }}
-        >
-          <Text selectable={false} style={{ color: entry.followedByViewer ? "#0b7180" : "#46505d", fontSize: 11, fontWeight: "900" }}>
-            {entry.followedByViewer ? "Following" : "Follow"}
-          </Text>
-        </Pressable>
       </View>
 
       <View
@@ -18698,19 +18766,23 @@ function CommunityFeedActionButton({
 
 function CommunitySetsPreview({
   sets,
+  viewerUserId,
   selectedSetId,
   cardsBySetId,
   loadingSetId,
   errorBySetId,
   onOpenSet,
+  onToggleSetFollow,
   onExportCardImage,
 }: {
   sets: CommunitySetPayload[];
+  viewerUserId?: string;
   selectedSetId: string | null;
   cardsBySetId: Record<string, CommunitySetCardPayload[]>;
   loadingSetId: string | null;
   errorBySetId: Record<string, string>;
   onOpenSet: (set: CommunitySetPayload) => void;
+  onToggleSetFollow: (setId: string, followed: boolean) => void;
   onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
@@ -18736,6 +18808,7 @@ function CommunitySetsPreview({
         const setCards = cardsBySetId[set.id] ?? [];
         const loading = loadingSetId === set.id;
         const error = errorBySetId[set.id];
+        const viewerOwnsSet = Boolean(viewerUserId && viewerUserId === set.userId);
 
         return (
           <View
@@ -18749,49 +18822,115 @@ function CommunitySetsPreview({
               overflow: "hidden",
             }}
           >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`${expanded ? "Collapse" : "View"} ${set.name}`}
-              accessibilityState={{ expanded }}
-              onPress={() => onOpenSet(set)}
-              style={({ pressed }) => ({
+            <View
+              style={{
                 minHeight: 72,
                 padding: 10,
                 flexDirection: "row",
                 alignItems: "center",
                 gap: 10,
-                opacity: pressed ? 0.72 : 1,
-              })}
+              }}
             >
-              <View
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${expanded ? "Collapse" : "View"} ${set.name}`}
+                accessibilityState={{ expanded }}
+                onPress={() => onOpenSet(set)}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  minWidth: 0,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  opacity: pressed ? 0.72 : 1,
+                })}
+              >
+                <View
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 10,
+                    backgroundColor: "#151820",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <BookOpen size={21} color="#ffffff" strokeWidth={2.5} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+                    {set.name}
+                  </Text>
+                  <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+                    {set.authorName} · Level {set.authorLevel} · {set.cardCount} {set.cardCount === 1 ? "card" : "cards"}
+                  </Text>
+                  <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
+                    {set.code ?? "SET"} · {set.followerCount} {set.followerCount === 1 ? "viewer" : "viewers"}
+                  </Text>
+                </View>
+              </Pressable>
+              {viewerOwnsSet ? (
+                <View
+                  style={{
+                    minHeight: 34,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: "#d8dbe2",
+                    backgroundColor: "#f4f5f7",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    paddingHorizontal: 10,
+                  }}
+                >
+                  <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "900" }}>
+                    Your set
+                  </Text>
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: set.followedByViewer }}
+                  accessibilityLabel={`${set.followedByViewer ? "Stop viewing" : "Follow"} ${set.name}`}
+                  onPress={() => onToggleSetFollow(set.id, !set.followedByViewer)}
+                  style={{
+                    minHeight: 34,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: set.followedByViewer ? "#0b7180" : "#d8dbe2",
+                    backgroundColor: set.followedByViewer ? "rgba(11,113,128,0.1)" : "#ffffff",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexDirection: "row",
+                    gap: 6,
+                    paddingHorizontal: 10,
+                  }}
+                >
+                  <Eye size={15} color={set.followedByViewer ? "#0b7180" : "#46505d"} strokeWidth={2.5} />
+                  <Text selectable={false} numberOfLines={1} style={{ color: set.followedByViewer ? "#0b7180" : "#46505d", fontSize: 11, fontWeight: "900" }}>
+                    {set.followedByViewer ? "Viewing" : "Follow"}
+                  </Text>
+                </Pressable>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${expanded ? "Collapse" : "View"} ${set.name}`}
+                accessibilityState={{ expanded }}
+                onPress={() => onOpenSet(set)}
                 style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 10,
-                  backgroundColor: "#151820",
+                  width: 34,
+                  height: 34,
+                  borderRadius: 17,
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <BookOpen size={21} color="#ffffff" strokeWidth={2.5} />
-              </View>
-              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
-                  {set.name}
-                </Text>
-                <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-                  {set.authorName} · Level {set.authorLevel} · {set.cardCount} {set.cardCount === 1 ? "card" : "cards"}
-                </Text>
-                <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-                  {set.code ?? "SET"}
-                </Text>
-              </View>
-              {expanded ? (
-                <ChevronUp size={18} color="#46505d" strokeWidth={2.6} />
-              ) : (
-                <ChevronDown size={18} color="#46505d" strokeWidth={2.6} />
-              )}
-            </Pressable>
+                {expanded ? (
+                  <ChevronUp size={18} color="#46505d" strokeWidth={2.6} />
+                ) : (
+                  <ChevronDown size={18} color="#46505d" strokeWidth={2.6} />
+                )}
+              </Pressable>
+            </View>
 
             {expanded ? (
               <View style={{ borderTopWidth: 1, borderTopColor: "#e2f1f4", padding: 10, gap: 12 }}>

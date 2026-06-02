@@ -73,11 +73,28 @@ export type CommunitySetPayload = {
   setSymbolUri?: string;
   setSymbolUsesRarityTreatment?: boolean;
   cardCount: number;
+  followerCount: number;
+  followedByViewer: boolean;
   createdAt: string;
   updatedAt: string;
 };
 
 export type CommunitySetCardPayload = CommunityCardPayload;
+
+export type CommunityNotificationKind = "followed_set_card_added" | "set_followed";
+
+export type CommunityNotificationPayload = {
+  id: string;
+  kind: CommunityNotificationKind;
+  actorUserId?: string;
+  actorName: string;
+  setId?: string;
+  setName: string;
+  cardId?: string;
+  cardName?: string;
+  readAt?: string;
+  createdAt: string;
+};
 
 export type CommunityCardCommentPayload = {
   id: string;
@@ -259,8 +276,21 @@ type CommunitySetRow = {
   set_symbol_uri: string | null;
   set_symbol_uses_rarity_treatment: boolean | null;
   card_count: number | string | null;
+  follower_count: number | string | null;
+  followed_by_viewer: boolean | null;
   created_at: string;
   updated_at: string;
+};
+
+type CommunityNotificationRow = {
+  id: string;
+  kind: string;
+  actor_user_id: string | null;
+  set_id: string | null;
+  card_id: string | null;
+  metadata: unknown;
+  read_at: string | null;
+  created_at: string;
 };
 
 type CommunityCardCommentRow = {
@@ -407,6 +437,19 @@ function getSupabaseErrorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
+}
+
+function getCommunityNotificationMetadata(metadata: unknown): { setName?: string; cardName?: string; actorName?: string } {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {};
+  }
+
+  const record = metadata as { setName?: unknown; cardName?: unknown; actorName?: unknown };
+  const setName = typeof record.setName === "string" && record.setName.trim() ? record.setName.trim() : undefined;
+  const cardName = typeof record.cardName === "string" && record.cardName.trim() ? record.cardName.trim() : undefined;
+  const actorName = typeof record.actorName === "string" && record.actorName.trim() ? record.actorName.trim() : undefined;
+
+  return { setName, cardName, actorName };
 }
 
 function isBrowserNetworkError(error: unknown): boolean {
@@ -1054,9 +1097,86 @@ export async function fetchCommunitySets(limit = 24, offset = 0): Promise<Commun
     setSymbolUri: row.set_symbol_uri ?? undefined,
     setSymbolUsesRarityTreatment: row.set_symbol_uses_rarity_treatment ?? undefined,
     cardCount: normalizePositiveInteger(row.card_count, 0),
+    followerCount: normalizePositiveInteger(row.follower_count, 0),
+    followedByViewer: Boolean(row.followed_by_viewer),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+export async function fetchCommunityNotifications(limit = 30): Promise<CommunityNotificationPayload[]> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase
+    .from("community_notifications")
+    .select("id, kind, actor_user_id, set_id, card_id, metadata, read_at, created_at")
+    .order("created_at", { ascending: false })
+    .limit(Math.max(1, Math.min(Math.floor(limit), 80)));
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const rows = (data ?? []) as CommunityNotificationRow[];
+  const actorIds = Array.from(new Set(rows.flatMap((row) => row.actor_user_id ? [row.actor_user_id] : [])));
+  const actorNamesById = new Map<string, string>();
+
+  if (actorIds.length > 0) {
+    const { data: profiles, error: profileError } = await supabase
+      .from("profiles")
+      .select("id, display_name, username")
+      .in("id", actorIds);
+
+    if (profileError) {
+      console.warn("Unable to hydrate community notification actors.", profileError);
+    } else {
+      for (const profile of profiles ?? []) {
+        const row = profile as { id: string; display_name: string | null; username?: string | null };
+        actorNamesById.set(row.id, row.username ? `@${row.username}` : row.display_name ?? getFallbackAuthorName(row.id));
+      }
+    }
+  }
+
+  return rows
+    .filter((row): row is CommunityNotificationRow & { kind: CommunityNotificationKind } => (
+      row.kind === "followed_set_card_added" || row.kind === "set_followed"
+    ))
+    .map((row) => {
+      const metadata = getCommunityNotificationMetadata(row.metadata);
+      const actorName =
+        metadata.actorName ??
+        (row.actor_user_id ? actorNamesById.get(row.actor_user_id) ?? getFallbackAuthorName(row.actor_user_id) : "A viewer");
+
+      return {
+        id: row.id,
+        kind: row.kind,
+        actorUserId: row.actor_user_id ?? undefined,
+        actorName,
+        setId: row.set_id ?? undefined,
+        setName: metadata.setName ?? "Untitled Set",
+        cardId: row.card_id ?? undefined,
+        cardName: metadata.cardName,
+        readAt: row.read_at ?? undefined,
+        createdAt: row.created_at,
+      };
+    });
+}
+
+export async function markCommunityNotificationsRead(notificationIds: string[]): Promise<void> {
+  if (!supabase || notificationIds.length === 0) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from("community_notifications")
+    .update({ read_at: new Date().toISOString() })
+    .in("id", Array.from(new Set(notificationIds)));
+
+  if (error) {
+    throw new Error(error.message);
+  }
 }
 
 export async function fetchCommunitySetCards(setId: string): Promise<CommunitySetCardPayload[]> {
@@ -1505,7 +1625,7 @@ export async function toggleCommunityCardLike(cardId: string, liked: boolean): P
   }
 }
 
-export async function toggleCommunityUserFollow(userId: string, followed: boolean): Promise<void> {
+export async function toggleCommunitySetFollow(setId: string, followed: boolean): Promise<void> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
   }
@@ -1516,22 +1636,18 @@ export async function toggleCommunityUserFollow(userId: string, followed: boolea
     throw new Error(authError.message);
   }
 
-  const followerUserId = authData.user?.id;
+  const viewerUserId = authData.user?.id;
 
-  if (!followerUserId) {
-    throw new Error("Sign in to follow community creators.");
-  }
-
-  if (followerUserId === userId) {
-    throw new Error("You cannot follow your own account.");
+  if (!viewerUserId) {
+    throw new Error("Sign in to follow community sets.");
   }
 
   if (followed) {
     const { error } = await supabase
-      .from("community_user_follows")
+      .from("community_set_follows")
       .upsert(
-        { follower_user_id: followerUserId, followed_user_id: userId },
-        { onConflict: "follower_user_id,followed_user_id" },
+        { set_id: setId, viewer_user_id: viewerUserId },
+        { onConflict: "set_id,viewer_user_id" },
       );
 
     if (error) {
@@ -1542,10 +1658,10 @@ export async function toggleCommunityUserFollow(userId: string, followed: boolea
   }
 
   const { error } = await supabase
-    .from("community_user_follows")
+    .from("community_set_follows")
     .delete()
-    .eq("follower_user_id", followerUserId)
-    .eq("followed_user_id", userId);
+    .eq("set_id", setId)
+    .eq("viewer_user_id", viewerUserId);
 
   if (error) {
     throw new Error(error.message);

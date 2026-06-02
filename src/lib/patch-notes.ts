@@ -20,6 +20,16 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.32.0",
+    date: "2026-06-02",
+    title: "Set viewer notifications",
+    bullets: [
+      "Community follows now subscribe viewers to individual sets instead of creator accounts.",
+      "The community set directory now shows viewer counts and lets signed-in users follow or stop viewing each set.",
+      "The account tab now includes notifications for followed-set card additions and for viewers following your sets.",
+    ],
+  },
+  {
     version: "3.31.3",
     date: "2026-06-02",
     title: "Release process guardrails",

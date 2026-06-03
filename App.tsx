@@ -136,6 +136,7 @@ import {
   markCommunityNotificationsRead,
   createCommunityPoll,
   inviteCollaborationSetMember,
+  previewCollaborationSetInviteCode,
   publishCommunityCard,
   redeemCollaborationSetInviteCode,
   replaceRemoteCustomSetSymbols,
@@ -167,6 +168,7 @@ import {
   type CommunitySetPayload,
   type CollaborationInviteProfileSuggestion,
   type CollaborationPendingInvitePayload,
+  type CollaborationSetInvitePreviewPayload,
   type CollaborationSetMemberPayload,
 } from "@/lib/account-sets";
 import {
@@ -2883,6 +2885,10 @@ function mergeAccountCardSets(localSets: CardSet[], remoteSets: CardSet[]): Card
 }
 
 function isOwnedAccountCardSet(set: CardSet, accountUserId: string) {
+  return !set.ownerUserId || set.ownerUserId === accountUserId;
+}
+
+function canDeleteCardSetContent(set: CardSet, accountUserId?: string) {
   return !set.ownerUserId || set.ownerUserId === accountUserId;
 }
 
@@ -6586,6 +6592,11 @@ export default function App() {
   const [levelUpToasts, setLevelUpToasts] = useState<LevelUpToastItem[]>([]);
   const [authToast, setAuthToast] = useState<AuthToastState | null>(null);
   const [pendingCollaborationInviteCode, setPendingCollaborationInviteCode] = useState<string | null>(null);
+  const [pendingCollaborationInvitePreview, setPendingCollaborationInvitePreview] =
+    useState<CollaborationSetInvitePreviewPayload | null>(null);
+  const [collaborationInvitePreviewLoading, setCollaborationInvitePreviewLoading] = useState(false);
+  const [collaborationInviteAccepting, setCollaborationInviteAccepting] = useState(false);
+  const [collaborationInviteError, setCollaborationInviteError] = useState<string | null>(null);
   const collaborationInviteRedemptionBusyRef = useRef(false);
   const [setSymbolGeneratorOpen, setSetSymbolGeneratorOpen] = useState(false);
   const [setSymbolGeneratorPrompt, setSetSymbolGeneratorPrompt] = useState("");
@@ -7409,13 +7420,34 @@ export default function App() {
       }
 
       setPendingCollaborationInviteCode(pendingInviteCode);
+      setCollaborationInvitePreviewLoading(true);
+      setCollaborationInviteError(null);
 
-      if (!accountUser) {
-        setAccountOpen(true);
-        setAuthToast({
-          id: createUuid(),
-          message: "Set invite saved. Sign in or create an account to join.",
-        });
+      try {
+        const preview = await previewCollaborationSetInviteCode(pendingInviteCode);
+
+        if (!active) {
+          return;
+        }
+
+        setPendingCollaborationInvitePreview(preview);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        const errorMessage = error instanceof Error ? error.message : "CardMagic could not load that set invite.";
+
+        if (/not valid|expired/i.test(errorMessage)) {
+          await clearPendingCollaborationInviteCode();
+          setPendingCollaborationInviteCode(null);
+        }
+
+        setCollaborationInviteError(errorMessage);
+      } finally {
+        if (active) {
+          setCollaborationInvitePreviewLoading(false);
+        }
       }
     })();
 
@@ -8382,49 +8414,63 @@ export default function App() {
     void syncRemoteUserProgress();
   }, [accountUser, syncRemoteUserProgress]);
 
-  useEffect(() => {
-    if (!accountUser || !pendingCollaborationInviteCode || collaborationInviteRedemptionBusyRef.current) {
+  const dismissCollaborationInvitePrompt = useCallback(() => {
+    void clearPendingCollaborationInviteCode();
+    setPendingCollaborationInviteCode(null);
+    setPendingCollaborationInvitePreview(null);
+    setCollaborationInviteError(null);
+    setCollaborationInvitePreviewLoading(false);
+    setCollaborationInviteAccepting(false);
+  }, []);
+
+  const acceptCollaborationInvite = useCallback(async () => {
+    if (!pendingCollaborationInviteCode || collaborationInviteRedemptionBusyRef.current) {
+      return;
+    }
+
+    if (!accountUser) {
+      setAccountOpen(true);
+      setAuthToast({
+        id: createUuid(),
+        message: "Sign in or create an account to join this set.",
+      });
       return;
     }
 
     collaborationInviteRedemptionBusyRef.current = true;
-    setAuthToast({
-      id: createUuid(),
-      message: "Accepting set invite...",
-    });
+    setCollaborationInviteAccepting(true);
+    setCollaborationInviteError(null);
 
-    void (async () => {
-      try {
-        const redemption = await redeemCollaborationSetInviteCode(pendingCollaborationInviteCode);
+    try {
+      const redemption = await redeemCollaborationSetInviteCode(pendingCollaborationInviteCode);
 
+      await clearPendingCollaborationInviteCode();
+      setPendingCollaborationInviteCode(null);
+      setPendingCollaborationInvitePreview(null);
+      await syncRemoteUserProgress();
+      setInspectorTab("sets");
+      setSelectedSetId(redemption.setId);
+      setAccountOpen(false);
+      setAuthToast({
+        id: createUuid(),
+        message: redemption.role === "owner"
+          ? `${redemption.setName} is already your set.`
+          : `Joined ${redemption.setName}.`,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "CardMagic could not accept that set invite.";
+
+      if (/not valid|expired/i.test(errorMessage)) {
         await clearPendingCollaborationInviteCode();
         setPendingCollaborationInviteCode(null);
-        await syncRemoteUserProgress();
-        setInspectorTab("sets");
-        setSelectedSetId(redemption.setId);
-        setAccountOpen(false);
-        setAuthToast({
-          id: createUuid(),
-          message: redemption.role === "owner"
-            ? `${redemption.setName} is already your set.`
-            : `Joined ${redemption.setName}.`,
-        });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "CardMagic could not accept that set invite.";
-
-        if (/not valid|expired/i.test(errorMessage)) {
-          await clearPendingCollaborationInviteCode();
-          setPendingCollaborationInviteCode(null);
-        }
-
-        setAuthToast({
-          id: createUuid(),
-          message: errorMessage,
-        });
-      } finally {
-        collaborationInviteRedemptionBusyRef.current = false;
+        setPendingCollaborationInvitePreview(null);
       }
-    })();
+
+      setCollaborationInviteError(errorMessage);
+    } finally {
+      collaborationInviteRedemptionBusyRef.current = false;
+      setCollaborationInviteAccepting(false);
+    }
   }, [accountUser, pendingCollaborationInviteCode, syncRemoteUserProgress]);
 
   const openAccount = () => {
@@ -11472,6 +11518,14 @@ export default function App() {
       return;
     }
 
+    if (!canDeleteCardSetContent(targetSet, accountUser?.id)) {
+      Alert.alert(
+        "Only the set creator can remove cards",
+        "Collaborators can edit and add cards, but only the set creator can remove cards from this set.",
+      );
+      return;
+    }
+
     if (activeSetCardId === cardId) {
       setActiveSetCardId(null);
     }
@@ -11552,6 +11606,14 @@ export default function App() {
     const removedSet = removedIndex >= 0 ? currentSets[removedIndex] : null;
 
     if (!removedSet) {
+      return;
+    }
+
+    if (!canDeleteCardSetContent(removedSet, accountUser?.id)) {
+      Alert.alert(
+        "Only the set creator can delete this set",
+        "Collaborators can edit shared sets, but only the set creator can delete the set.",
+      );
       return;
     }
 
@@ -12112,6 +12174,7 @@ export default function App() {
                   <SetsPanel
                     sets={cardSets}
                     selectedSetId={selectedSetId}
+                    accountUserId={accountUser?.id}
                     scrollWindow={mainScrollWindow}
                     newSetName={newSetName}
                     onChangeNewSetName={setNewSetName}
@@ -12468,6 +12531,22 @@ export default function App() {
           canRedeemCreditCode={Boolean(accountUser)}
           onRequireAccount={openAccount}
         />
+        <CollaborationInviteModal
+          visible={Boolean(
+            pendingCollaborationInviteCode ||
+            pendingCollaborationInvitePreview ||
+            collaborationInvitePreviewLoading ||
+            collaborationInviteError,
+          )}
+          preview={pendingCollaborationInvitePreview}
+          signedIn={Boolean(accountUser)}
+          loading={collaborationInvitePreviewLoading}
+          accepting={collaborationInviteAccepting}
+          error={collaborationInviteError}
+          onAccept={() => void acceptCollaborationInvite()}
+          onSignIn={() => setAccountOpen(true)}
+          onClose={dismissCollaborationInvitePrompt}
+        />
         <AccountModal
           visible={accountOpen}
           user={accountUser}
@@ -12495,6 +12574,219 @@ export default function App() {
         />
       </GestureHandlerRootView>
     </HybridSymbolStyleProvider>
+  );
+}
+
+function CollaborationInviteModal({
+  visible,
+  preview,
+  signedIn,
+  loading,
+  accepting,
+  error,
+  onAccept,
+  onSignIn,
+  onClose,
+}: {
+  visible: boolean;
+  preview: CollaborationSetInvitePreviewPayload | null;
+  signedIn: boolean;
+  loading: boolean;
+  accepting: boolean;
+  error: string | null;
+  onAccept: () => void;
+  onSignIn: () => void;
+  onClose: () => void;
+}) {
+  if (!visible) {
+    return null;
+  }
+
+  const title = preview ? `Join ${preview.setName}?` : "Set invite";
+  const body = preview
+    ? `${preview.ownerName} invited you to collaborate as an editor.`
+    : error
+      ? "CardMagic could not load this set invite."
+      : "Loading this set invite.";
+
+  return (
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={accepting ? undefined : onClose}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(9, 12, 18, 0.52)",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 18,
+        }}
+      >
+        <View
+          style={{
+            width: "100%",
+            maxWidth: 430,
+            borderRadius: 14,
+            borderCurve: "continuous",
+            borderWidth: 1,
+            borderColor: "#d8dbe2",
+            backgroundColor: "#ffffff",
+            padding: 16,
+            gap: 12,
+            shadowColor: "#000000",
+            shadowOpacity: 0.18,
+            shadowRadius: 18,
+            shadowOffset: { width: 0, height: 10 },
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: "#e9fbfd",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <UserPlus size={18} color="#0b7180" strokeWidth={2.6} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text selectable={false} numberOfLines={2} style={{ color: "#151820", fontSize: 18, lineHeight: 22, fontWeight: "900" }}>
+                {title}
+              </Text>
+              <Text selectable={false} numberOfLines={2} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                Collaboration invite
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss set invite"
+              disabled={accepting}
+              onPress={onClose}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                backgroundColor: "#fff2f2",
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: accepting ? 0.5 : 1,
+              }}
+            >
+              <X size={18} color="#c52233" strokeWidth={2.7} />
+            </Pressable>
+          </View>
+
+          <Text selectable style={{ color: "#3d4653", fontSize: 13, lineHeight: 19, fontWeight: "800" }}>
+            {body}
+          </Text>
+
+          {loading ? (
+            <View style={{ minHeight: 38, flexDirection: "row", alignItems: "center", gap: 9 }}>
+              <ActivityIndicator color="#0b7180" size="small" />
+              <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
+                Checking invite link
+              </Text>
+            </View>
+          ) : error ? (
+            <Text selectable style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+              {error}
+            </Text>
+          ) : preview ? (
+            <View
+              style={{
+                borderRadius: 10,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#d8dbe2",
+                backgroundColor: "#f8fafc",
+                padding: 10,
+                gap: 5,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                {preview.setName}
+              </Text>
+              <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                Owner: {preview.ownerName}
+              </Text>
+              <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                Access: editor
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel set invite"
+              disabled={accepting}
+              onPress={onClose}
+              style={{
+                minHeight: 40,
+                borderRadius: 8,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#d8dbe2",
+                backgroundColor: "#ffffff",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 14,
+                opacity: accepting ? 0.5 : 1,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                Cancel
+              </Text>
+            </Pressable>
+            {signedIn ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Accept set invite"
+                disabled={loading || accepting || !preview}
+                onPress={onAccept}
+                style={{
+                  minHeight: 40,
+                  borderRadius: 8,
+                  borderCurve: "continuous",
+                  backgroundColor: loading || accepting || !preview ? "#9aa1ad" : "#151820",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 8,
+                  paddingHorizontal: 14,
+                }}
+              >
+                {accepting ? <ActivityIndicator color="#ffffff" size="small" /> : <Check size={16} color="#ffffff" strokeWidth={2.6} />}
+                <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                  {accepting ? "Joining" : "Accept invite"}
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Sign in to accept set invite"
+                disabled={loading || !preview}
+                onPress={onSignIn}
+                style={{
+                  minHeight: 40,
+                  borderRadius: 8,
+                  borderCurve: "continuous",
+                  backgroundColor: loading || !preview ? "#9aa1ad" : "#151820",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingHorizontal: 14,
+                }}
+              >
+                <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                  Sign in / create account
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -16777,6 +17069,7 @@ function getInviteUsernameSearchQuery(value: string) {
 
 function SetCardsGrid({
   set,
+  canDeleteSetContent,
   visibleSetCards,
   hiddenCardCount,
   previewWidth,
@@ -16797,6 +17090,7 @@ function SetCardsGrid({
   showMoreCards,
 }: {
   set: CardSet;
+  canDeleteSetContent: boolean;
   visibleSetCards: SetCardSnapshot[];
   hiddenCardCount: number;
   previewWidth: number;
@@ -16989,35 +17283,37 @@ function SetCardsGrid({
                 >
                   <RefreshCw size={16} color="#ffffff" strokeWidth={2.7} />
                 </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove ${setCard.name || "Untitled Card"} from ${set.name}`}
-                  hitSlop={8}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    confirmDelete(
-                      "Remove card?",
-                      `Remove ${setCard.name || "Untitled Card"} from ${set.name}?`,
-                      "Remove",
-                      () => onRemoveCardFromSet(set.id, snapshot.id),
-                    );
-                  }}
-                  style={{
-                    position: "absolute",
-                    top: 4,
-                    right: 4,
-                    width: 30,
-                    height: 30,
-                    borderRadius: 15,
-                    borderWidth: 1,
-                    borderColor: "rgba(185,28,28,0.32)",
-                    backgroundColor: "rgba(255,255,255,0.94)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <X size={17} color="#b91c1c" strokeWidth={3} />
-                </Pressable>
+                {canDeleteSetContent ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove ${setCard.name || "Untitled Card"} from ${set.name}`}
+                    hitSlop={8}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      confirmDelete(
+                        "Remove card?",
+                        `Remove ${setCard.name || "Untitled Card"} from ${set.name}?`,
+                        "Remove",
+                        () => onRemoveCardFromSet(set.id, snapshot.id),
+                      );
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 4,
+                      right: 4,
+                      width: 30,
+                      height: 30,
+                      borderRadius: 15,
+                      borderWidth: 1,
+                      borderColor: "rgba(185,28,28,0.32)",
+                      backgroundColor: "rgba(255,255,255,0.94)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <X size={17} color="#b91c1c" strokeWidth={3} />
+                  </Pressable>
+                ) : null}
               </>
             ) : null}
           </Pressable>
@@ -17065,6 +17361,7 @@ function SetCardsGrid({
 function SetsPanel({
   sets,
   selectedSetId,
+  accountUserId,
   scrollWindow,
   newSetName,
   customCardBacks,
@@ -17097,6 +17394,7 @@ function SetsPanel({
 }: {
   sets: CardSet[];
   selectedSetId: string;
+  accountUserId?: string;
   scrollWindow: MainScrollWindow | null;
   newSetName: string;
   customCardBacks: CustomCardBackEntry[];
@@ -17266,8 +17564,8 @@ function SetsPanel({
     }
   }, [onFetchPendingInvites]);
 
-  const openSetInvitePanel = useCallback((setId: string) => {
-    if (!canInviteSetCollaborators) {
+  const openSetInvitePanel = useCallback((setId: string, canManageInvites: boolean) => {
+    if (!canInviteSetCollaborators && canManageInvites) {
       Alert.alert("Sign in required", "Sign in before inviting collaborators to a set.");
       return;
     }
@@ -17287,7 +17585,9 @@ function SetsPanel({
 
     if (shouldOpen) {
       void loadSetCollaborators(setId);
-      void loadPendingInvites(setId);
+      if (canManageInvites) {
+        void loadPendingInvites(setId);
+      }
     }
   }, [canInviteSetCollaborators, invitingSetId, loadPendingInvites, loadSetCollaborators, onSelectSet]);
 
@@ -17322,7 +17622,7 @@ function SetsPanel({
     }
   }, [inviteIdentifier, loadPendingInvites, loadSetCollaborators, onInviteSetCollaborator]);
 
-  const createAndCopySetInviteLink = useCallback(async (setId: string, setName: string) => {
+  const createSetInviteLink = useCallback(async (setId: string, setName: string) => {
     setInviteLinkBusySetId(setId);
     setInviteError(null);
     setInviteSuccessMessage(null);
@@ -17334,14 +17634,36 @@ function SetsPanel({
         ...current,
         [setId]: inviteUrl,
       }));
-      await copyTextToClipboardOrShare(inviteUrl);
-      setInviteSuccessMessage(`Invite link copied for ${setName}.`);
+      setInviteSuccessMessage(`Invite link created for ${setName}.`);
     } catch (error) {
       setInviteError(error instanceof Error ? error.message : "CardMagic could not create that invite link.");
     } finally {
       setInviteLinkBusySetId(null);
     }
   }, [onCreateSetInviteLink]);
+
+  const copyCreatedSetInviteLink = useCallback(async (setId: string, setName: string) => {
+    const inviteUrl = inviteLinkBySetId[setId];
+
+    if (!inviteUrl) {
+      await createSetInviteLink(setId, setName);
+      return;
+    }
+
+    setInviteLinkBusySetId(setId);
+    setInviteError(null);
+    setInviteSuccessMessage(null);
+
+    try {
+      await copyTextToClipboardOrShare(inviteUrl);
+      setInviteSuccessMessage(`Invite link copied for ${setName}.`);
+    } catch (error) {
+      console.warn("Invite link copy/share unavailable.", error);
+      setInviteError(error instanceof Error ? error.message : "CardMagic could not copy that invite link.");
+    } finally {
+      setInviteLinkBusySetId(null);
+    }
+  }, [createSetInviteLink, inviteLinkBySetId]);
 
   useEffect(() => {
     const query = getInviteUsernameSearchQuery(inviteIdentifier);
@@ -17502,12 +17824,15 @@ function SetsPanel({
           const visibleCardLimit = visibleCardLimits[set.id] ?? SET_GRID_INITIAL_CARD_LIMIT;
           const visibleSetCards = set.cards.slice(0, visibleCardLimit);
           const hiddenCardCount = Math.max(0, set.cards.length - visibleSetCards.length);
+          const canDeleteSetContent = canDeleteCardSetContent(set, accountUserId);
+          const canManageSetCollaborators = canInviteSetCollaborators && canDeleteSetContent;
+          const canViewSetCollaborators = canManageSetCollaborators || Boolean(set.ownerUserId && accountUserId);
           const collaborators = collaboratorsBySetId[set.id] ?? [];
           const collaboratorsLoading = collaboratorsLoadingSetId === set.id;
           const collaboratorsError = collaboratorsErrorBySetId[set.id];
-          const pendingInvites = pendingInvitesBySetId[set.id] ?? [];
-          const pendingInvitesLoading = pendingInvitesLoadingSetId === set.id;
-          const pendingInvitesError = pendingInvitesErrorBySetId[set.id];
+          const pendingInvites = canManageSetCollaborators ? pendingInvitesBySetId[set.id] ?? [] : [];
+          const pendingInvitesLoading = canManageSetCollaborators && pendingInvitesLoadingSetId === set.id;
+          const pendingInvitesError = canManageSetCollaborators ? pendingInvitesErrorBySetId[set.id] : undefined;
           const collaboratorPanelLoading = collaboratorsLoading || pendingInvitesLoading;
           const collaboratorPanelError = collaboratorsError ?? pendingInvitesError;
           const collaboratorRowCount = collaborators.length + pendingInvites.length;
@@ -17623,28 +17948,53 @@ function SetsPanel({
                     </Text>
                   </View>
                 </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Invite collaborators to ${set.name}`}
-                  accessibilityState={{ expanded: invitingSetId === set.id }}
-                  hitSlop={6}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    openSetInvitePanel(set.id);
-                  }}
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.28)",
-                    backgroundColor: invitingSetId === set.id ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <UserPlus size={16} color="#ffffff" strokeWidth={2.35} />
-                </Pressable>
+                {canManageSetCollaborators ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Invite collaborators to ${set.name}`}
+                    accessibilityState={{ expanded: invitingSetId === set.id }}
+                    hitSlop={6}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      openSetInvitePanel(set.id, true);
+                    }}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.28)",
+                      backgroundColor: invitingSetId === set.id ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <UserPlus size={16} color="#ffffff" strokeWidth={2.35} />
+                  </Pressable>
+                ) : canViewSetCollaborators ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`View collaborators for ${set.name}`}
+                    accessibilityState={{ expanded: invitingSetId === set.id }}
+                    hitSlop={6}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      openSetInvitePanel(set.id, false);
+                    }}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.28)",
+                      backgroundColor: invitingSetId === set.id ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Users size={16} color="#ffffff" strokeWidth={2.35} />
+                  </Pressable>
+                ) : null}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={isEditingSet ? `Save ${set.name} changes` : `Edit ${set.name}`}
@@ -17675,35 +18025,37 @@ function SetsPanel({
                     <Pencil size={16} color="#ffffff" strokeWidth={2.35} />
                   )}
                 </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Delete ${set.name}`}
-                  hitSlop={6}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    confirmDelete(
-                      "Delete set?",
-                      `Delete ${set.name}? This removes the set and its saved card snapshots from CardMagic.`,
-                      "Delete",
-                      () => onRemoveSet(set.id),
-                    );
-                  }}
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.28)",
-                    backgroundColor: "rgba(255,255,255,0.14)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Trash2 size={16} color="#ffffff" strokeWidth={2.35} />
-                </Pressable>
+                {canDeleteSetContent ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${set.name}`}
+                    hitSlop={6}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      confirmDelete(
+                        "Delete set?",
+                        `Delete ${set.name}? This removes the set and its saved card snapshots from CardMagic.`,
+                        "Delete",
+                        () => onRemoveSet(set.id),
+                      );
+                    }}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.28)",
+                      backgroundColor: "rgba(255,255,255,0.14)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Trash2 size={16} color="#ffffff" strokeWidth={2.35} />
+                  </Pressable>
+                ) : null}
               </View>
 
-              {invitingSetId === set.id ? (
+              {canViewSetCollaborators && invitingSetId === set.id ? (
                 <View
                   style={{
                     borderRadius: 9,
@@ -17724,127 +18076,143 @@ function SetsPanel({
                       textTransform: "uppercase",
                     }}
                   >
-                    Invite collaborator
+                    {canManageSetCollaborators ? "Invite collaborator" : "Collaborators"}
                   </Text>
-                  <View style={{ flexDirection: viewportWidth >= 560 ? "row" : "column", gap: 8 }}>
-                    <TextInput
-                      accessibilityLabel={`Invite email or username for ${set.name}`}
-                      value={inviteIdentifier}
-                      onChangeText={(identifier) => {
-                        setInviteIdentifier(identifier);
-                        setInviteError(null);
-                        setInviteSuccessMessage(null);
-                        setInviteSuggestionsSuppressedFor(null);
-                      }}
-                      placeholder="friend@example.com or @username"
-                      placeholderTextColor="#68707d"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType="default"
-                      onSubmitEditing={() => void submitSetInvite(set.id, set.name)}
-                      returnKeyType="send"
-                      style={{
-                        flex: 1,
-                        minHeight: 42,
-                        borderRadius: 8,
-                        borderCurve: "continuous",
-                        borderWidth: 1,
-                        borderColor: "#d4d8e0",
-                        backgroundColor: "#ffffff",
-                        color: "#151820",
-                        fontSize: 14,
-                        fontWeight: "800",
-                        paddingHorizontal: 10,
-                      }}
-                    />
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Send ${set.name} collaboration invite`}
-                      disabled={inviteBusySetId === set.id}
-                      onPress={() => void submitSetInvite(set.id, set.name)}
-                      style={{
-                        minHeight: 42,
-                        borderRadius: 8,
-                        borderCurve: "continuous",
-                        backgroundColor: inviteBusySetId === set.id ? "#8aa7ad" : "#151820",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexDirection: "row",
-                        gap: 8,
-                        paddingHorizontal: 14,
-                      }}
-                    >
-                      {inviteBusySetId === set.id ? (
-                        <ActivityIndicator color="#ffffff" size="small" />
-                      ) : (
-                        <UserPlus size={16} color="#ffffff" strokeWidth={2.4} />
-                      )}
-                      <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-                        Send invite
-                      </Text>
-                    </Pressable>
-                  </View>
-                  <View
-                    style={{
-                      flexDirection: viewportWidth >= 560 ? "row" : "column",
-                      alignItems: viewportWidth >= 560 ? "center" : "stretch",
-                      gap: 8,
-                    }}
-                  >
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Copy ${set.name} collaboration invite link`}
-                      disabled={inviteLinkBusySetId === set.id}
-                      onPress={() => void createAndCopySetInviteLink(set.id, set.name)}
-                      style={({ pressed }) => ({
-                        minHeight: 38,
-                        borderRadius: 8,
-                        borderCurve: "continuous",
-                        borderWidth: 1,
-                        borderColor: "#c8edf2",
-                        backgroundColor: inviteLinkBusySetId === set.id
-                          ? "#e7f4f6"
-                          : pressed
-                            ? "#dff7fa"
-                            : "#f2fcfd",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexDirection: "row",
-                        gap: 8,
-                        paddingHorizontal: 12,
-                      })}
-                    >
-                      {inviteLinkBusySetId === set.id ? (
-                        <ActivityIndicator color="#0b7180" size="small" />
-                      ) : (
-                        <Share2 size={15} color="#0b7180" strokeWidth={2.5} />
-                      )}
-                      <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900" }}>
-                        Copy invite link
-                      </Text>
-                    </Pressable>
-                    {inviteLinkBySetId[set.id] ? (
+                  {canManageSetCollaborators ? (
+                    <>
+                      <View style={{ flexDirection: viewportWidth >= 560 ? "row" : "column", gap: 8 }}>
+                        <TextInput
+                          accessibilityLabel={`Invite email or username for ${set.name}`}
+                          value={inviteIdentifier}
+                          onChangeText={(identifier) => {
+                            setInviteIdentifier(identifier);
+                            setInviteError(null);
+                            setInviteSuccessMessage(null);
+                            setInviteSuggestionsSuppressedFor(null);
+                          }}
+                          placeholder="friend@example.com or @username"
+                          placeholderTextColor="#68707d"
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          keyboardType="default"
+                          onSubmitEditing={() => void submitSetInvite(set.id, set.name)}
+                          returnKeyType="send"
+                          style={{
+                            flex: 1,
+                            minHeight: 42,
+                            borderRadius: 8,
+                            borderCurve: "continuous",
+                            borderWidth: 1,
+                            borderColor: "#d4d8e0",
+                            backgroundColor: "#ffffff",
+                            color: "#151820",
+                            fontSize: 14,
+                            fontWeight: "800",
+                            paddingHorizontal: 10,
+                          }}
+                        />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Send ${set.name} collaboration invite`}
+                          disabled={inviteBusySetId === set.id}
+                          onPress={() => void submitSetInvite(set.id, set.name)}
+                          style={{
+                            minHeight: 42,
+                            borderRadius: 8,
+                            borderCurve: "continuous",
+                            backgroundColor: inviteBusySetId === set.id ? "#8aa7ad" : "#151820",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexDirection: "row",
+                            gap: 8,
+                            paddingHorizontal: 14,
+                          }}
+                        >
+                          {inviteBusySetId === set.id ? (
+                            <ActivityIndicator color="#ffffff" size="small" />
+                          ) : (
+                            <UserPlus size={16} color="#ffffff" strokeWidth={2.4} />
+                          )}
+                          <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                            Send invite
+                          </Text>
+                        </Pressable>
+                      </View>
                       <View
                         style={{
-                          flex: 1,
-                          minWidth: 0,
-                          minHeight: 38,
-                          borderRadius: 8,
-                          borderCurve: "continuous",
-                          borderWidth: 1,
-                          borderColor: "#d4d8e0",
-                          backgroundColor: "#ffffff",
-                          justifyContent: "center",
-                          paddingHorizontal: 10,
+                          flexDirection: viewportWidth >= 560 ? "row" : "column",
+                          alignItems: viewportWidth >= 560 ? "center" : "stretch",
+                          gap: 8,
                         }}
                       >
-                        <Text selectable numberOfLines={1} style={{ color: "#3c4656", fontSize: 11, fontWeight: "800" }}>
-                          {inviteLinkBySetId[set.id]}
-                        </Text>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={inviteLinkBySetId[set.id]
+                            ? `Copy ${set.name} collaboration invite link`
+                            : `Create ${set.name} collaboration invite link`}
+                          disabled={inviteLinkBusySetId === set.id}
+                          onPress={() => {
+                            if (inviteLinkBySetId[set.id]) {
+                              void copyCreatedSetInviteLink(set.id, set.name);
+                            } else {
+                              void createSetInviteLink(set.id, set.name);
+                            }
+                          }}
+                          style={({ pressed }) => ({
+                            minHeight: 38,
+                            borderRadius: 8,
+                            borderCurve: "continuous",
+                            borderWidth: 1,
+                            borderColor: "#c8edf2",
+                            backgroundColor: inviteLinkBusySetId === set.id
+                              ? "#e7f4f6"
+                              : pressed
+                                ? "#dff7fa"
+                                : "#f2fcfd",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexDirection: "row",
+                            gap: 8,
+                            paddingHorizontal: 12,
+                          })}
+                        >
+                          {inviteLinkBusySetId === set.id ? (
+                            <ActivityIndicator color="#0b7180" size="small" />
+                          ) : (
+                            <Share2 size={15} color="#0b7180" strokeWidth={2.5} />
+                          )}
+                          <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900" }}>
+                            {inviteLinkBySetId[set.id] ? "Copy link" : "Create invite link"}
+                          </Text>
+                        </Pressable>
+                        {inviteLinkBySetId[set.id] ? (
+                          <TextInput
+                            accessibilityLabel={`${set.name} collaboration invite link`}
+                            value={inviteLinkBySetId[set.id]}
+                            editable={false}
+                            selectTextOnFocus
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              minHeight: 38,
+                              borderRadius: 8,
+                              borderCurve: "continuous",
+                              borderWidth: 1,
+                              borderColor: "#d4d8e0",
+                              backgroundColor: "#ffffff",
+                              paddingHorizontal: 10,
+                              color: "#3c4656",
+                              fontSize: 12,
+                              fontWeight: "800",
+                            }}
+                          />
+                        ) : null}
                       </View>
-                    ) : null}
-                  </View>
-                  {inviteSuggestionsLoading || inviteSuggestions.length > 0 ? (
+                    </>
+                  ) : null}
+                  {canManageSetCollaborators && (inviteSuggestionsLoading || inviteSuggestions.length > 0) ? (
                     <View
                       style={{
                         borderRadius: 8,
@@ -17950,7 +18318,9 @@ function SetsPanel({
                         disabled={collaboratorPanelLoading}
                         onPress={() => {
                           void loadSetCollaborators(set.id);
-                          void loadPendingInvites(set.id);
+                          if (canManageSetCollaborators) {
+                            void loadPendingInvites(set.id);
+                          }
                         }}
                         style={{
                           width: 28,
@@ -18074,16 +18444,16 @@ function SetsPanel({
                       </Text>
                     )}
                   </View>
-                  {inviteError ? (
+                  {canManageSetCollaborators && inviteError ? (
                     <Text selectable style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
                       {inviteError}
                     </Text>
-                  ) : inviteSuccessMessage ? (
+                  ) : canManageSetCollaborators && inviteSuccessMessage ? (
                     <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
                       {inviteSuccessMessage}
                     </Text>
                   ) : null}
-                  {inviteSendingSlow && inviteBusySetId === set.id ? (
+                  {canManageSetCollaborators && inviteSendingSlow && inviteBusySetId === set.id ? (
                     <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
                       Still sending the invite through Supabase...
                     </Text>
@@ -18482,6 +18852,7 @@ function SetsPanel({
 
                   <SetCardsGrid
                     set={set}
+                    canDeleteSetContent={canDeleteSetContent}
                     visibleSetCards={visibleSetCards}
                     hiddenCardCount={hiddenCardCount}
                     previewWidth={previewWidth}

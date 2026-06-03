@@ -20,6 +20,75 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.35.2",
+    date: "2026-06-03",
+    title: "Production collaboration release",
+    branches: ["beta", "main"],
+    bullets: [
+      "Production now includes creator-only set deletion, so collaborators can edit and add cards but cannot delete shared sets or remove set cards they do not own.",
+      "Set invite links now open a confirmation prompt, support sign-in before acceptance, and notify the set owner when a collaborator joins.",
+      "Shared sets now expose a read-only collaborator roster to editors while keeping invite creation and pending-invite controls owner-only.",
+      "Invite-link creation, manual copying, and Supabase invite SQL handling have been hardened for mobile Safari and Supabase RPC ambiguity.",
+    ],
+  },
+  {
+    version: "3.35.1",
+    date: "2026-06-03",
+    title: "Invite link SQL fix",
+    bullets: [
+      "Fixed the Supabase invite preview and redemption RPCs so their set_id output column no longer conflicts with table columns.",
+      "Invite links should now open the collaboration prompt without the ambiguous-column database error.",
+    ],
+  },
+  {
+    version: "3.35.0",
+    date: "2026-06-03",
+    title: "Set invite acceptance flow",
+    bullets: [
+      "Opening a set invite link now shows an explicit collaboration invite prompt instead of auto-joining silently.",
+      "Signed-out invitees can open sign-in or account creation from the invite prompt, then accept the stored invite after authentication.",
+      "When someone accepts an invite link, the set owner now receives a collaboration-joined notification in the account Notifications section.",
+    ],
+  },
+  {
+    version: "3.34.9",
+    date: "2026-06-03",
+    title: "Invite link copying",
+    bullets: [
+      "The set invite link button now creates the URL first, then changes into a separate Copy link action so browser clipboard access happens on its own tap.",
+      "Generated invite URLs now render in a read-only text field instead of a truncated label, making the full link manually selectable when clipboard access is blocked.",
+    ],
+  },
+  {
+    version: "3.34.8",
+    date: "2026-06-03",
+    title: "Collaborator roster access",
+    bullets: [
+      "Invite-link creation no longer fails visually when Safari blocks clipboard access after the Supabase invite token is created.",
+      "Shared sets now show a read-only collaborator roster button instead of an invite button.",
+      "Pending invites and invite-link controls remain restricted to the set creator.",
+    ],
+  },
+  {
+    version: "3.34.7",
+    date: "2026-06-03",
+    title: "Shared set invite controls",
+    bullets: [
+      "Collaborator-owned shared sets no longer show the invite button in the Saved Sets header.",
+      "The collaborator invite panel is now creator-gated, so shared set editors cannot open direct invites or copy invite links for sets they do not own.",
+    ],
+  },
+  {
+    version: "3.34.6",
+    date: "2026-06-03",
+    title: "Creator-only set deletion",
+    bullets: [
+      "Collaborators no longer see set deletion controls for shared sets they did not create.",
+      "Per-card remove controls are hidden from collaborator edit mode unless the current user is the set creator.",
+      "Supabase deletion policies now require the set creator for set membership deletion and protect shared-set card rows from non-creator deletion.",
+    ],
+  },
+  {
     version: "3.34.5",
     date: "2026-06-03",
     title: "Production set preview release",

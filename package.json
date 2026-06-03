@@ -1,6 +1,6 @@
 {
   "name": "cardmagic",
-  "version": "3.34.5",
+  "version": "3.35.2",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --port 8082",

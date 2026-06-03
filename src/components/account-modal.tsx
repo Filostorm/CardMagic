@@ -484,7 +484,7 @@ function AccountNotificationsSection({
         ) : null}
         {notifications.length === 0 && !loading ? (
           <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-            Follow community sets to get card-addition notifications. Set owners will also see viewer follows here.
+            Follow community sets to get card-addition notifications. Set owners will also see viewer follows and collaborator invite acceptances here.
           </Text>
         ) : (
           notifications.map((notification) => (
@@ -501,10 +501,14 @@ function AccountNotificationRow({ notification }: { notification: CommunityNotif
   const title =
     notification.kind === "set_followed"
       ? `${notification.actorName} followed ${notification.setName}`
+      : notification.kind === "collaboration_set_joined"
+        ? `${notification.actorName} joined ${notification.setName}`
       : `${notification.cardName ?? "A card"} was added to ${notification.setName}`;
   const detail =
     notification.kind === "set_followed"
       ? "A viewer subscribed to one of your community sets."
+      : notification.kind === "collaboration_set_joined"
+        ? "A collaborator accepted your set invite link."
       : `${notification.actorName} updated a set you follow.`;
 
   return (
@@ -530,7 +534,7 @@ function AccountNotificationRow({ notification }: { notification: CommunityNotif
           justifyContent: "center",
         }}
       >
-        {notification.kind === "set_followed" ? (
+        {notification.kind === "set_followed" || notification.kind === "collaboration_set_joined" ? (
           <UserPlus size={15} color={unread ? "#ffffff" : "#68707d"} strokeWidth={2.5} />
         ) : (
           <BookOpen size={15} color={unread ? "#ffffff" : "#68707d"} strokeWidth={2.5} />

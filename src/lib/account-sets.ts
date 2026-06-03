@@ -82,7 +82,7 @@ export type CommunitySetPayload = {
 
 export type CommunitySetCardPayload = CommunityCardPayload;
 
-export type CommunityNotificationKind = "followed_set_card_added" | "set_followed";
+export type CommunityNotificationKind = "followed_set_card_added" | "set_followed" | "collaboration_set_joined";
 
 export type CommunityNotificationPayload = {
   id: string;
@@ -204,6 +204,15 @@ export type CollaborationSetInviteLinkPayload = {
   inviteCode: string;
   setId: string;
   setName: string;
+  role: Extract<CollaborationSetRole, "editor">;
+  expiresAt?: string;
+};
+
+export type CollaborationSetInvitePreviewPayload = {
+  setId: string;
+  setName: string;
+  ownerUserId: string;
+  ownerName: string;
   role: Extract<CollaborationSetRole, "editor">;
   expiresAt?: string;
 };
@@ -392,6 +401,15 @@ type CollaborationSetInviteLinkRow = {
   invite_code: string | null;
   set_id: string;
   set_name: string | null;
+  role: string | null;
+  expires_at: string | null;
+};
+
+type CollaborationSetInvitePreviewRow = {
+  set_id: string;
+  set_name: string | null;
+  owner_user_id: string;
+  owner_name: string | null;
   role: string | null;
   expires_at: string | null;
 };
@@ -1541,7 +1559,9 @@ export async function fetchCommunityNotifications(limit = 30): Promise<Community
 
   return rows
     .filter((row): row is CommunityNotificationRow & { kind: CommunityNotificationKind } => (
-      row.kind === "followed_set_card_added" || row.kind === "set_followed"
+      row.kind === "followed_set_card_added" ||
+      row.kind === "set_followed" ||
+      row.kind === "collaboration_set_joined"
     ))
     .map((row) => {
       const metadata = getCommunityNotificationMetadata(row.metadata);
@@ -1690,6 +1710,37 @@ export async function createCollaborationSetInviteLink(setId: string): Promise<C
     inviteCode: row.invite_code,
     setId: row.set_id,
     setName: row.set_name ?? "Shared set",
+    role: "editor",
+    expiresAt: row.expires_at ?? undefined,
+  };
+}
+
+export async function previewCollaborationSetInviteCode(
+  inviteCode: string,
+): Promise<CollaborationSetInvitePreviewPayload> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("preview_collaboration_set_invite_link", {
+    p_invite_code: inviteCode,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const row = ((data ?? []) as CollaborationSetInvitePreviewRow[])[0];
+
+  if (!row?.set_id) {
+    throw new Error("Supabase did not return that collaboration invite.");
+  }
+
+  return {
+    setId: row.set_id,
+    setName: row.set_name ?? "Shared set",
+    ownerUserId: row.owner_user_id,
+    ownerName: row.owner_name ?? "another user",
     role: "editor",
     expiresAt: row.expires_at ?? undefined,
   };

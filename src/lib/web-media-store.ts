@@ -73,6 +73,40 @@ export async function persistWebMediaUri(uri: string, prefix: string, fallbackMi
   }
 }
 
+export async function persistWebMediaBlob(blob: Blob, prefix: string, fallbackMimeType: string) {
+  if (Platform.OS !== "web" || typeof window === "undefined") {
+    return readBlobAsDataUri(blob);
+  }
+
+  const typedBlob = blob.type ? blob : blob.slice(0, blob.size, fallbackMimeType);
+
+  try {
+    const key = await getWebMediaContentKey(typedBlob, prefix);
+    const now = new Date().toISOString();
+
+    await putWebMediaRecord(key, {
+      schemaVersion: 1,
+      blob: typedBlob,
+      mimeType: typedBlob.type || fallbackMimeType,
+      byteLength: typedBlob.size,
+      createdAt: now,
+      lastUsedAt: now,
+      source: prefix,
+    });
+    scheduleWebMediaStorePrune();
+
+    return createWebMediaReference(key);
+  } catch (error) {
+    logStorageWarning("Unable to persist web media Blob into IndexedDB; using inline fallback.", {
+      prefix,
+      byteLength: typedBlob.size,
+      mimeType: typedBlob.type || fallbackMimeType,
+      error,
+    });
+    return readBlobAsDataUri(typedBlob);
+  }
+}
+
 export async function resolveWebMediaUri(uri: string, fallbackMimeType: string) {
   if (Platform.OS !== "web" || typeof window === "undefined" || !isWebMediaReference(uri)) {
     return uri;

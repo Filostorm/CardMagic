@@ -3949,6 +3949,7 @@ function RichTextEditor({
     { start: number; end: number } | undefined
   >(undefined);
   const [contentHeight, setContentHeight] = useState(0);
+  const [inputWidth, setInputWidth] = useState(0);
   const [symbolMode, setSymbolMode] = useState<RulesTextSymbolMode>("standard");
   const selectionStart = selectionRange.start;
   const symbolsForMode =
@@ -3971,12 +3972,18 @@ function RichTextEditor({
   const multilineLineHeight = 21;
   const multilineVerticalPadding = 22;
   const shouldMeasureContentHeight = Platform.OS !== "web";
+  const estimatedTextMeasureWidth = Math.max(160, (inputWidth || 320) - 24);
+  const estimatedCharsPerLine = Math.max(12, Math.floor(estimatedTextMeasureWidth / 8.25));
   const explicitLineHeight = getExplicitLineCount(value) * multilineLineHeight + multilineVerticalPadding;
+  const softWrappedLineHeight =
+    estimateRichTextEditorWrappedLineCount(value, estimatedCharsPerLine) * multilineLineHeight +
+    multilineVerticalPadding;
   const measuredMultilineHeight =
     contentHeight > 0 ? contentHeight + multilineVerticalPadding : multilineMinHeight;
   const multilineHeight = Math.max(
     multilineMinHeight,
     explicitLineHeight,
+    softWrappedLineHeight,
     shouldMeasureContentHeight ? measuredMultilineHeight : 0,
   );
 
@@ -4140,6 +4147,13 @@ function RichTextEditor({
           scrollEnabled={false}
           blurOnSubmit={false}
           submitBehavior="newline"
+          onLayout={(event) => {
+            const nextWidth = Math.floor(event.nativeEvent.layout.width);
+
+            setInputWidth((currentWidth) =>
+              Math.abs(currentWidth - nextWidth) > 1 ? nextWidth : currentWidth,
+            );
+          }}
           onContentSizeChange={
             shouldMeasureContentHeight
               ? (event) => {
@@ -4818,6 +4832,25 @@ function normalizeRulesKeywordAutocompleteText(value: string): string {
 
 function getExplicitLineCount(value: string): number {
   return Math.max(1, value.replace(/\r\n?/g, "\n").split("\n").length);
+}
+
+function estimateRichTextEditorWrappedLineCount(value: string, charsPerLine: number): number {
+  const normalizedValue = value.replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "");
+  const boundedCharsPerLine = Math.max(1, charsPerLine);
+
+  if (!normalizedValue.trim()) {
+    return 1;
+  }
+
+  return normalizedValue.split("\n").reduce((lineCount, line) => {
+    const normalizedLine = line.trim().replace(/\s+/g, " ");
+
+    if (!normalizedLine) {
+      return lineCount + 1;
+    }
+
+    return lineCount + Math.max(1, Math.ceil(normalizedLine.length / boundedCharsPerLine));
+  }, 0);
 }
 
 function FrameEditor({

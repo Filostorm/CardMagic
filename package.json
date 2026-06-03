@@ -1,6 +1,6 @@
 {
   "name": "cardmagic",
-  "version": "3.33.18",
+  "version": "3.34.5",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --port 8082",
@@ -8,14 +8,14 @@
     "ios": "expo run:ios --port 8082",
     "web": "expo start --web --port 8082",
     "clean:duplicates": "node scripts/clean-duplicate-artifacts.mjs",
-    "export:web": "EXPO_USE_FAST_RESOLVER=0 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear",
+    "export:web": "EXPO_USE_FAST_RESOLVER=0 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear --output-dir \"${CARDMAGIC_CLOUDFLARE_OUTPUT_DIR:-dist}\"",
     "export:cloudflare": "npm run clean:duplicates && node scripts/clean-cloudflare-output.mjs && npm run export:web && npm run clean:duplicates && node scripts/prepare-cloudflare-pages.mjs",
     "release:verify": "node scripts/verify-release-notes.mjs",
     "release:metadata": "node scripts/update-release-metadata.mjs",
     "predeploy:web": "npm run export:web",
     "deploy:cloudflare": "npm run deploy:cloudflare:beta",
-    "deploy:cloudflare:beta": "npm run release:verify -- beta && EXPO_PUBLIC_CARDMAGIC_RELEASE_BRANCH=beta npm run export:cloudflare && npx --yes wrangler pages deploy dist --project-name cardmagic --branch beta --commit-dirty=true && npm run release:metadata -- beta",
-    "deploy:cloudflare:production": "npm run release:verify -- main && EXPO_PUBLIC_CARDMAGIC_RELEASE_BRANCH=main npm run export:cloudflare && npx --yes wrangler pages deploy dist --project-name cardmagic --commit-dirty=true && npm run release:metadata -- main",
+    "deploy:cloudflare:beta": "node scripts/deploy-cloudflare-pages.mjs beta",
+    "deploy:cloudflare:production": "node scripts/deploy-cloudflare-pages.mjs production",
     "update:cards": "node scripts/update-card-database.mjs"
   },
   "dependencies": {

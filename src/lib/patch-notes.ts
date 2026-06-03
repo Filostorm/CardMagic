@@ -20,6 +20,347 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.34.5",
+    date: "2026-06-03",
+    title: "Production set preview release",
+    branches: ["beta", "main"],
+    bullets: [
+      "Set and feed preview uploads now use the CardMagic PNG exporter path again for web renders.",
+      "Shared set cards preserve collaborator-owned art, reuse stored Supabase previews, and avoid automatic rerenders while scrolling.",
+      "Set collaboration invite links, cached collaborator sets, and Supabase-backed preview URL repair are included in the production release.",
+    ],
+  },
+  {
+    version: "3.34.4",
+    date: "2026-06-03",
+    title: "PNG preview exporter restored",
+    bullets: [
+      "Web set and feed preview uploads now use the CardMagic PNG exporter again instead of the JPEG Blob encoder.",
+      "The upload status now reports PNG capture explicitly so failed previews identify the exporter path being used.",
+      "PNG previews still run through the Supabase object-size guard before upload.",
+    ],
+  },
+  {
+    version: "3.34.3",
+    date: "2026-06-03",
+    title: "Mobile preview render rollback",
+    bullets: [
+      "Set and feed preview uploads now use the lower-memory 750px compression profile again.",
+      "The larger 1000px preview capture from the previous beta was rolled back because mobile Safari could fail during canvas encoding.",
+      "Supabase uploads still use bounded JPEG blobs and client-side size checks to avoid oversized Storage objects.",
+    ],
+  },
+  {
+    version: "3.34.2",
+    date: "2026-06-03",
+    title: "Sharper set previews",
+    bullets: [
+      "Set and feed card previews now render at a larger 1000px capture width before upload.",
+      "The Supabase preview compressor now starts at higher JPEG quality and only steps down gradually when a card would exceed the Storage object-size limit.",
+      "Stored set images should preserve readable card text while still avoiding oversized uploads on mobile browsers.",
+    ],
+  },
+  {
+    version: "3.34.1",
+    date: "2026-06-03",
+    title: "Set image upload stability",
+    bullets: [
+      "Set and feed preview uploads now use bounded JPEG blobs instead of oversized lossless PNG data URIs.",
+      "Rendered set images are compressed before upload and rejected locally if they would exceed the Supabase Storage object-size limit.",
+      "The shared card image bucket now accepts JPEG uploads while preserving existing PNG support.",
+    ],
+  },
+  {
+    version: "3.34.0",
+    date: "2026-06-03",
+    title: "Set invite links",
+    bullets: [
+      "Set owners can now copy a collaboration invite link from the set collaborator panel.",
+      "Invite links store their set invite token in the browser so a new user can sign up and automatically join the shared set afterward.",
+      "Invite redemption now runs through authenticated Supabase RPCs with token validation, RLS-protected invite storage, and automatic shared-set refresh after joining.",
+    ],
+  },
+  {
+    version: "3.33.46",
+    date: "2026-06-03",
+    title: "Shared set edit renders",
+    bullets: [
+      "Opening or refreshing a shared-set card now fetches the full editable Supabase card payload instead of using the compact thumbnail grid snapshot.",
+      "Shared-set preview refreshes no longer capture black renders just because the grid payload stripped large inline art data.",
+      "Cards saved into collaborator-owned sets now create or update the shared card row before rendering so the uploaded preview attaches to the canonical set card.",
+      "Shared sets with only a small number of missing preview URLs can backfill those previews automatically without re-rendering an entire older set.",
+    ],
+  },
+  {
+    version: "3.33.45",
+    date: "2026-06-03",
+    title: "Shared set hydration guard",
+    bullets: [
+      "Shared collaboration sets now preserve cached cards when a transient card-detail hydration failure occurs during refresh.",
+      "Initial account sync loads the collaborator-set cache before requesting shared card details so fallback rows are available immediately.",
+      "Shared-set refresh no longer replaces a previously hydrated collaborator set with an empty grid when the dashboard still reports cards.",
+    ],
+  },
+  {
+    version: "3.33.44",
+    date: "2026-06-03",
+    title: "Card image URL retention",
+    bullets: [
+      "Remote set sync now preserves an existing cards.image_url when the local saved-card snapshot does not currently carry a renderedImageUrl.",
+      "Previously uploaded set renders are backfilled into null card image_url fields from their canonical Supabase Storage objects.",
+      "Set-card render uploads are less likely to become orphaned Storage objects after a later account-set synchronization.",
+    ],
+  },
+  {
+    version: "3.33.43",
+    date: "2026-06-03",
+    title: "Stored set preview reuse",
+    bullets: [
+      "Shared-set tiles now trust existing canonical Supabase Storage renders even when the card row timestamp was advanced by a later sync.",
+      "Stored set-card images use the object's own last-modified timestamp for cache busting instead of treating the row updated_at value as render freshness.",
+      "Collaboration sets no longer fall back to Preview missing just because cards.image_url is null while the set-scoped PNG already exists.",
+    ],
+  },
+  {
+    version: "3.33.42",
+    date: "2026-06-03",
+    title: "Collaborator media access",
+    bullets: [
+      "Fixed the Supabase Storage policy that authorized collaborator reads for another user's private card art and mask media.",
+      "Shared-set editors can now hydrate owner-backed card art from cardmagic-user-media instead of failing when the media path belongs to another account.",
+      "The policy fix is recorded in a migration so collaborator media access remains reproducible outside the live beta database.",
+    ],
+  },
+  {
+    version: "3.33.41",
+    date: "2026-06-03",
+    title: "Shared set Supabase previews",
+    bullets: [
+      "Collaboration-set cards with existing Supabase image_url values now stay on the compact thumbnail path instead of hydrating full editable media for the set grid.",
+      "Shared-set thumbnail auto-loading now stops after Supabase URL lookup and no longer falls through to hidden PNG rendering during normal scrolling.",
+      "Manual per-card Refresh still forces a preview rerender when a collaborator intentionally repairs or replaces a missing saved image.",
+    ],
+  },
+  {
+    version: "3.33.40",
+    date: "2026-06-02",
+    title: "Mobile set card loading",
+    bullets: [
+      "Expanded set grids now virtualize card thumbnail mounting so offscreen cards reserve their slots without decoding images.",
+      "Set thumbnails no longer resolve stored media references or enqueue preview renders until their row is near the viewport.",
+      "Web set-card thumbnails now prefer disk caching over memory-plus-disk caching to reduce iOS Safari tab-process memory pressure.",
+    ],
+  },
+  {
+    version: "3.33.39",
+    date: "2026-06-02",
+    title: "Shared set card attribution",
+    bullets: [
+      "Shared-set card snapshots now retain the original card author's display name during hydration and cache repair.",
+      "Set-card thumbnail renders now use the card author's name for the printed footer instead of the current viewer's account name.",
+      "Viewer-triggered preview backfills no longer rebrand collaborator cards in shared sets.",
+    ],
+  },
+  {
+    version: "3.33.38",
+    date: "2026-06-02",
+    title: "Set preview art capture readiness",
+    bullets: [
+      "Set-card preview rendering now preloads editable art and mask images before hidden PNG capture.",
+      "The capture path waits an additional paint frame after image readiness so large embedded art does not export as a blank art aperture.",
+      "Uploaded set-preview URLs now use the actual upload timestamp as their cache-buster instead of the older card saved timestamp.",
+    ],
+  },
+  {
+    version: "3.33.37",
+    date: "2026-06-02",
+    title: "Existing set preview reuse",
+    bullets: [
+      "Set cards with an existing Supabase cards.image_url now attach that stored preview without comparing it against row updated_at.",
+      "Normal set scrolling no longer recaptures and reuploads previews just because the card row was rehydrated after the image was created.",
+      "The set-card render status now distinguishes an attached existing card image_url from a newly uploaded preview.",
+    ],
+  },
+  {
+    version: "3.33.36",
+    date: "2026-06-02",
+    title: "Shared set missing preview backfill",
+    bullets: [
+      "Shared editor sets now auto-render cards only when the card has no preview image at all.",
+      "Cards that already have a Supabase preview URL still skip automatic rerendering during normal set scrolling.",
+      "The fallback state no longer traps missing shared previews behind a manual Refresh action.",
+    ],
+  },
+  {
+    version: "3.33.35",
+    date: "2026-06-02",
+    title: "Shared set render throttling",
+    bullets: [
+      "Editor-accessible collaboration sets no longer auto-rerender every missing preview during normal set scrolling.",
+      "Shared set tiles can still attach existing Supabase preview URLs, but background PNG capture is deferred for collaborator-owned sets.",
+      "Saving a card and pressing a card's Refresh preview action still perform the explicit full-quality render path.",
+    ],
+  },
+  {
+    version: "3.33.34",
+    date: "2026-06-02",
+    title: "Editor set art hydration target",
+    bullets: [
+      "Collaboration-set card loading now applies editable art hydration to the editor-accessible set RPC.",
+      "Public community set browsing stays on the compact preview-card path so viewers do not hydrate full edit media unnecessarily.",
+      "The beta version was advanced again so the corrected collaboration hydration target is cache-distinct from the prior beta build.",
+    ],
+  },
+  {
+    version: "3.33.33",
+    date: "2026-06-02",
+    title: "Collaboration edit art hydration",
+    bullets: [
+      "Opening cards from collaboration sets now hydrates editable Supabase media references instead of using preview-only card payloads.",
+      "Community feed cards remain compact, while editor-accessible shared set cards keep the art data needed for editing.",
+      "Shared set card previews still use the cached rendered image URL, but tapping a card now preserves its editable art.",
+    ],
+  },
+  {
+    version: "3.33.32",
+    date: "2026-06-02",
+    title: "Frame sheet grid width",
+    bullets: [
+      "The frame preview sheet now has enough horizontal content width for three frame tiles per row.",
+      "Frame menu sizing now derives from explicit grid column math instead of an undersized base width.",
+      "The frame sheet keeps the same preview tile size while avoiding the unintended two-column layout on desktop.",
+    ],
+  },
+  {
+    version: "3.33.31",
+    date: "2026-06-02",
+    title: "Frame sheet edit menu",
+    bullets: [
+      "Restored Frame to the card edit menu so the frame sheet can be opened from the pencil menu again.",
+      "The standalone palette frame shortcut remains available on the floating preview toolbar.",
+      "Frame editing continues to use the existing frame sheet controls for treatment, showcase, type frame, and frame color selection.",
+    ],
+  },
+  {
+    version: "3.33.30",
+    date: "2026-06-02",
+    title: "Set identity row cleanup",
+    bullets: [
+      "Removed the trailing Save button from the set name and set-code row.",
+      "Set identity edits still save through the existing header edit/save toggle or the keyboard done action.",
+      "The set name and set-code fields now have more horizontal room in edit mode.",
+    ],
+  },
+  {
+    version: "3.33.29",
+    date: "2026-06-02",
+    title: "Preview refresh upload fix",
+    bullets: [
+      "Forced set-card preview refreshes no longer report Upload skipped after a successful local capture.",
+      "The refresh pipeline now updates its in-memory set snapshot immediately when a newly rendered local image is attached.",
+      "Upload guard logic now tolerates the old saved image URL during the forced-refresh handoff from capture to Supabase upload.",
+    ],
+  },
+  {
+    version: "3.33.28",
+    date: "2026-06-02",
+    title: "Art style descriptions",
+    bullets: [
+      "The art generator now shows a short description for the currently selected art style.",
+      "Style descriptions are stored with the art-style presets so the selector and prompt metadata stay synchronized.",
+      "The style pills keep their compact layout while the selected style explains the expected visual treatment below.",
+    ],
+  },
+  {
+    version: "3.33.27",
+    date: "2026-06-02",
+    title: "Native delete confirmation",
+    bullets: [
+      "Set-card removal now uses a red destructive X treatment in edit mode.",
+      "Web delete confirmations now include the confirmation title in the native browser dialog.",
+      "The per-card refresh button remains immediate and confirmation-free.",
+    ],
+  },
+  {
+    version: "3.33.26",
+    date: "2026-06-02",
+    title: "Direct preview refresh",
+    bullets: [
+      "Per-card Refresh preview in set edit mode now starts immediately without a confirmation dialog.",
+      "Forced preview refreshes now bypass existing Supabase image URL hydration so they actually re-render the selected card.",
+      "Refresh status now advances into capture and upload instead of re-attaching the stale saved preview URL.",
+    ],
+  },
+  {
+    version: "3.33.25",
+    date: "2026-06-02",
+    title: "AI prompt CORS repair",
+    bullets: [
+      "AI prompt requests no longer send the extra request-id HTTP header that older deployed Edge Function CORS policies rejected.",
+      "The client still includes its request id in the JSON body for server-side idempotency and diagnostics.",
+      "Rules-text fixing and image generation requests can now pass browser preflight against the current Supabase function deployment.",
+    ],
+  },
+  {
+    version: "3.33.24",
+    date: "2026-06-02",
+    title: "Deployment output hardening",
+    bullets: [
+      "Beta and production Cloudflare exports now build into fresh temporary directories instead of repeatedly mutating the repo-local dist folder.",
+      "The deploy pipeline now removes temporary export output after publishing so stale duplicate build artifacts are less likely to accumulate.",
+      "Cloudflare output cleanup now accepts the controlled temporary export path while still rejecting unexpected directories.",
+    ],
+  },
+  {
+    version: "3.33.23",
+    date: "2026-06-02",
+    title: "Per-card preview refresh",
+    bullets: [
+      "Set edit mode now exposes Refresh preview on each saved-card tile instead of only offering a full-set refresh.",
+      "Per-card refreshes force a full-quality re-render for the selected card and overwrite only that card's Supabase preview image.",
+      "The refresh action continues to use the bounded set-preview render and upload queue to avoid parallel upload memory spikes.",
+    ],
+  },
+  {
+    version: "3.33.22",
+    date: "2026-06-02",
+    title: "Art loading repair",
+    bullets: [
+      "Set-card editing now lazily hydrates compact Supabase media references so art appears when opening saved or shared cards.",
+      "The hidden set-card renderer now materializes remote art before capture, restoring preview refreshes for cards backed by Supabase media.",
+      "Saved preview uploads now rewrite the editable card payload with persisted media references instead of updating only the rendered image URL.",
+    ],
+  },
+  {
+    version: "3.33.21",
+    date: "2026-06-02",
+    title: "Set preview refresh",
+    bullets: [
+      "Set edit mode now includes a Refresh previews action for replacing old low-quality saved card renders.",
+      "Forced set-preview refreshes bypass existing Supabase image URLs, re-render with the current full-quality renderer, and overwrite the canonical Storage image.",
+      "Refreshed preview URLs now get a new cache-busting version stamp so browsers load the replacement image immediately.",
+    ],
+  },
+  {
+    version: "3.33.20",
+    date: "2026-06-02",
+    title: "Expanding rules sheet editor",
+    bullets: [
+      "The rules-text editor in the sheet now grows for soft-wrapped lines instead of only expanding for explicit line breaks.",
+      "Shared sheet text editors now use the rendered input width to reserve enough vertical space for long rules and flavor text.",
+    ],
+  },
+  {
+    version: "3.33.19",
+    date: "2026-06-02",
+    title: "Shared set memory hardening",
+    bullets: [
+      "Collaboration-set cache hydration now keeps shared card payloads compact instead of expanding local media references into inline image data.",
+      "Oversized legacy collaboration caches are skipped and rewritten so iOS Safari does not repeatedly deserialize bloated set payloads.",
+      "Set-card thumbnail prefetching is disabled on web and capped on native to reduce duplicate image-cache pressure during long set scrolling.",
+    ],
+  },
+  {
     version: "3.33.18",
     date: "2026-06-02",
     title: "Set collaboration and render cache release",

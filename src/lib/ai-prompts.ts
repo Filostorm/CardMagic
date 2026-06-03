@@ -29,81 +29,97 @@ export const ART_GENERATOR_STYLE_PRESETS = [
   {
     id: "wash",
     label: "Wash",
+    description: "Soft watercolor with pale paper texture and low visual density.",
     profile: "transparent watercolor wash, pale paper grain, minimal background, soft lost-and-found edges",
   },
   {
     id: "oil",
     label: "Oil",
+    description: "Classical painted realism with sculpted forms and visible brush texture.",
     profile: "classical oil-painted realism, sculpted anatomy, controlled brush texture, museum-painting finish",
   },
   {
     id: "gothic",
     label: "Gothic",
+    description: "Dark chiaroscuro, hard rim light, and cathedral-like negative space.",
     profile: "gothic chiaroscuro illustration, near-black negative space, hard rim light, sparse cathedral geometry",
   },
   {
     id: "vista",
     label: "Vista",
+    description: "Large matte-painting environments with tiny subjects and atmospheric depth.",
     profile: "epic matte-painting landscape, tiny subject against vast simple shapes, clean atmospheric perspective",
   },
   {
     id: "poster",
     label: "Poster",
+    description: "Graphic action composition with bold silhouettes and limited debris.",
     profile: "graphic action poster, diagonal silhouette, flat shadow masses, limited motion debris",
   },
   {
     id: "storybook",
     label: "Storybook",
+    description: "Decorative illustrated plate with ornamental shapes and clean contours.",
     profile: "illuminated storybook plate, decorative contour shapes, clean ornamental rhythm inside the scene",
   },
   {
     id: "symbolic",
     label: "Symbolic",
+    description: "Surreal tableau focused on isolated props and dreamlike staging.",
     profile: "surreal symbolic tableau, isolated props, quiet dream staging, uncluttered negative space",
   },
   {
     id: "specimen",
     label: "Specimen",
+    description: "Natural-history clarity with readable anatomy and a plain habitat backdrop.",
     profile: "natural history creature plate, side-lit anatomy, specimen clarity, plain habitat backdrop",
   },
   {
     id: "cinematic",
     label: "Cinematic",
+    description: "Polished key art with a heroic silhouette and controlled dramatic lighting.",
     profile: "heroic cinematic key art, bold central silhouette, polished surfaces, simple radial light structure",
   },
   {
     id: "fresco",
     label: "Fresco",
+    description: "Ancient mural styling with mineral pigments and flattened perspective.",
     profile: "ancient fresco or mural, flattened perspective, mineral pigments, sculptural iconography",
   },
   {
     id: "battle",
     label: "Battle",
+    description: "Battlefield concept art built around one decisive gesture and smoke planes.",
     profile: "battlefield concept art, one decisive gesture, broad smoke planes, very few readable props",
   },
   {
     id: "arcane",
     label: "Arcane",
+    description: "Precise magical instruments, clean geometry, and restrained glow effects.",
     profile: "arcane diagram realism, precise instruments, clean desk or wall geometry, controlled glow",
   },
   {
     id: "ethereal",
     label: "Ethereal",
+    description: "Airy enchantment art with translucent layers and soft gradients.",
     profile: "ethereal enchantment vignette, translucent subject layers, soft gradients, open airy background",
   },
   {
     id: "brutalist",
     label: "Brutalist",
+    description: "Heavy dark-fantasy forms with abrasive texture and sparse smoky voids.",
     profile: "brutalist dark fantasy, heavy simple forms, abrasive material texture, sparse smoky void",
   },
   {
     id: "biolume",
     label: "Biolume",
+    description: "Organic nature studies with dark depth and selective glowing accents.",
     profile: "bioluminescent nature study, organic silhouette, black-green depth, selective glowing accents only",
   },
   {
     id: "retro",
     label: "Retro",
+    description: "Vintage paperback-cover staging with screenprint-like color blocks.",
     profile: "retro paperback cover, bold central staging, screenprint-like color blocks, visible brush edges",
   },
 ] as const;
@@ -112,9 +128,13 @@ export type ArtGeneratorPresetStyleId = (typeof ART_GENERATOR_STYLE_PRESETS)[num
 export type ArtGeneratorStyleId = "random" | ArtGeneratorPresetStyleId;
 
 export const ART_GENERATOR_STYLE_OPTIONS = [
-  { id: "random", label: "Random" },
-  ...ART_GENERATOR_STYLE_PRESETS.map(({ id, label }) => ({ id, label })),
-] as const satisfies ReadonlyArray<{ id: ArtGeneratorStyleId; label: string }>;
+  {
+    id: "random",
+    label: "Random",
+    description: "Rotates through curated fantasy-card looks based on card color and request context.",
+  },
+  ...ART_GENERATOR_STYLE_PRESETS.map(({ id, label, description }) => ({ id, label, description })),
+] as const satisfies ReadonlyArray<{ id: ArtGeneratorStyleId; label: string; description: string }>;
 
 const EXPLICIT_VISUAL_STYLE_PATTERN =
   /\b(?:style|anime|manga|cartoon|cel[- ]?shaded|comic|graphic novel|pixel art|8[- ]?bit|16[- ]?bit|low poly|3d|rendered|photoreal|photo[- ]?real|realistic|oil painting|watercolor|gouache|ink|sketch|line art|charcoal|pastel|stained glass|woodcut|cut paper|clay|miniature|storybook|children'?s book|noir|cyberpunk|steampunk|art deco|retro|vintage|chibi)\b/i;

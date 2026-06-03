@@ -299,7 +299,6 @@ async function invokeAiEdgeFunction<T extends { error?: string }>({
         apikey: supabaseAnonKey,
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
-        "x-cardmagic-request-id": clientRequestId,
       },
       body: JSON.stringify({ ...body, clientRequestId }),
     },

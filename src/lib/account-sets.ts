@@ -200,6 +200,21 @@ export type CollaborationPendingInvitePayload = {
   createdAt: string;
 };
 
+export type CollaborationSetInviteLinkPayload = {
+  inviteCode: string;
+  setId: string;
+  setName: string;
+  role: Extract<CollaborationSetRole, "editor">;
+  expiresAt?: string;
+};
+
+export type CollaborationSetInviteRedemptionPayload = {
+  setId: string;
+  setName: string;
+  ownerUserId: string;
+  role: CollaborationSetRole;
+};
+
 export type CollaborationSetMemberPayload = {
   id: string;
   userId: string;
@@ -371,6 +386,21 @@ type CollaborationPendingInviteRow = {
   invited_email: string | null;
   role: string | null;
   created_at: string;
+};
+
+type CollaborationSetInviteLinkRow = {
+  invite_code: string | null;
+  set_id: string;
+  set_name: string | null;
+  role: string | null;
+  expires_at: string | null;
+};
+
+type CollaborationSetInviteRedemptionRow = {
+  set_id: string;
+  set_name: string | null;
+  owner_user_id: string;
+  role: string | null;
 };
 
 type CollaborationSetMemberRow = {
@@ -730,10 +760,25 @@ export async function updateRemoteCardRenderedImage({
     throw new Error("Only public HTTP(S) rendered card images can be saved to Supabase.");
   }
 
+  const persistedCard = await persistRemoteCardDraftMedia(
+    card,
+    { kind: "account", userId },
+    `set-card-${localSnapshotId}`,
+  );
+  const publishableCard = compactCardForPublish(persistedCard);
+  const faceCard = getPrimaryFaceCard(persistedCard);
   const remoteCardId = getRemoteCardId(userId, localSnapshotId);
   const { data: updatedRows, error: updateError } = await supabase
     .from("cards")
-    .update({ image_url: publishableImageUrl })
+    .update({
+      name: faceCard.name ?? "",
+      type_line: faceCard.typeLine ?? "",
+      rarity: persistedCard.rarity ?? null,
+      colors: persistedCard.frameColors ?? [],
+      frame_treatment: persistedCard.frameTreatment ?? null,
+      image_url: publishableImageUrl,
+      card: publishableCard,
+    })
     .eq("id", remoteCardId)
     .eq("user_id", userId)
     .select("id");
@@ -746,12 +791,6 @@ export async function updateRemoteCardRenderedImage({
     return;
   }
 
-  const persistedCard = await persistRemoteCardDraftMedia(
-    card,
-    { kind: "account", userId },
-    `set-card-${localSnapshotId}`,
-  );
-  const faceCard = getPrimaryFaceCard(persistedCard);
   const { error: upsertError } = await supabase.from("cards").upsert({
     id: remoteCardId,
     user_id: userId,
@@ -762,7 +801,7 @@ export async function updateRemoteCardRenderedImage({
     colors: persistedCard.frameColors ?? [],
     frame_treatment: persistedCard.frameTreatment ?? null,
     image_url: publishableImageUrl,
-    card: compactCardForPublish(persistedCard),
+    card: publishableCard,
     visibility: "public",
   }, {
     onConflict: "id",
@@ -807,16 +846,19 @@ export async function uploadCommunityCardImage(
   userId: string,
   cardId: string,
   image: Blob | ArrayBuffer | Uint8Array,
+  contentType = "image/png",
 ): Promise<string> {
   return uploadCommunityCardImageToPath(
     getCommunityCardImageStoragePath(userId, cardId, `${Date.now()}`),
     image,
+    contentType,
   );
 }
 
 export async function uploadCommunityCardImageToPath(
   path: string,
   image: Blob | ArrayBuffer | Uint8Array,
+  contentType = "image/png",
 ): Promise<string> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
@@ -825,7 +867,7 @@ export async function uploadCommunityCardImageToPath(
   const { error } = await supabase.storage
     .from("community-card-images")
     .upload(path, image, {
-      contentType: "image/png",
+      contentType,
       upsert: true,
     });
 
@@ -846,6 +888,30 @@ export type RemoteCardRenderedImage = {
   imageUrl: string;
   updatedAt?: string;
 };
+
+export async function fetchRemoteCardDraftForEditing(cardId: string): Promise<CardDraft | null> {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("cards")
+    .select("card")
+    .eq("id", cardId)
+    .maybeSingle<{
+      card: unknown;
+    }>();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data || !isCardDraft(data.card)) {
+    return null;
+  }
+
+  return materializeRemoteCardDraftMedia(data.card);
+}
 
 export async function findRemoteCardRenderedImageById(
   cardId: string,
@@ -1601,6 +1667,63 @@ export async function inviteCollaborationSetMember(setId: string, inviteIdentifi
   }
 }
 
+export async function createCollaborationSetInviteLink(setId: string): Promise<CollaborationSetInviteLinkPayload> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("create_collaboration_set_invite_link", {
+    p_set_id: setId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const row = ((data ?? []) as CollaborationSetInviteLinkRow[])[0];
+
+  if (!row?.invite_code) {
+    throw new Error("Supabase did not return a collaboration invite code.");
+  }
+
+  return {
+    inviteCode: row.invite_code,
+    setId: row.set_id,
+    setName: row.set_name ?? "Shared set",
+    role: "editor",
+    expiresAt: row.expires_at ?? undefined,
+  };
+}
+
+export async function redeemCollaborationSetInviteCode(
+  inviteCode: string,
+): Promise<CollaborationSetInviteRedemptionPayload> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase.rpc("redeem_collaboration_set_invite_link", {
+    p_invite_code: inviteCode,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const row = ((data ?? []) as CollaborationSetInviteRedemptionRow[])[0];
+
+  if (!row?.set_id) {
+    throw new Error("Supabase did not return the redeemed collaboration set.");
+  }
+
+  return {
+    setId: row.set_id,
+    setName: row.set_name ?? "Shared set",
+    ownerUserId: row.owner_user_id,
+    role: row.role === "owner" ? "owner" : "editor",
+  };
+}
+
 export async function searchCollaborationInviteProfiles(query: string): Promise<CollaborationInviteProfileSuggestion[]> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
@@ -2320,21 +2443,31 @@ function getFeedbackScreenshotExtension(mimeType: string, uri: string) {
   return "jpg";
 }
 
-async function mapCommunityCardRows(rows: CommunityCardRow[]): Promise<CommunityCardPayload[]> {
-  const mappedRows = await Promise.all(rows.map(mapCommunityCardRow));
+type CommunityCardRowMapOptions = {
+  materializeCardMedia?: boolean;
+};
+
+async function mapCommunityCardRows(
+  rows: CommunityCardRow[],
+  options: CommunityCardRowMapOptions = {},
+): Promise<CommunityCardPayload[]> {
+  const mappedRows = await Promise.all(rows.map((row) => mapCommunityCardRow(row, options)));
 
   return mappedRows.flat();
 }
 
-async function mapCommunityCardRow(row: CommunityCardRow): Promise<CommunityCardPayload[]> {
+async function mapCommunityCardRow(
+  row: CommunityCardRow,
+  options: CommunityCardRowMapOptions,
+): Promise<CommunityCardPayload[]> {
   if (!isCardDraft(row.card)) {
     return [];
   }
 
   const imageUrl = row.image_url ?? undefined;
-  const card = imageUrl
-    ? compactCardForPublish(row.card)
-    : await materializeRemoteCardDraftMedia(row.card);
+  const card = options.materializeCardMedia || !imageUrl
+    ? await materializeRemoteCardDraftMedia(row.card)
+    : compactCardForPublish(row.card);
 
   return [{
     id: row.id,
@@ -2419,27 +2552,37 @@ async function replaceRemoteCards(userId: string, sets: AccountCardSetPayload[])
     throw new Error("Supabase is not configured.");
   }
 
-  const cardRows = sets.flatMap((set) =>
-    set.cards.map((snapshot) => {
-      const card = snapshot.card;
-      const faceCard = getPrimaryFaceCard(card);
-      const renderedImageUrl = getPublishableRenderedImageUrl(snapshot.renderedImageUrl);
-
-      return {
-        id: getRemoteCardId(userId, snapshot.id),
-        user_id: userId,
-        local_snapshot_id: snapshot.id,
-        name: faceCard.name ?? "",
-        type_line: faceCard.typeLine ?? "",
-        rarity: card.rarity ?? null,
-        colors: card.frameColors ?? [],
-        frame_treatment: card.frameTreatment ?? null,
-        image_url: renderedImageUrl,
-        card: renderedImageUrl ? compactCardForPublish(card) : card,
-        visibility: "public",
-      };
-    }),
+  const cardInputs = sets.flatMap((set) =>
+    set.cards.map((snapshot) => ({
+      snapshot,
+      remoteCardId: getRemoteCardId(userId, snapshot.id),
+    })),
   );
+  const existingImageUrlsByCardId = await fetchExistingRemoteCardImageUrls(
+    userId,
+    cardInputs.map((input) => input.remoteCardId),
+  );
+
+  const cardRows = cardInputs.map(({ snapshot, remoteCardId }) => {
+    const card = snapshot.card;
+    const faceCard = getPrimaryFaceCard(card);
+    const renderedImageUrl = getPublishableRenderedImageUrl(snapshot.renderedImageUrl);
+    const persistedImageUrl = renderedImageUrl ?? existingImageUrlsByCardId.get(remoteCardId) ?? null;
+
+    return {
+      id: remoteCardId,
+      user_id: userId,
+      local_snapshot_id: snapshot.id,
+      name: faceCard.name ?? "",
+      type_line: faceCard.typeLine ?? "",
+      rarity: card.rarity ?? null,
+      colors: card.frameColors ?? [],
+      frame_treatment: card.frameTreatment ?? null,
+      image_url: persistedImageUrl,
+      card: persistedImageUrl ? compactCardForPublish(card) : card,
+      visibility: "public",
+    };
+  });
 
   if (cardRows.length > 0) {
     const { error } = await supabase.from("cards").upsert(cardRows, {
@@ -2495,6 +2638,36 @@ async function replaceRemoteCards(userId: string, sets: AccountCardSetPayload[])
       throw new Error(error.message);
     }
   }
+}
+
+async function fetchExistingRemoteCardImageUrls(userId: string, remoteCardIds: string[]) {
+  if (!supabase || remoteCardIds.length === 0) {
+    return new Map<string, string>();
+  }
+
+  const uniqueRemoteCardIds = Array.from(new Set(remoteCardIds));
+  const imageUrlsByCardId = new Map<string, string>();
+
+  for (const idChunk of chunkArray(uniqueRemoteCardIds, 200)) {
+    const { data, error } = await supabase
+      .from("cards")
+      .select("id, image_url")
+      .eq("user_id", userId)
+      .in("id", idChunk)
+      .returns<Array<{ id: string; image_url: string | null }>>();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    for (const row of data ?? []) {
+      if (row.image_url) {
+        imageUrlsByCardId.set(row.id, row.image_url);
+      }
+    }
+  }
+
+  return imageUrlsByCardId;
 }
 
 async function deleteStaleRemoteCardSetMemberships(userId: string, retainedMembershipKeys: Set<string>) {

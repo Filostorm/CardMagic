@@ -20,6 +20,350 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.36.29",
+    date: "2026-06-05",
+    title: "Shared editor production fix",
+    branches: ["main"],
+    bullets: [
+      "Opening a shared-set card on production now preserves the full persisted card payload even when one private media field cannot be signed immediately.",
+      "The editor no longer falls back to the lightweight set-grid placeholder when shared art hydration is incomplete, preventing missing text, frame, and card fields.",
+      "The Cloudflare production deploy path now uses the fast Expo resolver and avoids local Git metadata scans that can stall Pages uploads.",
+    ],
+  },
+  {
+    version: "3.36.28",
+    date: "2026-06-04",
+    title: "Shared editor payload fallback fix",
+    bullets: [
+      "Opening a shared-set card now preserves the full persisted card payload even when one private media field cannot be signed immediately.",
+      "The editor no longer falls back to the lightweight set-grid placeholder when shared art hydration is incomplete, preventing missing text, frame, and card fields.",
+      "Shared-set card opens avoid export-only data URI materialization on mobile so editor hydration stays lighter while Supabase signed image URLs load.",
+    ],
+  },
+  {
+    version: "3.36.27",
+    date: "2026-06-04",
+    title: "Shared editor art URL fix",
+    bullets: [
+      "Shared-set editor hydration now prefers short-lived Supabase signed URLs for private owner media instead of unresolved remote-media references.",
+      "The editor no longer treats a card payload as fully hydrated when art or mask fields still contain non-renderable cardmagic-remote-media references.",
+      "Saving a hydrated shared-set card re-persists signed Supabase media URLs into stable remote-media references instead of storing expiring links.",
+    ],
+  },
+  {
+    version: "3.36.26",
+    date: "2026-06-04",
+    title: "Shared-set editor art hydration",
+    bullets: [
+      "Opening cards from shared collaboration sets now falls back through the collaboration set RPC when direct card access is blocked by row-level security.",
+      "Shared-set editor hydration now materializes the full editable card payload and its remote art media instead of leaving the editor on a lightweight grid placeholder.",
+    ],
+  },
+  {
+    version: "3.36.25",
+    date: "2026-06-04",
+    title: "Set save destination fix",
+    bullets: [
+      "Opening a saved set card now tracks its source set separately from the currently selected set, so refreshes and set navigation no longer change the overwrite target.",
+      "The header save action now opens a destination-set picker before saving, making it explicit which set receives the card.",
+      "Autosave and recovery snapshots now preserve the active set-card source context for safer edits after refreshes or tab changes.",
+    ],
+  },
+  {
+    version: "3.36.24",
+    date: "2026-06-04",
+    title: "Mobile set loading stability",
+    bullets: [
+      "Two-column mobile set grids now mount fewer cards at once and use a smaller virtualization overscan window to reduce simultaneous image decodes.",
+      "Set tiles on compact mobile layouts no longer auto-start missing-preview backfill renders just from scrolling into view.",
+      "Shared-set cards with Supabase preview URLs now keep lightweight grid metadata in memory and fetch the full editable payload only when opened.",
+    ],
+  },
+  {
+    version: "3.36.23",
+    date: "2026-06-04",
+    title: "Set save art render fix",
+    bullets: [
+      "Saved set-card renders now materialize local browser media and Supabase media before hidden image capture.",
+      "Collaboration-set saves hydrate local art references before creating the shared card row, preventing missing-art renders after saving to a set.",
+      "Community and set export captures now share the same media materialization path so generated art, masks, and picked images are loadable before rasterization.",
+    ],
+  },
+  {
+    version: "3.36.22",
+    date: "2026-06-03",
+    title: "GPT Image 2 upgrade",
+    bullets: [
+      "OpenAI card-art generation now tries GPT Image 2 before older GPT Image fallbacks.",
+      "OpenAI image editing now tries GPT Image 2 first for generated art edits.",
+      "Existing GPT Image 1.5 and GPT Image 1 fallbacks remain available if GPT Image 2 access is unavailable for the configured API key.",
+    ],
+  },
+  {
+    version: "3.36.21",
+    date: "2026-06-03",
+    title: "Smarter painted mask filtering",
+    bullets: [
+      "Painted brush strokes now clear from the artwork preview as soon as mask generation starts.",
+      "The mask normalizer now uses the full painted brush geometry instead of only sparse foreground sample points.",
+      "Painted selections use a tighter inclusion mask plus negative-prompt scoring so adjacent unpainted objects are less likely to be included.",
+    ],
+  },
+  {
+    version: "3.36.20",
+    date: "2026-06-03",
+    title: "Wider brush mask envelope",
+    bullets: [
+      "Painted mask generation now uses the full brush envelope as the selection bounds instead of only the sampled foreground points.",
+      "The local matte filter has a wider expansion radius so thin objects can keep their full silhouette after snapping.",
+      "Foreground points still act as seeds, so the brush directs the selected subject without reducing the mask to the stroke centerline.",
+    ],
+  },
+  {
+    version: "3.36.19",
+    date: "2026-06-03",
+    title: "Brush mask expansion tuning",
+    bullets: [
+      "Painted mask selections now use the brush stroke as a seed, then expand to nearby connected matte pixels inside a controlled subject envelope.",
+      "Thin selections like swords can recover their full silhouette instead of only keeping pixels directly under the brush stroke.",
+      "The selection envelope still limits expansion so connected hands, cloaks, or background regions are less likely to be included.",
+    ],
+  },
+  {
+    version: "3.36.18",
+    date: "2026-06-03",
+    title: "Narrower brush mask selection",
+    bullets: [
+      "Painted mask filtering now intersects the provider matte with a stroke corridor built from the brush path.",
+      "Connected foreground regions outside the painted corridor are no longer kept just because they touch the selected subject.",
+      "Thin-object selections like swords now stay closer to the painted path instead of expanding into nearby hands, cloaks, or background shapes.",
+    ],
+  },
+  {
+    version: "3.36.17",
+    date: "2026-06-03",
+    title: "Brush mask timeout fix",
+    bullets: [
+      "Blank painted mask selections no longer send slow SAM geometry prompts that could timeout on mobile.",
+      "Painted selections now use the provider for a candidate matte and then constrain the result locally to the brush seed.",
+      "The local matte filter now clips around the foreground brush samples instead of the looser bounding box, improving thin-object selections.",
+    ],
+  },
+  {
+    version: "3.36.16",
+    date: "2026-06-03",
+    title: "Stricter painted mask snapping",
+    bullets: [
+      "Painted mask selections now use a tighter rectangular crop instead of expanding to the whole artwork.",
+      "The painted brush box and foreground/background samples are scaled into the crop and sent as SAM visual prompts.",
+      "Returned mattes are filtered against the original brush seed so unrelated foreground regions are rejected.",
+    ],
+  },
+  {
+    version: "3.36.15",
+    date: "2026-06-03",
+    title: "Painted mask memory reduction",
+    bullets: [
+      "Crop-first painted mask expansion now uses the recorded source dimensions instead of decoding the full original artwork a second time.",
+      "This reduces mobile Safari memory pressure while expanding cropped provider results back onto the full artwork canvas.",
+    ],
+  },
+  {
+    version: "3.36.14",
+    date: "2026-06-03",
+    title: "Crop-first painted masking",
+    bullets: [
+      "Painted mask selections now crop around the brush region before calling the subject-mask provider, avoiding the full-image point/box prompt path that was timing out.",
+      "Cropped mask results are expanded back onto the original artwork canvas so the generated matte still aligns with the full card art.",
+      "The mask debug trace now reports the crop-first segmentation steps so stalled requests show where they stopped.",
+    ],
+  },
+  {
+    version: "3.36.13",
+    date: "2026-06-03",
+    title: "Visible mask diagnostics",
+    bullets: [
+      "Subject-mask generation now shows a visible debug trace with request mode, prompt geometry, provider steps, and failure diagnostics.",
+      "The mask editor keeps the debug trace visible after failures so the stopped step can be inspected instead of only showing the final friendly error.",
+    ],
+  },
+  {
+    version: "3.36.12",
+    date: "2026-06-03",
+    title: "Mask editor completion control",
+    bullets: [
+      "The Mask tab no longer shows the duplicate bottom Done button.",
+      "The Mask action row now keeps Cancel before a mask exists and changes that control to Done once a mask preview is available.",
+    ],
+  },
+  {
+    version: "3.36.11",
+    date: "2026-06-03",
+    title: "Longer painted mask snapping",
+    bullets: [
+      "Painted subject snapping now gives SAM up to two minutes before the browser aborts the request.",
+      "The subject-mask Edge Function now gives fal SAM one longer inference attempt instead of short retries that could timeout before larger painted selections finish.",
+      "Painted selections use a smaller prompt raster and clearer progress text to reduce mobile memory pressure while the mask is being snapped.",
+    ],
+  },
+  {
+    version: "3.36.10",
+    date: "2026-06-03",
+    title: "Painted mask stability",
+    bullets: [
+      "Painted mask generation now uses a smaller geometry request raster to reduce mobile Safari memory pressure when Generate is tapped.",
+      "The mask editor now has an Undo control that removes the most recent painted brush stroke without clearing the whole selection.",
+    ],
+  },
+  {
+    version: "3.36.9",
+    date: "2026-06-03",
+    title: "Painted mask prompt correction",
+    bullets: [
+      "Painted mask selections now group foreground points, background exclusion points, and the bounding box under the same SAM object id.",
+      "Paint selection now starts inactive when the mask editor opens.",
+      "The redundant Snap selection action was removed because Generate now runs the painted-selection snap path directly.",
+    ],
+  },
+  {
+    version: "3.36.8",
+    date: "2026-06-03",
+    title: "Mask action button styling",
+    bullets: [
+      "The Mask panel Generate and Cancel actions now use the same compact rounded pill treatment as the other mask controls.",
+      "Generate keeps the blue active styling while matching the menu's border, spacing, and typography conventions.",
+    ],
+  },
+  {
+    version: "3.36.7",
+    date: "2026-06-03",
+    title: "Mask generation controls",
+    bullets: [
+      "Painted mask selections now submit both foreground samples and a padded selection bounding box for tighter snapping on small targets like shields.",
+      "The Mask panel replaces the subject compositing switch with primary Generate and Cancel actions.",
+      "The duplicate bottom Generate target mask button and explanatory reminder text were removed from the mask editor.",
+    ],
+  },
+  {
+    version: "3.36.6",
+    date: "2026-06-03",
+    title: "Brush scroll lock",
+    bullets: [
+      "Mask brush mode now disables modal scrolling while the painted selection layer is active.",
+      "Brush strokes keep ownership of the touch gesture so mobile Safari does not convert a selection drag into page movement.",
+      "Turning off Paint selection restores normal scrolling in the mask editor.",
+    ],
+  },
+  {
+    version: "3.36.5",
+    date: "2026-06-03",
+    title: "Brush-based mask selection",
+    bullets: [
+      "Mask mode now paints a continuous translucent selection stroke over the art instead of showing separate prompt markers.",
+      "Dragging in Mask mode covers the intended subject area while keeping the artwork fixed underneath the selection layer.",
+      "Snap selection keeps using the painted stroke coverage as segmentation guidance, but the prompt-sampling implementation detail is no longer exposed in the editor UI.",
+    ],
+  },
+  {
+    version: "3.36.4",
+    date: "2026-06-03",
+    title: "Rough-select mask snapping",
+    bullets: [
+      "Mask mode now rough-selects subjects without dragging the artwork underneath the selection layer.",
+      "Rough selections are sampled into SAM foreground point prompts instead of collapsed into a single bounding box.",
+      "The mask editor now exposes a Snap selection action so one or more rough subject strokes can be sent for a cleaner cut mask.",
+    ],
+  },
+  {
+    version: "3.36.3",
+    date: "2026-06-03",
+    title: "Mask editor brush restore",
+    bullets: [
+      "The mask editor now uses direct alpha-matte editing again instead of converting painted strokes into a coarse SAM box prompt.",
+      "Mask mode restores Add, Erase, Smart add, and Smart erase controls for local brush and connected-region editing.",
+      "Editing an existing matte re-enables subject-mask compositing and clears stale per-subject component toggles.",
+    ],
+  },
+  {
+    version: "3.36.2",
+    date: "2026-06-03",
+    title: "Magic-style set ordering",
+    bullets: [
+      "Cards inside saved sets now sort by Magic-style collector order: W/U/B/R/G monocolor, multicolor, colorless and artifacts, nonbasic lands, then basic lands.",
+      "Set collector numbers are reassigned after sorting so set grids and exports use the same deterministic order.",
+      "Cards in the same collector bucket continue to break ties alphabetically, then by saved time and snapshot id.",
+    ],
+  },
+  {
+    version: "3.36.1",
+    date: "2026-06-03",
+    title: "Set card memory reduction",
+    bullets: [
+      "Set thumbnails loaded from local IndexedDB now use revocable Blob object URLs instead of base64 data URIs, reducing JavaScript heap pressure while scrolling.",
+      "Compact mobile set grids now mount fewer overscan rows and expose fewer cards per batch to reduce simultaneous image decode pressure in Safari.",
+      "Set-card image resources are released when virtualized cards scroll out of the mounted window.",
+    ],
+  },
+  {
+    version: "3.36.0",
+    date: "2026-06-03",
+    title: "Painted subject mask snapping",
+    bullets: [
+      "The mask editor now includes a Paint subject tool for brushing a rough object selection directly over the art preview.",
+      "Painted selections are converted into SAM box prompts so CardMagic can snap the rough brush region to a cleaner subject edge.",
+      "The existing targeted mask prompt can be combined with a painted selection for more constrained segmentation.",
+    ],
+  },
+  {
+    version: "3.35.7",
+    date: "2026-06-03",
+    title: "Version refresh prompt",
+    bullets: [
+      "CardMagic now checks the active release branch for a newer deployed version while the app is open.",
+      "Users running an older bundle are prompted to refresh to the current beta or production URL.",
+      "Dismissing the prompt suppresses only that specific newer version, so future releases can prompt again.",
+    ],
+  },
+  {
+    version: "3.35.6",
+    date: "2026-06-03",
+    title: "Set preview loading states",
+    bullets: [
+      "Set-card preview tiles now show a simple spinner while thumbnail lookup, render, cache, upload, or URL persistence is progressing.",
+      "Set-card preview diagnostics now appear only after a failure, showing the pipeline step that stopped and the error detail.",
+      "Cards with local previews that are still uploading now keep the rendered card visible with a compact spinner overlay instead of status text.",
+    ],
+  },
+  {
+    version: "3.35.5",
+    date: "2026-06-03",
+    title: "Full-quality JPEG previews",
+    bullets: [
+      "Persistent set and feed preview renders now use 100% JPEG quality for every upload attempt.",
+      "The preview encoder may still reduce render width when a full-quality image exceeds the Supabase object-size limit.",
+    ],
+  },
+  {
+    version: "3.35.4",
+    date: "2026-06-03",
+    title: "JPEG preview default",
+    bullets: [
+      "Persistent set and feed preview uploads now default to the bounded JPEG encoder instead of the lossless PNG upload path.",
+      "Native preview rendering no longer falls back to raw PNG uploads when compression cannot produce a Storage-safe image.",
+      "Lossless PNG rendering remains reserved for explicit card download/export actions.",
+    ],
+  },
+  {
+    version: "3.35.3",
+    date: "2026-06-03",
+    title: "Set preview compression",
+    bullets: [
+      "Web set and feed preview uploads now encode high-detail full-art cards as bounded high-quality JPEG blobs instead of oversized lossless PNG payloads.",
+      "Set preview caching now writes the compressed Blob directly to IndexedDB, reducing base64 memory pressure during mobile Safari renders.",
+      "Manual PNG export still uses the full CardMagic PNG exporter, so downloaded card images are unchanged.",
+    ],
+  },
+  {
     version: "3.35.2",
     date: "2026-06-03",
     title: "Production collaboration release",

@@ -32,6 +32,7 @@ import {
 } from "react-native";
 import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
+import Svg, { Path } from "react-native-svg";
 import { captureRef as nativeViewShotCaptureRef } from "react-native-view-shot";
 import Animated, {
   Easing,
@@ -100,11 +101,13 @@ import {
 import {
   getWebStorageItem,
   isWebMediaReference,
+  persistWebMediaBlob,
   persistWebMediaUri,
+  resolveWebMediaObjectUrl,
   resolveWebMediaUri,
   setWebStorageItem,
 } from "@/lib/web-media-store";
-import { materializeRemoteCardDraftMedia } from "@/lib/account-media";
+import { isCardMagicRemoteMediaReference, materializeRemoteCardDraftMedia } from "@/lib/account-media";
 import {
   fetchAccountProfile,
   type AccountProfile,
@@ -120,6 +123,7 @@ import {
   fetchCommunityPolls,
   fetchCommunitySetCards,
   fetchCommunitySets,
+  fetchCollaborationSetCardDraftForEditing,
   fetchCollaborationSetCards,
   fetchCollaborationSetMembers,
   fetchCollaborationSetPendingInvites,
@@ -178,6 +182,8 @@ import {
   generateSubjectMatteViaEdge,
   type AiCreditProgressResponse,
   type AiImageGenerationOptions,
+  type SubjectMaskBoxPrompt,
+  type SubjectMaskPointPrompt,
   SubjectMatteProviderError,
   type SubjectMatteDiagnostics,
 } from "@/lib/ai-edge";
@@ -194,6 +200,7 @@ import { getResizedCommunityImageUrl } from "@/lib/community-image";
 import {
   CARDMAGIC_RELEASE_BRANCH,
   CARDMAGIC_VISIBLE_PATCH_NOTES,
+  type CardMagicReleaseBranch,
 } from "@/lib/patch-notes";
 import {
   FRAME_SELECTION_LABELS,
@@ -260,18 +267,18 @@ const CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID = "cardmagic-single-export-preview";
 const CARDMAGIC_BATCH_EXPORT_PREVIEW_ID = "cardmagic-batch-export-preview";
 const PREFETCHED_SET_THUMBNAIL_URLS = new Set<string>();
 const SET_THUMBNAIL_PREFETCH_URL_CACHE_LIMIT = 256;
+const RELEASE_FRESHNESS_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const SET_CARD_RENDER_IMAGE_WIDTH = 750;
 const SET_CARD_RENDER_STATUS_MAX_ENTRIES = 120;
 const SET_CARD_IMAGE_UPLOAD_CONCURRENCY = 3;
 const SET_CARD_IMAGE_UPLOAD_PAYLOAD_LIMIT = 3;
 const SET_CARD_IMAGE_UPLOAD_CONTENT_TYPE = "image/jpeg";
-const SET_CARD_IMAGE_PNG_UPLOAD_CONTENT_TYPE = "image/png";
 const SET_CARD_IMAGE_UPLOAD_MAX_BYTES = 4.5 * 1024 * 1024;
 const SET_CARD_IMAGE_UPLOAD_ATTEMPTS = [
-  { width: 750, quality: 0.9 },
-  { width: 700, quality: 0.84 },
-  { width: 640, quality: 0.78 },
-  { width: 560, quality: 0.72 },
+  { width: 750, quality: 1 },
+  { width: 700, quality: 1 },
+  { width: 640, quality: 1 },
+  { width: 560, quality: 1 },
 ] as const;
 const COLLABORATION_SET_CACHE_MAX_SERIALIZED_LENGTH = 12 * 1024 * 1024;
 const COLLABORATION_SET_CACHE_MAX_TOTAL_CARDS = 900;
@@ -295,6 +302,39 @@ function isPublicRenderedCardImageUrl(imageUrl: string | undefined) {
 
 function getSavedSetCardThumbnailUploadId(snapshotId: string) {
   return `set-card-${snapshotId}-thumbnail`;
+}
+
+function parseSemanticVersion(version: string) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+
+  if (!match) {
+    return null;
+  }
+
+  return [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+}
+
+function compareSemanticVersions(left: string, right: string) {
+  const leftParts = parseSemanticVersion(left);
+  const rightParts = parseSemanticVersion(right);
+
+  if (!leftParts || !rightParts) {
+    return left.localeCompare(right);
+  }
+
+  for (let index = 0; index < leftParts.length; index += 1) {
+    const delta = leftParts[index] - rightParts[index];
+
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+
+  return 0;
+}
+
+function isReleaseVersionNewer(latestVersion: string | undefined, currentVersion: string) {
+  return typeof latestVersion === "string" && compareSemanticVersions(latestVersion, currentVersion) > 0;
 }
 
 function rememberPrefetchedSetThumbnailUrl(imageUrl: string) {
@@ -501,6 +541,14 @@ type SetCardImageRenderStatus = {
 
 type SetCardImageRenderStatusDraft = Omit<SetCardImageRenderStatus, "updatedAt">;
 
+function isSetCardImageRenderFailure(status: SetCardImageRenderStatus | undefined) {
+  return status?.phase === "failed";
+}
+
+function isSetCardImageRenderProgress(status: SetCardImageRenderStatus | undefined) {
+  return Boolean(status && status.phase !== "failed" && status.phase !== "ready-remote");
+}
+
 type SavedSetCardImageRequest = {
   setId: string;
   snapshot: SetCardSnapshot;
@@ -539,6 +587,7 @@ type CardRecoverySnapshot = {
   setId: string;
   setName: string;
   activeSetCardId: string | null;
+  activeSetCardSetId: string | null;
   card: CardDraft;
 };
 
@@ -839,8 +888,12 @@ const GENERATED_SET_SYMBOL_MAX_ENTRIES = 48;
 const ART_LIBRARY_VISIBLE_THUMBNAIL_LIMIT = 32;
 const SET_GRID_INITIAL_CARD_LIMIT = 12;
 const SET_GRID_PAGE_SIZE = 12;
+const SET_GRID_COMPACT_INITIAL_CARD_LIMIT = 4;
+const SET_GRID_COMPACT_PAGE_SIZE = 4;
 const SET_GRID_VIRTUAL_OVERSCAN_PX = 900;
+const SET_GRID_COMPACT_VIRTUAL_OVERSCAN_PX = 120;
 const SET_GRID_INITIAL_MOUNT_ROWS = 3;
+const SET_GRID_COMPACT_INITIAL_MOUNT_ROWS = 1;
 const MAIN_SCROLL_WINDOW_UPDATE_THRESHOLD = 96;
 const SET_CARD_THUMBNAIL_RADIUS = 5;
 const COLOR_IDENTITY_SORT_ORDER: ManaColor[] = ["W", "U", "B", "R", "G"];
@@ -864,6 +917,77 @@ type CardBackGeneratorMode = "reskin" | "custom";
 
 type PickedImageAsset = Pick<ImagePicker.ImagePickerAsset, "uri" | "width" | "height">;
 type ArtAdjustmentInitialMode = "crop" | "mask";
+
+type MaskEditDisplayLayout = {
+  cropWidth: number;
+  cropHeight: number;
+  imageLeft: number;
+  imageTop: number;
+  imageWidth: number;
+  imageHeight: number;
+  offsetX: number;
+  offsetY: number;
+  scale: number;
+  coordinateScale: number;
+};
+
+type RoughSelectionBrushSample = {
+  x: number;
+  y: number;
+  strokeId: number;
+};
+
+type SubjectMaskSelectionSample = {
+  x: number;
+  y: number;
+  strokeId?: number;
+};
+
+type SubjectMaskTraceEntry = {
+  id: string;
+  message: string;
+  tone: "info" | "success" | "error";
+};
+
+function createSetGridCardStub(card: CommunitySetCardPayload): CardDraft {
+  return normalizeStoredCardDraft({
+    name: card.name,
+    typeLine: card.typeLine,
+    rarity: card.rarity,
+    frameColors: card.colors,
+    frameTreatment: card.frameTreatment,
+  });
+}
+
+function cardHasUnresolvedRemoteMedia(card: CardDraft) {
+  for (const key of COLLABORATION_CACHE_CARD_MEDIA_KEYS) {
+    const value = card[key];
+
+    if (typeof value === "string" && isCardMagicRemoteMediaReference(value)) {
+      return true;
+    }
+  }
+
+  for (const key of COLLABORATION_CACHE_SUBJECT_MASK_COMPONENT_KEYS) {
+    const components = card[key];
+
+    if (!Array.isArray(components)) {
+      continue;
+    }
+
+    if (components.some((component) =>
+      typeof component?.cutoutUrl === "string" && isCardMagicRemoteMediaReference(component.cutoutUrl)
+    )) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function shouldUseEditorReadySetCardDraft(card: CardDraft) {
+  return !cardHasUnresolvedRemoteMedia(card);
+}
 
 type StoredActiveCardDraft = {
   schemaVersion: 1;
@@ -1184,6 +1308,12 @@ async function materializeCardSetsImageDataUris(sets: CardSet[]): Promise<CardSe
   }
 
   return materializedSets;
+}
+
+async function materializeCardDraftForExport(card: CardDraft, prefix: string): Promise<CardDraft> {
+  const remoteMaterializedCard = await materializeRemoteCardDraftMedia(cloneCardDraft(card));
+
+  return materializeCardDraftImageDataUris(remoteMaterializedCard, prefix);
 }
 
 function isLocalOrInlineMediaUri(uri: string | undefined) {
@@ -1698,12 +1828,87 @@ async function openStripeCheckoutUrl(checkoutUrl: string, popup?: Window | null)
 // HTTP/2 limit and speeds up inference. Aspect ratio is preserved (width-only
 // resize), so per-axis upscaling during normalization realigns it.
 const SUBJECT_MASK_REQUEST_MAX_DIMENSION = 640;
+const SUBJECT_MASK_GEOMETRY_REQUEST_MAX_DIMENSION = 448;
+const SUBJECT_MASK_PAINTED_CROP_MAX_DIMENSION = 512;
 
-async function downscaleImageForMaskRequest(uri: string) {
+type SubjectMaskCropRegion = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+};
+
+type SubjectMaskCropRequest = {
+  uri: string;
+  cropRegion: SubjectMaskCropRegion;
+  width: number;
+  height: number;
+};
+
+type SubjectMatteNormalizeOptions = {
+  keepAllComponents?: boolean;
+  selectionBoxPrompt?: SubjectMaskBoxPrompt;
+  selectionPointPrompts?: SubjectMaskPointPrompt[];
+  selectionBrushSamples?: SubjectMaskSelectionSample[];
+  selectionBrushRadius?: number;
+};
+
+function getImageDimensions(uri: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    Image.getSize(
+      uri,
+      (width, height) => {
+        if (width > 0 && height > 0) {
+          resolve({ width, height });
+        } else {
+          reject(new Error("CardMagic could not read the image dimensions."));
+        }
+      },
+      reject,
+    );
+  });
+}
+
+function scaleSubjectMaskBoxPromptForRequest(
+  boxPrompt: SubjectMaskBoxPrompt,
+  sourceDimensions: { width: number; height: number },
+  requestMaxDimension = SUBJECT_MASK_REQUEST_MAX_DIMENSION,
+): SubjectMaskBoxPrompt {
+  const scale = requestMaxDimension / sourceDimensions.width;
+
+  return {
+    x_min: Math.max(0, Math.round(boxPrompt.x_min * scale)),
+    y_min: Math.max(0, Math.round(boxPrompt.y_min * scale)),
+    x_max: Math.max(0, Math.round(boxPrompt.x_max * scale)),
+    y_max: Math.max(0, Math.round(boxPrompt.y_max * scale)),
+  };
+}
+
+function scaleSubjectMaskPointPromptsForRequest(
+  pointPrompts: SubjectMaskPointPrompt[] | undefined,
+  sourceDimensions: { width: number; height: number },
+  requestMaxDimension = SUBJECT_MASK_REQUEST_MAX_DIMENSION,
+): SubjectMaskPointPrompt[] | undefined {
+  if (!pointPrompts?.length) {
+    return undefined;
+  }
+
+  const scale = requestMaxDimension / sourceDimensions.width;
+
+  return pointPrompts.map((pointPrompt) => ({
+    ...pointPrompt,
+    x: Math.max(0, Math.round(pointPrompt.x * scale)),
+    y: Math.max(0, Math.round(pointPrompt.y * scale)),
+  }));
+}
+
+async function downscaleImageForMaskRequest(uri: string, requestMaxDimension = SUBJECT_MASK_REQUEST_MAX_DIMENSION) {
   try {
     const result = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: SUBJECT_MASK_REQUEST_MAX_DIMENSION } }],
+      [{ resize: { width: requestMaxDimension } }],
       { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG, base64: true },
     );
 
@@ -1716,6 +1921,106 @@ async function downscaleImageForMaskRequest(uri: string) {
     console.warn("Unable to downscale image for mask request; using full-size art.", error);
     return uri;
   }
+}
+
+function getPaddedSubjectMaskCropRegion(
+  boxPrompt: SubjectMaskBoxPrompt,
+  sourceDimensions: { width: number; height: number },
+): SubjectMaskCropRegion {
+  const boxWidth = Math.max(1, boxPrompt.x_max - boxPrompt.x_min);
+  const boxHeight = Math.max(1, boxPrompt.y_max - boxPrompt.y_min);
+  const paddingX = Math.max(18, Math.min(boxWidth * 0.16, sourceDimensions.width * 0.08));
+  const paddingY = Math.max(18, Math.min(boxHeight * 0.16, sourceDimensions.height * 0.08));
+  const cropWidth = Math.min(sourceDimensions.width, Math.ceil(boxWidth + paddingX * 2));
+  const cropHeight = Math.min(sourceDimensions.height, Math.ceil(boxHeight + paddingY * 2));
+  const centerX = boxPrompt.x_min + boxWidth / 2;
+  const centerY = boxPrompt.y_min + boxHeight / 2;
+  const x = Math.round(clamp(centerX - cropWidth / 2, 0, Math.max(0, sourceDimensions.width - cropWidth)));
+  const y = Math.round(clamp(centerY - cropHeight / 2, 0, Math.max(0, sourceDimensions.height - cropHeight)));
+
+  return {
+    x,
+    y,
+    width: Math.round(cropWidth),
+    height: Math.round(cropHeight),
+    sourceWidth: sourceDimensions.width,
+    sourceHeight: sourceDimensions.height,
+  };
+}
+
+async function createPaintedSelectionCropRequest(
+  imageUri: string,
+  boxPrompt: SubjectMaskBoxPrompt,
+  sourceDimensions: { width: number; height: number },
+): Promise<SubjectMaskCropRequest> {
+  const cropRegion = getPaddedSubjectMaskCropRegion(boxPrompt, sourceDimensions);
+  const actions = [
+    {
+      crop: {
+        originX: cropRegion.x,
+        originY: cropRegion.y,
+        width: cropRegion.width,
+        height: cropRegion.height,
+      },
+    },
+    ...(cropRegion.width > SUBJECT_MASK_PAINTED_CROP_MAX_DIMENSION
+      ? [{ resize: { width: SUBJECT_MASK_PAINTED_CROP_MAX_DIMENSION } }]
+      : []),
+  ];
+
+  const result = await ImageManipulator.manipulateAsync(
+    imageUri,
+    actions,
+    { compress: 0.88, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+  );
+  const uri = result.base64
+    ? `data:image/jpeg;base64,${result.base64}`
+    : Platform.OS === "web"
+      ? await readWebImageUriAsDataUri(result.uri, "image/jpeg")
+      : result.uri;
+
+  return {
+    uri,
+    cropRegion,
+    width: result.width || cropRegion.width,
+    height: result.height || cropRegion.height,
+  };
+}
+
+async function expandSubjectCropCutoutToSourceCanvas(
+  cutoutUri: string,
+  cropRegion: SubjectMaskCropRegion,
+) {
+  if (Platform.OS !== "web" || typeof document === "undefined") {
+    return cutoutUri;
+  }
+
+  const cutoutImage = await loadHtmlImage(cutoutUri);
+  const width = cropRegion.sourceWidth;
+  const height = cropRegion.sourceHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) {
+    return cutoutUri;
+  }
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(cutoutImage, cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
+
+  return canvas.toDataURL("image/png");
+}
+
+async function materializeSubjectCropCutoutOnSourceCanvas(
+  cutoutUri: string,
+  cropRegion: SubjectMaskCropRegion,
+) {
+  const cropCutoutUri = await materializeImageUri(cutoutUri, "subject-matte-crop");
+  const sourceCanvasCutoutUri = await expandSubjectCropCutoutToSourceCanvas(cropCutoutUri, cropRegion);
+
+  return materializeImageUri(sourceCanvasCutoutUri, "subject-matte");
 }
 
 async function normalizeGeneratedAuxiliaryImageUri(uri: string, prefix: string) {
@@ -1911,7 +2216,7 @@ async function normalizePickedSetSymbolImage(asset: PickedImageAsset) {
 async function normalizeSubjectMatteImageUri(
   uri: string,
   sourceImageUri: string,
-  options?: { keepAllComponents?: boolean },
+  options?: SubjectMatteNormalizeOptions,
 ) {
   const materializedUri = await materializeImageUri(uri, "subject-matte");
 
@@ -1920,14 +2225,14 @@ async function normalizeSubjectMatteImageUri(
   }
 
   try {
-    return await createWebSubjectAlphaMask(materializedUri, sourceImageUri, options?.keepAllComponents);
+    return await createWebSubjectAlphaMask(materializedUri, sourceImageUri, options);
   } catch (error) {
     console.warn("Unable to normalize subject matte alpha; using provider output.", error);
     return materializedUri;
   }
 }
 
-async function createWebSubjectAlphaMask(uri: string, sourceImageUri?: string, keepAllComponents = false) {
+async function createWebSubjectAlphaMask(uri: string, sourceImageUri?: string, options?: SubjectMatteNormalizeOptions) {
   if (typeof document === "undefined") {
     return uri;
   }
@@ -1974,9 +2279,21 @@ async function createWebSubjectAlphaMask(uri: string, sourceImageUri?: string, k
   // For merged multi-concept mattes the segmented regions are disconnected
   // (e.g. bow + wolf), so keep every region; the primary-component cleanup is
   // only correct for a single subject.
-  const primarySubjectMask = keepAllComponents
-    ? null
-    : getPrimarySubjectComponentMask(sourceAlpha, width, height);
+  const selectionSubjectMask =
+    options?.selectionBoxPrompt || options?.selectionPointPrompts?.length
+      ? getSelectionConstrainedSubjectComponentMask(sourceAlpha, width, height, {
+        boxPrompt: options.selectionBoxPrompt,
+        pointPrompts: options.selectionPointPrompts,
+        brushSamples: options.selectionBrushSamples,
+        brushRadius: options.selectionBrushRadius,
+      })
+      : null;
+
+  const primarySubjectMask = selectionSubjectMask ?? (
+    options?.keepAllComponents
+      ? null
+      : getPrimarySubjectComponentMask(sourceAlpha, width, height)
+  );
 
   for (let index = 0; index < data.length; index += 4) {
     const pixelIndex = index / 4;
@@ -2169,6 +2486,377 @@ function getPrimarySubjectComponentMask(alpha: Uint8ClampedArray, width: number,
   return featherMask;
 }
 
+function getSelectionConstrainedSubjectComponentMask(
+  alpha: Uint8ClampedArray,
+  width: number,
+  height: number,
+  selection: {
+    boxPrompt?: SubjectMaskBoxPrompt;
+    pointPrompts?: SubjectMaskPointPrompt[];
+    brushSamples?: SubjectMaskSelectionSample[];
+    brushRadius?: number;
+  },
+) {
+  const pixelCount = width * height;
+  const foregroundPoints = (selection.pointPrompts ?? [])
+    .filter((pointPrompt) => pointPrompt.label === 1)
+    .map((pointPrompt) => ({
+      x: Math.round(clamp(pointPrompt.x, 0, width - 1)),
+      y: Math.round(clamp(pointPrompt.y, 0, height - 1)),
+    }));
+  const backgroundPoints = (selection.pointPrompts ?? [])
+    .filter((pointPrompt) => pointPrompt.label === 0)
+    .map((pointPrompt) => ({
+      x: Math.round(clamp(pointPrompt.x, 0, width - 1)),
+      y: Math.round(clamp(pointPrompt.y, 0, height - 1)),
+    }));
+  const brushSamples = (selection.brushSamples ?? [])
+    .map((sample) => ({
+      x: Math.round(clamp(sample.x, 0, width - 1)),
+      y: Math.round(clamp(sample.y, 0, height - 1)),
+      strokeId: sample.strokeId,
+    }));
+  const positiveSamples = brushSamples.length > 0 ? brushSamples : foregroundPoints;
+
+  let pointBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+
+  if (positiveSamples.length > 0) {
+    pointBox = {
+      minX: Math.min(...positiveSamples.map((point) => point.x)),
+      minY: Math.min(...positiveSamples.map((point) => point.y)),
+      maxX: Math.max(...positiveSamples.map((point) => point.x)),
+      maxY: Math.max(...positiveSamples.map((point) => point.y)),
+    };
+  }
+
+  const promptBox = selection.boxPrompt
+    ? {
+      minX: Math.round(clamp(selection.boxPrompt.x_min, 0, width - 1)),
+      minY: Math.round(clamp(selection.boxPrompt.y_min, 0, height - 1)),
+      maxX: Math.round(clamp(selection.boxPrompt.x_max, 0, width - 1)),
+      maxY: Math.round(clamp(selection.boxPrompt.y_max, 0, height - 1)),
+    }
+    : null;
+  const sourceBox = promptBox && pointBox
+    ? {
+      minX: Math.min(promptBox.minX, pointBox.minX),
+      minY: Math.min(promptBox.minY, pointBox.minY),
+      maxX: Math.max(promptBox.maxX, pointBox.maxX),
+      maxY: Math.max(promptBox.maxY, pointBox.maxY),
+    }
+    : promptBox ?? pointBox;
+
+  if (!sourceBox) {
+    return null;
+  }
+
+  const boxWidth = Math.max(1, sourceBox.maxX - sourceBox.minX);
+  const boxHeight = Math.max(1, sourceBox.maxY - sourceBox.minY);
+  const normalizedBrushRadius = selection.brushRadius && selection.brushRadius > 0
+    ? Math.round(clamp(selection.brushRadius, 8, Math.min(116, Math.min(width, height) * 0.16)))
+    : null;
+  const seedRadius = normalizedBrushRadius
+    ? Math.round(clamp(normalizedBrushRadius * 0.38, 7, Math.min(32, Math.min(width, height) * 0.045)))
+    : Math.round(clamp(Math.min(boxWidth, boxHeight) * 0.1, 10, Math.min(46, Math.min(width, height) * 0.055)));
+  const corridorRadius = positiveSamples.length > 0
+    ? Math.round(clamp(Math.min(Math.max(8, Math.min(boxWidth, boxHeight) * 0.045), seedRadius), 8, Math.min(28, Math.min(width, height) * 0.035)))
+    : seedRadius;
+  const expansionRadiusMax = normalizedBrushRadius
+    ? Math.min(132, Math.max(normalizedBrushRadius + 8, Math.min(width, height) * 0.18))
+    : Math.min(104, Math.max(corridorRadius + 8, Math.min(width, height) * 0.12));
+  const expansionRadius = positiveSamples.length > 1
+    ? normalizedBrushRadius
+      ? Math.round(clamp(normalizedBrushRadius * 1.16, normalizedBrushRadius, expansionRadiusMax))
+      : Math.round(clamp(Math.max(corridorRadius * 3.25, Math.min(boxWidth, boxHeight) * 0.38), corridorRadius + 8, expansionRadiusMax))
+    : corridorRadius;
+  const paddingX = Math.max(12, Math.min(expansionRadius * 0.72, Math.max(20, boxWidth * 0.09), width * 0.05));
+  const paddingY = Math.max(12, Math.min(expansionRadius * 0.72, Math.max(20, boxHeight * 0.09), height * 0.05));
+  const clipBounds = {
+    minX: Math.round(clamp(sourceBox.minX - paddingX, 0, width - 1)),
+    minY: Math.round(clamp(sourceBox.minY - paddingY, 0, height - 1)),
+    maxX: Math.round(clamp(sourceBox.maxX + paddingX, 0, width - 1)),
+    maxY: Math.round(clamp(sourceBox.maxY + paddingY, 0, height - 1)),
+  };
+  const seedThreshold = 84;
+  const softThreshold = 28;
+  const seedMask = new Uint8Array(pixelCount);
+  const expansionMask = positiveSamples.length > 1 ? new Uint8Array(pixelCount) : null;
+  const exclusionMask = backgroundPoints.length > 0 ? new Uint8Array(pixelCount) : null;
+  const seedPoints = positiveSamples.length > 0
+    ? positiveSamples
+    : [{ x: Math.round((sourceBox.minX + sourceBox.maxX) / 2), y: Math.round((sourceBox.minY + sourceBox.maxY) / 2) }];
+
+  for (const point of seedPoints) {
+    paintPointRadiusMask(seedMask, width, height, point, corridorRadius);
+
+    if (expansionMask) {
+      paintPointRadiusMask(expansionMask, width, height, point, expansionRadius);
+    }
+  }
+
+  if (brushSamples.length > 1) {
+    const strokes = groupSubjectMaskSelectionSamples(brushSamples);
+
+    for (const [, samples] of strokes) {
+      for (let index = 1; index < samples.length; index += 1) {
+        paintStrokeCorridorMask(seedMask, width, height, samples[index - 1], samples[index], corridorRadius);
+
+        if (expansionMask) {
+          paintStrokeCorridorMask(expansionMask, width, height, samples[index - 1], samples[index], expansionRadius);
+        }
+      }
+    }
+  } else if (positiveSamples.length > 1) {
+    for (let index = 1; index < positiveSamples.length; index += 1) {
+      paintStrokeCorridorMask(seedMask, width, height, positiveSamples[index - 1], positiveSamples[index], corridorRadius);
+
+      if (expansionMask) {
+        paintStrokeCorridorMask(expansionMask, width, height, positiveSamples[index - 1], positiveSamples[index], expansionRadius);
+      }
+    }
+  }
+
+  if (exclusionMask) {
+    const exclusionRadius = Math.round(clamp((normalizedBrushRadius ?? expansionRadius) * 0.82, 14, Math.min(72, Math.min(width, height) * 0.1)));
+
+    for (const point of backgroundPoints) {
+      paintPointRadiusMask(exclusionMask, width, height, point, exclusionRadius);
+    }
+  }
+
+  const componentLabels = new Int32Array(pixelCount);
+  componentLabels.fill(-1);
+  const stack = new Int32Array(pixelCount);
+  const componentStats: Array<{
+    count: number;
+    seedOverlap: number;
+    exclusionOverlap: number;
+    alphaSum: number;
+  }> = [];
+  let currentLabel = 0;
+  let bestLabel = -1;
+  let bestScore = 0;
+
+  for (let start = 0; start < pixelCount; start += 1) {
+    if (alpha[start] < seedThreshold || componentLabels[start] !== -1) {
+      continue;
+    }
+
+    let stackLength = 0;
+    let count = 0;
+    let seedOverlap = 0;
+    let exclusionOverlap = 0;
+    let alphaSum = 0;
+
+    stack[stackLength] = start;
+    stackLength += 1;
+    componentLabels[start] = currentLabel;
+
+    while (stackLength > 0) {
+      stackLength -= 1;
+      const pixelIndex = stack[stackLength];
+      const x = pixelIndex % width;
+      const y = Math.floor(pixelIndex / width);
+      count += 1;
+      alphaSum += alpha[pixelIndex];
+
+      if (seedMask[pixelIndex]) {
+        seedOverlap += 1;
+      }
+
+      if (exclusionMask?.[pixelIndex]) {
+        exclusionOverlap += 1;
+      }
+
+      for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+        for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+          if (xOffset === 0 && yOffset === 0) {
+            continue;
+          }
+
+          const nextX = x + xOffset;
+          const nextY = y + yOffset;
+
+          if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) {
+            continue;
+          }
+
+          const nextIndex = nextY * width + nextX;
+
+          if (componentLabels[nextIndex] === -1 && alpha[nextIndex] >= seedThreshold) {
+            componentLabels[nextIndex] = currentLabel;
+            stack[stackLength] = nextIndex;
+            stackLength += 1;
+          }
+        }
+      }
+    }
+
+    const averageAlpha = alphaSum / Math.max(1, count);
+    const exclusionPenalty = 1 + exclusionOverlap * 0.85;
+    const score = seedOverlap > 0 ? (seedOverlap * averageAlpha) / (Math.sqrt(Math.max(1, count)) * exclusionPenalty) : 0;
+    componentStats[currentLabel] = { count, seedOverlap, exclusionOverlap, alphaSum };
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestLabel = currentLabel;
+    }
+
+    currentLabel += 1;
+  }
+
+  const keepMask = new Uint8Array(pixelCount);
+
+  if (bestLabel < 0) {
+    for (let y = clipBounds.minY; y <= clipBounds.maxY; y += 1) {
+      for (let x = clipBounds.minX; x <= clipBounds.maxX; x += 1) {
+        const pixelIndex = y * width + x;
+        const insideSelectionEnvelope = expansionMask ? expansionMask[pixelIndex] : seedMask[pixelIndex];
+        keepMask[pixelIndex] = alpha[pixelIndex] >= seedThreshold && insideSelectionEnvelope ? 1 : 0;
+      }
+    }
+
+    return keepMask;
+  }
+
+  const bestSeedOverlap = Math.max(1, componentStats[bestLabel]?.seedOverlap ?? 1);
+  const keptLabels = new Set<number>([bestLabel]);
+
+  componentStats.forEach((stats, label) => {
+    if (label === bestLabel || !stats) {
+      return;
+    }
+
+    const seedOverlapEnough = stats.seedOverlap >= Math.max(4, bestSeedOverlap * 0.32);
+    const exclusionRatio = stats.exclusionOverlap / Math.max(1, stats.seedOverlap);
+
+    if (seedOverlapEnough && exclusionRatio < 0.42) {
+      keptLabels.add(label);
+    }
+  });
+
+  for (let y = clipBounds.minY; y <= clipBounds.maxY; y += 1) {
+    for (let x = clipBounds.minX; x <= clipBounds.maxX; x += 1) {
+      const pixelIndex = y * width + x;
+      const insideSelectionEnvelope = !expansionMask || expansionMask[pixelIndex];
+
+      if (insideSelectionEnvelope && !exclusionMask?.[pixelIndex] && keptLabels.has(componentLabels[pixelIndex])) {
+        keepMask[pixelIndex] = 1;
+      }
+    }
+  }
+
+  const featherMask = new Uint8Array(pixelCount);
+
+  for (let y = clipBounds.minY; y <= clipBounds.maxY; y += 1) {
+    for (let x = clipBounds.minX; x <= clipBounds.maxX; x += 1) {
+      const pixelIndex = y * width + x;
+
+      if (alpha[pixelIndex] < softThreshold) {
+        continue;
+      }
+
+      if (exclusionMask?.[pixelIndex]) {
+        continue;
+      }
+
+      let nearSelectedSubject = false;
+
+      for (let yOffset = -2; yOffset <= 2 && !nearSelectedSubject; yOffset += 1) {
+        for (let xOffset = -2; xOffset <= 2; xOffset += 1) {
+          const nextX = x + xOffset;
+          const nextY = y + yOffset;
+
+          if (nextX < clipBounds.minX || nextX > clipBounds.maxX || nextY < clipBounds.minY || nextY > clipBounds.maxY) {
+            continue;
+          }
+
+          if (keepMask[nextY * width + nextX]) {
+            nearSelectedSubject = true;
+            break;
+          }
+        }
+      }
+
+      featherMask[pixelIndex] = nearSelectedSubject ? 1 : 0;
+    }
+  }
+
+  return featherMask;
+}
+
+function groupSubjectMaskSelectionSamples(
+  samples: SubjectMaskSelectionSample[],
+): Array<[number, SubjectMaskSelectionSample[]]> {
+  const strokes = new Map<number, SubjectMaskSelectionSample[]>();
+
+  samples.forEach((sample, index) => {
+    const strokeId = sample.strokeId ?? index;
+    const stroke = strokes.get(strokeId) ?? [];
+    stroke.push(sample);
+    strokes.set(strokeId, stroke);
+  });
+
+  return Array.from(strokes.entries());
+}
+
+function paintPointRadiusMask(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  point: { x: number; y: number },
+  radius: number,
+) {
+  const radiusSquared = radius * radius;
+  const minX = Math.max(0, Math.floor(point.x - radius));
+  const maxX = Math.min(width - 1, Math.ceil(point.x + radius));
+  const minY = Math.max(0, Math.floor(point.y - radius));
+  const maxY = Math.min(height - 1, Math.ceil(point.y + radius));
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const distanceSquared = (x - point.x) ** 2 + (y - point.y) ** 2;
+
+      if (distanceSquared <= radiusSquared) {
+        mask[y * width + x] = 1;
+      }
+    }
+  }
+}
+
+function paintStrokeCorridorMask(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  radius: number,
+) {
+  const radiusSquared = radius * radius;
+  const minX = Math.max(0, Math.floor(Math.min(start.x, end.x) - radius));
+  const maxX = Math.min(width - 1, Math.ceil(Math.max(start.x, end.x) + radius));
+  const minY = Math.max(0, Math.floor(Math.min(start.y, end.y) - radius));
+  const maxY = Math.min(height - 1, Math.ceil(Math.max(start.y, end.y) + radius));
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const projection = lengthSquared > 0
+        ? clamp(((x - start.x) * deltaX + (y - start.y) * deltaY) / lengthSquared, 0, 1)
+        : 0;
+      const closestX = start.x + deltaX * projection;
+      const closestY = start.y + deltaY * projection;
+      const distanceSquared = (x - closestX) ** 2 + (y - closestY) ** 2;
+
+      if (distanceSquared <= radiusSquared) {
+        mask[y * width + x] = 1;
+      }
+    }
+  }
+}
+
 function getRectDistance(
   first: { minX: number; minY: number; maxX: number; maxY: number },
   second: { minX: number; minY: number; maxX: number; maxY: number },
@@ -2185,6 +2873,58 @@ function getRectDistance(
       : 0;
 
   return Math.hypot(xGap, yGap);
+}
+
+function getMaskEditSourcePoint(
+  point: { x: number; y: number },
+  layout: MaskEditDisplayLayout,
+  sourceWidth: number,
+  sourceHeight: number,
+) {
+  const imageCenterX = layout.imageLeft + layout.imageWidth / 2 + layout.offsetX * layout.coordinateScale;
+  const imageCenterY = layout.imageTop + layout.imageHeight / 2 + layout.offsetY * layout.coordinateScale;
+  const localX = (point.x - imageCenterX) / layout.scale + layout.imageWidth / 2;
+  const localY = (point.y - imageCenterY) / layout.scale + layout.imageHeight / 2;
+
+  if (localX < 0 || localX > layout.imageWidth || localY < 0 || localY > layout.imageHeight) {
+    return null;
+  }
+
+  return {
+    x: Math.round((localX / layout.imageWidth) * sourceWidth),
+    y: Math.round((localY / layout.imageHeight) * sourceHeight),
+  };
+}
+
+function groupRoughSelectionBrushSamples(
+  samples: RoughSelectionBrushSample[],
+): Array<[number, RoughSelectionBrushSample[]]> {
+  const strokes = new Map<number, RoughSelectionBrushSample[]>();
+
+  for (const sample of samples) {
+    const stroke = strokes.get(sample.strokeId) ?? [];
+    stroke.push(sample);
+    strokes.set(sample.strokeId, stroke);
+  }
+
+  return Array.from(strokes.entries());
+}
+
+function createRoughSelectionBrushPath(samples: RoughSelectionBrushSample[]) {
+  if (samples.length === 0) {
+    return "";
+  }
+
+  if (samples.length === 1) {
+    const sample = samples[0];
+    return `M ${sample.x.toFixed(1)} ${sample.y.toFixed(1)} h 0.1`;
+  }
+
+  const [firstSample, ...nextSamples] = samples;
+  return [
+    `M ${firstSample.x.toFixed(1)} ${firstSample.y.toFixed(1)}`,
+    ...nextSamples.map((sample) => `L ${sample.x.toFixed(1)} ${sample.y.toFixed(1)}`),
+  ].join(" ");
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -2585,6 +3325,12 @@ function saveCardDraftIntoSet(
 const SET_NUMBER_COLOR_ORDER: ManaColor[] = ["W", "U", "B", "R", "G"];
 const BASIC_LAND_ORDER = ["Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"];
 const TYPE_LINE_DIVIDER_PATTERN = /\s+[—–-]\s+/;
+const SET_COLLECTOR_CATEGORY_RANKS = {
+  multicolor: 5,
+  colorless: 6,
+  nonbasicLand: 7,
+  basicLand: 8,
+} as const;
 
 function getCollectorNumberWidth(cardCount: number) {
   return Math.max(3, String(Math.max(1, cardCount)).length);
@@ -2957,7 +3703,7 @@ async function fetchSharedAccountCardSets(
               remoteCardId: card.id,
               remoteImageOwnerUserId: card.userId,
               authorName: card.authorName,
-              card: card.card,
+              card: card.imageUrl ? createSetGridCardStub(card) : card.card,
             })),
       });
     }),
@@ -3760,29 +4506,28 @@ function getSetCollectorSortKey(card: CardDraft) {
 
   if (typeInfo.cardTypes.includes("Land")) {
     return {
-      categoryRank: basicLandRank >= 0 ? 9 : 8,
+      categoryRank:
+        basicLandRank >= 0
+          ? SET_COLLECTOR_CATEGORY_RANKS.basicLand
+          : SET_COLLECTOR_CATEGORY_RANKS.nonbasicLand,
       colorRank: basicLandRank >= 0 ? basicLandRank : 0,
       name,
     };
   }
 
-  if (colors.length === 0 && typeInfo.cardTypes.includes("Artifact")) {
-    return { categoryRank: 7, colorRank: 0, name };
-  }
-
   if (colors.length === 0) {
-    return { categoryRank: 0, colorRank: 0, name };
+    return { categoryRank: SET_COLLECTOR_CATEGORY_RANKS.colorless, colorRank: 0, name };
   }
 
   if (colors.length === 1) {
     return {
-      categoryRank: 1 + SET_NUMBER_COLOR_ORDER.indexOf(colors[0]),
+      categoryRank: SET_NUMBER_COLOR_ORDER.indexOf(colors[0]),
       colorRank: 0,
       name,
     };
   }
 
-  return { categoryRank: 6, colorRank: 0, name };
+  return { categoryRank: SET_COLLECTOR_CATEGORY_RANKS.multicolor, colorRank: 0, name };
 }
 
 function getCollectorColors(card: CardDraft): ManaColor[] {
@@ -4180,6 +4925,10 @@ function normalizeCardRecoverySnapshot(value: unknown): CardRecoverySnapshot | n
     setId: rawSnapshot.setId,
     setName: rawSnapshot.setName,
     activeSetCardId: typeof rawSnapshot.activeSetCardId === "string" ? rawSnapshot.activeSetCardId : null,
+    activeSetCardSetId:
+      typeof rawSnapshot.activeSetCardSetId === "string"
+        ? rawSnapshot.activeSetCardSetId
+        : rawSnapshot.setId,
     card: normalizeStoredCardDraft(rawSnapshot.card),
   };
 }
@@ -5181,6 +5930,7 @@ type WebViewShotOptions = {
   format?: "png" | "jpg";
   quality?: number;
   result?: "tmpfile" | "base64" | "data-uri" | "blob";
+  scale?: number;
 };
 
 function getWebViewShotMimeType(format: WebViewShotOptions["format"]) {
@@ -5195,7 +5945,9 @@ async function captureWebRefWithHtml2Canvas(view: HTMLElement, options: WebViewS
   }
 
   const { default: html2canvas } = await import("html2canvas");
-  let renderedCanvas = await html2canvas(view);
+  let renderedCanvas = await html2canvas(view, {
+    scale: options.scale,
+  });
 
   if (options.width && options.height) {
     const resizedCanvas = document.createElement("canvas");
@@ -5234,6 +5986,7 @@ function loadWebViewShotCaptureRef() {
 
 type SetCardUploadImage = {
   localImageUrl: string;
+  localImageBlob?: Blob;
   uploadBody: Blob | ArrayBuffer | Uint8Array;
   uploadContentType: string;
 };
@@ -6038,7 +6791,7 @@ function getFriendlySubjectMaskError(error: unknown, targetPrompt?: string) {
         : "that subject";
 
   if (message.includes("taking too long") || message.includes("timed out")) {
-    return message || "Targeted masking is taking too long. Try one simpler visible object, or try again in a moment.";
+    return message || "Targeted masking is taking longer than expected. Try a smaller painted selection, one simpler visible object, or try again in a moment.";
   }
 
   if (
@@ -6056,18 +6809,139 @@ function getFriendlySubjectMaskError(error: unknown, targetPrompt?: string) {
 async function generateSubjectMatteUri({
   imageUri,
   targetPrompt,
+  boxPrompt,
+  pointPrompts,
+  brushSamples,
+  brushRadius,
+  onTrace,
 }: {
   imageUri: string;
   targetPrompt?: string;
+  boxPrompt?: SubjectMaskBoxPrompt;
+  pointPrompts?: SubjectMaskPointPrompt[];
+  brushSamples?: SubjectMaskSelectionSample[];
+  brushRadius?: number;
+  onTrace?: (message: string, tone?: SubjectMaskTraceEntry["tone"]) => void;
 }) {
   // Prompted SAM segmentation runs one fal call per concept (in parallel); send a
   // downscaled image so the bodies stay small. The mask is normalized against the
   // full-res original below, so output resolution is unaffected.
   const providerPrompt = getSubjectMaskPromptForProvider(targetPrompt);
-  const requestImageUri = providerPrompt
-    ? await downscaleImageForMaskRequest(imageUri)
+
+  if (boxPrompt && Platform.OS === "web") {
+    const sourceDimensions = await getImageDimensions(imageUri);
+    const cropRequest = await createPaintedSelectionCropRequest(imageUri, boxPrompt, sourceDimensions);
+    const cropPrompt = providerPrompt;
+    const normalizeOptions: SubjectMatteNormalizeOptions = {
+      selectionBoxPrompt: boxPrompt,
+      selectionPointPrompts: pointPrompts,
+      selectionBrushSamples: brushSamples,
+      selectionBrushRadius: brushRadius,
+    };
+
+    onTrace?.(
+      `Crop-first selection: ${cropRequest.cropRegion.width}x${cropRequest.cropRegion.height} crop at ${cropRequest.cropRegion.x},${cropRequest.cropRegion.y}; ${cropPrompt ? `semantic prompt "${cropPrompt}"` : "foreground candidate"}.`,
+      "info",
+    );
+    if (brushSamples?.length) {
+      onTrace?.(`Using ${brushSamples.length} painted brush samples with ${Math.round(brushRadius ?? 0)}px source-radius local filtering.`, "info");
+    }
+    onTrace?.(
+      cropPrompt
+        ? "Submitting cropped art to semantic SAM, then filtering by the painted brush seed."
+        : "Submitting cropped art to fast foreground matting, then filtering by the painted brush seed.",
+      "info",
+    );
+
+    const matte = await generateSubjectMatteViaEdge({
+      imageUri: cropRequest.uri,
+      targetPrompt: cropPrompt,
+    });
+    let matteUri: string;
+
+    const subjectMasks = (matte.subjectMasks ?? []).filter((mask) => mask && Boolean(mask.url));
+
+    if (subjectMasks.length > 0) {
+      onTrace?.(`Expanding ${subjectMasks.length} cropped mask component${subjectMasks.length === 1 ? "" : "s"} back to the original art canvas.`, "info");
+      onTrace?.("Filtering the expanded matte against the painted brush seed.", "info");
+      const components = await Promise.all(
+        subjectMasks.map(async (mask) => ({
+          concept: mask.concept,
+          cutoutUrl: await normalizeSubjectMatteImageUri(
+            await materializeSubjectCropCutoutOnSourceCanvas(mask.url, cropRequest.cropRegion),
+            imageUri,
+            normalizeOptions,
+          ),
+        })),
+      );
+      const cutoutUrls = components.map((component) => component.cutoutUrl);
+      const merged = cutoutUrls.length > 1 ? await compositeSubjectCutouts(cutoutUrls) : cutoutUrls[0];
+      matteUri = await materializeImageUri(merged, "subject-matte");
+
+      return {
+        uri: await normalizeSubjectMatteImageUri(matteUri, imageUri, normalizeOptions),
+        diagnostics: matte.diagnostics,
+        components,
+        sourceUri: imageUri,
+        progress: matte.progress,
+        creditSpend: matte.creditSpend,
+      };
+    }
+
+    if (matte.b64Json) {
+      onTrace?.("Expanding the cropped matte back to the original art canvas.", "info");
+      onTrace?.("Filtering the expanded matte against the painted brush seed.", "info");
+      const cropMatteUri = await materializeBase64ImageUri(matte.b64Json, "png", "subject-matte-crop");
+      matteUri = await materializeSubjectCropCutoutOnSourceCanvas(cropMatteUri, cropRequest.cropRegion);
+
+      return {
+        uri: await normalizeSubjectMatteImageUri(matteUri, imageUri, normalizeOptions),
+        diagnostics: matte.diagnostics,
+        components: [] as { concept: string; cutoutUrl: string }[],
+        sourceUri: imageUri,
+        progress: matte.progress,
+        creditSpend: matte.creditSpend,
+      };
+    }
+
+    if (matte.url) {
+      onTrace?.("Expanding the cropped matte back to the original art canvas.", "info");
+      onTrace?.("Filtering the expanded matte against the painted brush seed.", "info");
+      matteUri = await materializeSubjectCropCutoutOnSourceCanvas(matte.url, cropRequest.cropRegion);
+
+      return {
+        uri: await normalizeSubjectMatteImageUri(matteUri, imageUri, normalizeOptions),
+        diagnostics: matte.diagnostics,
+        components: [] as { concept: string; cutoutUrl: string }[],
+        sourceUri: imageUri,
+        progress: matte.progress,
+        creditSpend: matte.creditSpend,
+      };
+    }
+
+    throw new Error("Subject matte provider did not return cropped image data.");
+  }
+
+  const hasGeometryPrompt = Boolean(boxPrompt) || Boolean(pointPrompts?.length);
+  const requestMaxDimension = hasGeometryPrompt
+    ? SUBJECT_MASK_GEOMETRY_REQUEST_MAX_DIMENSION
+    : SUBJECT_MASK_REQUEST_MAX_DIMENSION;
+  const requestImageUri = providerPrompt || hasGeometryPrompt
+    ? await downscaleImageForMaskRequest(imageUri, requestMaxDimension)
     : imageUri;
-  const matte = await generateSubjectMatteViaEdge({ imageUri: requestImageUri, targetPrompt: providerPrompt });
+  const sourceDimensions = hasGeometryPrompt ? await getImageDimensions(imageUri) : null;
+  const requestBoxPrompt = boxPrompt
+    ? scaleSubjectMaskBoxPromptForRequest(boxPrompt, sourceDimensions ?? await getImageDimensions(imageUri), requestMaxDimension)
+    : undefined;
+  const requestPointPrompts = pointPrompts?.length
+    ? scaleSubjectMaskPointPromptsForRequest(pointPrompts, sourceDimensions ?? await getImageDimensions(imageUri), requestMaxDimension)
+    : undefined;
+  const matte = await generateSubjectMatteViaEdge({
+    imageUri: requestImageUri,
+    targetPrompt: providerPrompt,
+    boxPrompt: requestBoxPrompt,
+    pointPrompts: requestPointPrompts,
+  });
   let matteUri: string;
 
   // Per-concept cutouts (prompted segmentation): merge the enabled ones and keep
@@ -6249,34 +7123,87 @@ function assertSetCardImageUploadBodyWithinLimit(body: Blob | ArrayBuffer | Uint
   }
 }
 
-async function createWebPngSetCardUploadImage(
+function getElementRenderAspectRatio(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  const width = rect.width || element.offsetWidth;
+  const height = rect.height || element.offsetHeight;
+
+  if (width > 0 && height > 0) {
+    return height / width;
+  }
+
+  return 1039 / 744;
+}
+
+async function createWebSetCardUploadImage(
   target: View | null,
   onStatus?: (status: SetCardImageRenderStatusDraft) => void,
 ): Promise<SetCardUploadImage> {
-  onStatus?.({
-    phase: "capturing",
-    label: "Capturing PNG",
-    detail: "Using the CardMagic PNG exporter",
-  });
-
-  const localImageUrl = normalizeWebPngExportUri(await captureCardMagicPng(target));
-  const response = await fetch(localImageUrl);
-  const rawBlob = await response.blob();
-  const uploadBody = rawBlob.type
-    ? rawBlob
-    : rawBlob.slice(0, rawBlob.size, SET_CARD_IMAGE_PNG_UPLOAD_CONTENT_TYPE);
-
-  if (uploadBody.type !== SET_CARD_IMAGE_PNG_UPLOAD_CONTENT_TYPE) {
-    throw new Error("CardMagic could not encode the set card preview as a PNG upload.");
+  if (!target) {
+    throw new Error("CardMagic could not find the rendered set card preview.");
   }
 
-  assertSetCardImageUploadBodyWithinLimit(uploadBody);
+  const element = target as unknown as HTMLElement;
+  const captureWebRef = await loadWebViewShotCaptureRef();
+  const renderAspectRatio = getElementRenderAspectRatio(element);
+  let largestRejectedBlob: Blob | null = null;
 
-  return {
-    localImageUrl,
-    uploadBody,
-    uploadContentType: SET_CARD_IMAGE_PNG_UPLOAD_CONTENT_TYPE,
-  };
+  onStatus?.({
+    phase: "capturing",
+    label: "Compressing image",
+    detail: "Encoding high-quality set preview",
+  });
+
+  for (const attempt of SET_CARD_IMAGE_UPLOAD_ATTEMPTS) {
+    const height = Math.round(attempt.width * renderAspectRatio);
+
+    onStatus?.({
+      phase: "capturing",
+      label: "Compressing image",
+      detail: `${attempt.width}px JPEG at ${(attempt.quality * 100).toFixed(0)}% quality`,
+    });
+
+    const capturedResult = await withTimeout(
+      captureWebRef(element, {
+        width: attempt.width,
+        height,
+        format: "jpg",
+        quality: attempt.quality,
+        result: "blob",
+        scale: 1,
+      }),
+      20000,
+      "CardMagic timed out while rasterizing the set card preview.",
+    );
+    if (typeof Blob === "undefined" || !(capturedResult instanceof Blob)) {
+      throw new Error("CardMagic could not encode the set card preview as an upload Blob.");
+    }
+    const capturedBlob = capturedResult;
+    const uploadBody = capturedBlob.type
+      ? capturedBlob
+      : capturedBlob.slice(0, capturedBlob.size, SET_CARD_IMAGE_UPLOAD_CONTENT_TYPE);
+
+    if (uploadBody.type !== SET_CARD_IMAGE_UPLOAD_CONTENT_TYPE) {
+      throw new Error("CardMagic could not encode the set card preview as a JPEG upload.");
+    }
+
+    if (getImageUploadBodyByteLength(uploadBody) <= SET_CARD_IMAGE_UPLOAD_MAX_BYTES) {
+      return {
+        localImageUrl: "",
+        localImageBlob: uploadBody,
+        uploadBody,
+        uploadContentType: SET_CARD_IMAGE_UPLOAD_CONTENT_TYPE,
+      };
+    }
+
+    largestRejectedBlob = uploadBody;
+  }
+
+  if (largestRejectedBlob) {
+    assertSetCardImageUploadBodyWithinLimit(largestRejectedBlob);
+  }
+
+  throw new Error("CardMagic could not encode the set card preview for upload.");
 }
 
 async function createNativeSetCardUploadImage(
@@ -6285,6 +7212,7 @@ async function createNativeSetCardUploadImage(
 ): Promise<SetCardUploadImage> {
   if (hasNativeModule("ExpoFileSystem")) {
     const FileSystem = await import("expo-file-system");
+    let largestRejectedBytes: Uint8Array | null = null;
 
     for (const attempt of SET_CARD_IMAGE_UPLOAD_ATTEMPTS) {
       onStatus?.({
@@ -6311,17 +7239,16 @@ async function createNativeSetCardUploadImage(
           uploadContentType: SET_CARD_IMAGE_UPLOAD_CONTENT_TYPE,
         };
       }
+
+      largestRejectedBytes = bytes;
+    }
+
+    if (largestRejectedBytes) {
+      assertSetCardImageUploadBodyWithinLimit(largestRejectedBytes);
     }
   }
 
-  const fallbackBytes = await readPngCaptureBytes(renderedPng);
-  assertSetCardImageUploadBodyWithinLimit(fallbackBytes);
-
-  return {
-    localImageUrl: renderedPng,
-    uploadBody: fallbackBytes,
-    uploadContentType: "image/png",
-  };
+  throw new Error("CardMagic could not compress the set card preview for upload.");
 }
 
 async function exportCardMagicPng(fileName: string, target: View | null) {
@@ -6549,6 +7476,8 @@ export default function App() {
   const selectedSetIdRef = useRef(selectedSetId);
   const [activeSetCardId, setActiveSetCardId] = useState<string | null>(null);
   const activeSetCardIdRef = useRef(activeSetCardId);
+  const [activeSetCardSetId, setActiveSetCardSetId] = useState<string | null>(null);
+  const activeSetCardSetIdRef = useRef(activeSetCardSetId);
   const [cardHasUnsavedEdits, setCardHasUnsavedEdits] = useState(false);
   const cardHasUnsavedEditsRef = useRef(cardHasUnsavedEdits);
   const [newSetName, setNewSetName] = useState("");
@@ -6571,6 +7500,7 @@ export default function App() {
     overwriteSnapshotId: string | null;
     overwriteLabel: string;
   } | null>(null);
+  const [saveDestinationPromptOpen, setSaveDestinationPromptOpen] = useState(false);
   const [physicalBackMenuOpen, setPhysicalBackMenuOpen] = useState(false);
   const [artSourceOpen, setArtSourceOpen] = useState(false);
   const [artGeneratorOpen, setArtGeneratorOpen] = useState(false);
@@ -6617,7 +7547,8 @@ export default function App() {
   const [subjectMaskBusy, setSubjectMaskBusy] = useState(false);
   const [subjectMaskStatus, setSubjectMaskStatus] = useState<string | null>(null);
   const [subjectMaskError, setSubjectMaskError] = useState<string | null>(null);
-  const [, setSubjectMaskDiagnostics] = useState<SubjectMatteDiagnostics | null>(null);
+  const [subjectMaskDiagnostics, setSubjectMaskDiagnostics] = useState<SubjectMatteDiagnostics | null>(null);
+  const [subjectMaskTrace, setSubjectMaskTrace] = useState<SubjectMaskTraceEntry[]>([]);
   // Per-subject cutouts from the last prompted segmentation, each toggleable on/off.
   const [subjectMaskComponents, setSubjectMaskComponents] = useState<SubjectMaskComponent[]>([]);
   const subjectMaskSourceUriRef = useRef<string | null>(null);
@@ -6651,6 +7582,9 @@ export default function App() {
   const [patchNotesOpen, setPatchNotesOpen] = useState(false);
   const [betaReleaseDeployment, setBetaReleaseDeployment] =
     useState<CardMagicReleaseDeployment | null>(null);
+  const [refreshPromptDeployment, setRefreshPromptDeployment] =
+    useState<CardMagicReleaseDeployment | null>(null);
+  const dismissedRefreshPromptVersionRef = useRef<string | null>(null);
   const { width, height } = useWindowDimensions();
   const mobileBrowserBottomInset = useMobileBrowserBottomInset(width);
   const [cardFontsLoaded, cardFontLoadError] = useFonts(FULL_MAGIC_PACK.fonts);
@@ -6660,19 +7594,44 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
-    fetchCardMagicReleaseDeployment("beta")
-      .then((deployment) => {
-        if (!cancelled) {
-          setBetaReleaseDeployment(deployment);
+    const loadReleaseDeployments = async () => {
+      try {
+        const betaDeployment = await fetchCardMagicReleaseDeployment("beta");
+        const activeDeployment =
+          CARDMAGIC_RELEASE_BRANCH === "beta"
+            ? betaDeployment
+            : await fetchCardMagicReleaseDeployment("main");
+
+        if (cancelled) {
+          return;
         }
-      })
-      .catch((error) => {
-        console.warn("Unable to load CardMagic beta release metadata.", error);
-      });
+
+        setBetaReleaseDeployment(betaDeployment);
+
+        if (
+          activeDeployment &&
+          isReleaseVersionNewer(activeDeployment.version, CARDMAGIC_APP_VERSION) &&
+          dismissedRefreshPromptVersionRef.current !== activeDeployment.version
+        ) {
+          setRefreshPromptDeployment(activeDeployment);
+        }
+      } catch (error) {
+        console.warn("Unable to load CardMagic release metadata.", error);
+      }
+    };
+
+    void loadReleaseDeployments();
+    refreshTimer = setInterval(() => {
+      void loadReleaseDeployments();
+    }, RELEASE_FRESHNESS_CHECK_INTERVAL_MS);
 
     return () => {
       cancelled = true;
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+      }
     };
   }, []);
 
@@ -6721,6 +7680,11 @@ export default function App() {
     } ${FRAME_SELECTION_LABELS[rightFrame]}`;
   }, [card]);
   const selectedSet = cardSets.find((set) => set.id === selectedSetId) ?? cardSets[0];
+  const activeSetCardSet =
+    activeSetCardSetId
+      ? cardSets.find((set) => set.id === activeSetCardSetId) ?? null
+      : null;
+  const previewContextSet = activeSetCardSet ?? selectedSet;
   const activeFrameTreatment = getActiveFrameTreatment(card);
   const activeShowcaseFrame = getActiveShowcaseFrame(card);
   const frameTypeLabel = isSplitFrame
@@ -6729,10 +7693,14 @@ export default function App() {
       ? SHOWCASE_FRAME_LABELS[activeShowcaseFrame]
       : FRAME_TREATMENT_LABELS[activeFrameTreatment];
   const headerVersionLabel = `v${CARDMAGIC_APP_VERSION}`;
-  const headerContextLabel = `${frameTypeLabel} · ${selectedSet?.name ?? "No set"}`;
+  const headerContextLabel = `${frameTypeLabel} · ${previewContextSet?.name ?? "No set"}`;
   const previewCard = useMemo(
-    () => withResolvedSetDefaults(getSetNumberedPreviewCard(card, selectedSet?.cards ?? [], activeSetCardId), selectedSet),
-    [activeSetCardId, card, selectedSet],
+    () =>
+      withResolvedSetDefaults(
+        getSetNumberedPreviewCard(card, previewContextSet?.cards ?? [], activeSetCardId),
+        previewContextSet,
+      ),
+    [activeSetCardId, card, previewContextSet],
   );
   const cardWidth = Math.min(374, Math.max(272, width - 32));
   const previewTypeFrame = getPreviewTypeFrame(card);
@@ -7491,6 +8459,10 @@ export default function App() {
   }, [activeSetCardId]);
 
   useEffect(() => {
+    activeSetCardSetIdRef.current = activeSetCardSetId;
+  }, [activeSetCardSetId]);
+
+  useEffect(() => {
     cardHasUnsavedEditsRef.current = cardHasUnsavedEdits;
   }, [cardHasUnsavedEdits]);
 
@@ -8112,13 +9084,21 @@ export default function App() {
       detail: "Creating the collaboration card row before preview upload",
     });
 
-    void addCollaborationSetCard({
-      setId,
-      localSnapshotId: snapshot.id,
-      card: snapshot.card,
-    })
-      .then((remoteCardId) => {
-        const syncedSnapshot = attachRemoteSetCardSnapshot(setId, snapshot, {
+    void materializeCardDraftForExport(snapshot.card, `shared-set-card-${setId}-${snapshot.id}`)
+      .then((materializedCard) => {
+        const materializedSnapshot: SetCardSnapshot = {
+          ...snapshot,
+          card: materializedCard,
+        };
+
+        return addCollaborationSetCard({
+          setId,
+          localSnapshotId: materializedSnapshot.id,
+          card: materializedSnapshot.card,
+        }).then((remoteCardId) => ({ remoteCardId, materializedSnapshot }));
+      })
+      .then(({ remoteCardId, materializedSnapshot }) => {
+        const syncedSnapshot = attachRemoteSetCardSnapshot(setId, materializedSnapshot, {
           remoteCardId,
           remoteImageOwnerUserId: accountUser.id,
           authorName: accountFooterOwnerName,
@@ -8970,7 +9950,51 @@ export default function App() {
     setSubjectMaskStatus(message);
   };
 
-  const generateSubjectMask = async (targetPrompt?: string) => {
+  const pushSubjectMaskTrace = (
+    message: string,
+    tone: SubjectMaskTraceEntry["tone"] = "info",
+  ) => {
+    const timestamp = new Date().toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    const entry: SubjectMaskTraceEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      message: `${timestamp} - ${message}`,
+      tone,
+    };
+
+    console.log(`[CardMagic subject mask trace] ${message}`);
+    setSubjectMaskTrace((current) => [...current, entry].slice(-8));
+  };
+
+  const pushSubjectMaskDiagnosticsTrace = (diagnostics: SubjectMatteDiagnostics | null | undefined) => {
+    if (!diagnostics) {
+      return;
+    }
+
+    const attempts = diagnostics.attempts ?? [];
+    pushSubjectMaskTrace(
+      `Provider diagnostics: ${diagnostics.provider ?? "unknown provider"} target "${diagnostics.targetPrompt ?? "not provided"}"; ${attempts.length} attempt${attempts.length === 1 ? "" : "s"}.`,
+      attempts.some((attempt) => attempt.status === "failed") ? "error" : "info",
+    );
+
+    attempts.slice(-3).forEach((attempt) => {
+      pushSubjectMaskTrace(
+        `${attempt.status === "success" ? "Success" : "Failure"}: ${attempt.endpointId}${attempt.error ? ` - ${attempt.error.slice(0, 140)}` : ""}`,
+        attempt.status === "success" ? "success" : "error",
+      );
+    });
+  };
+
+  const generateSubjectMask = async (
+    targetPrompt?: string,
+    boxPrompt?: SubjectMaskBoxPrompt,
+    pointPrompts?: SubjectMaskPointPrompt[],
+    brushSamples?: SubjectMaskSelectionSample[],
+    brushRadius?: number,
+  ) => {
     if (subjectMaskBusy) {
       return;
     }
@@ -8999,11 +10023,30 @@ export default function App() {
     const normalizedTargetPrompt = targetPrompt?.trim();
     const concepts = getSubjectMaskConcepts(normalizedTargetPrompt);
     const providerTargetPrompt = getSubjectMaskPromptForProvider(normalizedTargetPrompt);
+    const usingPaintedSelection = Boolean(boxPrompt);
+    const usingRoughSelection = Boolean(pointPrompts?.length);
+    const requestMode = usingPaintedSelection
+      ? "painted selection"
+      : usingRoughSelection
+        ? "rough selection points"
+        : providerTargetPrompt
+          ? "text prompt"
+          : "foreground removal";
+    const foregroundPointCount = pointPrompts?.filter((point) => point.label === 1).length ?? 0;
+    const backgroundPointCount = pointPrompts?.filter((point) => point.label === 0).length ?? 0;
+    const brushSampleCount = brushSamples?.length ?? 0;
+    const boxSummary = boxPrompt
+      ? `${Math.max(0, boxPrompt.x_max - boxPrompt.x_min)}x${Math.max(0, boxPrompt.y_max - boxPrompt.y_min)} at ${boxPrompt.x_min},${boxPrompt.y_min}`
+      : "none";
 
     setSubjectMaskBusy(true);
     setSubjectMaskError(null);
     setSubjectMaskDiagnostics(null);
     setSubjectMaskComponents([]);
+    setSubjectMaskTrace([]);
+    pushSubjectMaskTrace(`Request mode: ${requestMode}.`, "info");
+    pushSubjectMaskTrace(`Geometry: box ${boxSummary}; foreground points ${foregroundPointCount}; background points ${backgroundPointCount}; brush samples ${brushSampleCount}.`, "info");
+    pushSubjectMaskTrace(`Prompt: ${providerTargetPrompt ? `"${providerTargetPrompt}"` : "none"}.`, "info");
 
     // One timer running from the true start of masking; the phase label advances
     // through prepare → segment → combine → apply with continuous elapsed.
@@ -9021,19 +10064,36 @@ export default function App() {
 
         stopMaskTimer.setPhase(
           !normalizedTargetPrompt
-            ? "Removing the background from your art…"
+            ? usingPaintedSelection
+              ? "Snapping the painted selection to the subject… this can take up to two minutes"
+              : usingRoughSelection
+                ? "Snapping the painted subject selection… this can take up to two minutes"
+                : "Removing the background from your art…"
             : concepts.length > 1
               ? `Segmenting ${concepts.length} subjects: ${concepts.join(", ")}…`
               : `Segmenting “${concepts[0] ?? normalizedTargetPrompt}”…`,
         );
 
+        pushSubjectMaskTrace("Submitting image and prompts to the Supabase subject-mask Edge Function.", "info");
         const generatedMask = await generateSubjectMatteUri({
           imageUri: artUri,
           targetPrompt: providerTargetPrompt,
+          boxPrompt,
+          pointPrompts,
+          brushSamples,
+          brushRadius,
+          onTrace: pushSubjectMaskTrace,
         });
         maskUri = generatedMask.uri;
         generatedMaskProgress = generatedMask.progress;
         setSubjectMaskDiagnostics(generatedMask.diagnostics ?? null);
+        pushSubjectMaskDiagnosticsTrace(generatedMask.diagnostics ?? null);
+        pushSubjectMaskTrace(
+          generatedMask.components?.length
+            ? `Provider returned ${generatedMask.components.length} mask component${generatedMask.components.length === 1 ? "" : "s"}.`
+            : "Provider returned a single foreground matte.",
+          "success",
+        );
         subjectMaskSourceUriRef.current = generatedMask.sourceUri ?? artUri;
         nextComponents =
           normalizeSubjectMaskComponentsField(
@@ -9053,6 +10113,7 @@ export default function App() {
         artSubjectMaskDisabled: false,
         artSubjectMaskComponents: nextComponents.length > 0 ? nextComponents : undefined,
       });
+      pushSubjectMaskTrace("Mask applied to the current card.", "success");
       setActiveSection("art");
       setSheetSection(null);
       setArtSourceOpen(false);
@@ -9065,7 +10126,9 @@ export default function App() {
       console.warn("Unable to generate subject mask.", error);
       if (error instanceof SubjectMatteProviderError) {
         setSubjectMaskDiagnostics(error.diagnostics ?? null);
+        pushSubjectMaskDiagnosticsTrace(error.diagnostics ?? null);
       }
+      pushSubjectMaskTrace(error instanceof Error ? `Stopped: ${error.message}` : "Stopped: subject mask generation failed.", "error");
       setSubjectMaskError(getFriendlySubjectMaskError(error, normalizedTargetPrompt));
       setArtSourceOpen(false);
       setArtAdjustmentInitialMode("mask");
@@ -9082,6 +10145,7 @@ export default function App() {
   const startSubjectMaskTimer = (initialPhase: string) => {
     const startedAt = Date.now();
     let phase = initialPhase;
+    pushSubjectMaskTrace(initialPhase, "info");
     const render = () => {
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
       reportSubjectMaskStatus(`${phase} (${elapsed}s)`);
@@ -9091,6 +10155,7 @@ export default function App() {
     return {
       setPhase: (next: string) => {
         phase = next;
+        pushSubjectMaskTrace(next, "info");
         render();
       },
       stop: () => clearInterval(intervalId),
@@ -9119,10 +10184,14 @@ export default function App() {
 
     setSubjectMaskBusy(true);
     setSubjectMaskError(null);
+    setSubjectMaskTrace([]);
+    pushSubjectMaskTrace(`Adding subject "${trimmed}" to the existing mask.`, "info");
     const stopMaskTimer = startSubjectMaskTimer(`Adding “${trimmed}”…`);
 
     try {
+      pushSubjectMaskTrace("Preparing source art for prompted subject segmentation.", "info");
       const requestImageUri = await downscaleImageForMaskRequest(sourceUri);
+      pushSubjectMaskTrace("Submitting add-subject prompt to the Supabase subject-mask Edge Function.", "info");
       const matte = await generateSubjectMatteViaEdge({
         imageUri: requestImageUri,
         targetPrompt: getSubjectMaskPromptForProvider(trimmed),
@@ -9133,6 +10202,8 @@ export default function App() {
         throw new Error(`Couldn't find “${trimmed}” in your art.`);
       }
 
+      pushSubjectMaskDiagnosticsTrace(matte.diagnostics ?? null);
+      pushSubjectMaskTrace(`Provider returned ${newMasks.length} new mask component${newMasks.length === 1 ? "" : "s"}.`, "success");
       const additions = newMasks.map((mask) => ({ concept: mask.concept, cutoutUrl: mask.url, enabled: true }));
       const next = normalizeSubjectMaskComponentsField([...subjectMaskComponents, ...additions]) ?? [];
       setSubjectMaskComponents(next);
@@ -9147,6 +10218,7 @@ export default function App() {
         artSubjectMaskUri: composed ?? undefined,
         artSubjectMaskComponents: next.length > 0 ? next : undefined,
       });
+      pushSubjectMaskTrace("Updated mask applied to the current card.", "success");
       if (!applyAuthoritativeAiProgress(matte.progress)) {
         recordSuccessfulCreditSpend("subjectMask");
       }
@@ -9154,7 +10226,9 @@ export default function App() {
       console.warn("Unable to add subject mask.", error);
       if (error instanceof SubjectMatteProviderError) {
         setSubjectMaskDiagnostics(error.diagnostics ?? null);
+        pushSubjectMaskDiagnosticsTrace(error.diagnostics ?? null);
       }
+      pushSubjectMaskTrace(error instanceof Error ? `Stopped: ${error.message}` : "Stopped: add-subject masking failed.", "error");
       setSubjectMaskError(getFriendlySubjectMaskError(error, trimmed));
     } finally {
       stopMaskTimer.stop();
@@ -9597,7 +10671,7 @@ export default function App() {
       overwriteSnapshotId?: string | null;
     },
   ) => {
-    const activeSnapshotId = targetSetId === selectedSetId ? activeSetCardId : null;
+    const activeSnapshotId = targetSetId === activeSetCardSetId ? activeSetCardId : null;
     const result = saveCardDraftIntoSet(cardSets, targetSetId, card, activeSnapshotId, {
       saveMode: options?.saveMode,
       overwriteSnapshotId: options?.overwriteSnapshotId,
@@ -9611,6 +10685,7 @@ export default function App() {
     setCardSets(result.sets);
     setSelectedSetId(result.setId);
     setActiveSetCardId(result.snapshot.id);
+    setActiveSetCardSetId(result.setId);
     setPhysicalBackVisible(false);
 
     if (options?.updateCurrentCard !== false) {
@@ -9657,7 +10732,7 @@ export default function App() {
 
   const confirmDuplicateCardSave = (targetSetId: string, onConfirm: () => void) => {
     const targetSet = cardSets.find((set) => set.id === targetSetId) ?? cardSets[0];
-    const activeSnapshotId = targetSetId === selectedSetId ? activeSetCardId : null;
+    const activeSnapshotId = targetSetId === activeSetCardSetId ? activeSetCardId : null;
     const duplicateSnapshot = findDuplicateSetCardSnapshot(targetSet, card, activeSnapshotId);
 
     if (!targetSet || !duplicateSnapshot) {
@@ -9682,7 +10757,12 @@ export default function App() {
   };
 
   const saveCardRecoverySnapshotNow = (reason: CardRecoverySnapshot["reason"]) => {
-    const targetSet = cardSetsRef.current.find((set) => set.id === selectedSetId) ?? cardSetsRef.current[0];
+    const targetSet =
+      (activeSetCardSetId
+        ? cardSetsRef.current.find((set) => set.id === activeSetCardSetId)
+        : null) ??
+      cardSetsRef.current.find((set) => set.id === selectedSetId) ??
+      cardSetsRef.current[0];
 
     if (!targetSet) {
       return;
@@ -9695,7 +10775,8 @@ export default function App() {
       reason,
       setId: targetSet.id,
       setName: targetSet.name,
-      activeSetCardId,
+      activeSetCardId: targetSet.id === activeSetCardSetId ? activeSetCardId : null,
+      activeSetCardSetId: targetSet.id,
       card: cloneCardDraft(withResolvedSetDefaults(card, targetSet)),
     };
 
@@ -9723,6 +10804,7 @@ export default function App() {
 
     setCard(createStarterCard());
     setActiveSetCardId(null);
+    setActiveSetCardSetId(null);
     setCardHasUnsavedEdits(true);
     setActiveSection(null);
     setSheetSection(null);
@@ -9731,6 +10813,7 @@ export default function App() {
     setCardActionMenuOpen(false);
     setShareMenuOpen(false);
     setPhysicalBackMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
   };
 
   const confirmSavedCard = (result: NonNullable<ReturnType<typeof saveCardToSet>>) => {
@@ -9750,11 +10833,13 @@ export default function App() {
     setCardActionMenuOpen(false);
     setShareMenuOpen(false);
     setPhysicalBackMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
   };
 
   const performRandomizeCard = () => {
     setCard((current) => createRandomCard(current));
     setActiveSetCardId(null);
+    setActiveSetCardSetId(null);
     setCardHasUnsavedEdits(false);
     setRandomizeSavePromptOpen(false);
     closeTransientMenus();
@@ -9781,17 +10866,28 @@ export default function App() {
   const saveCurrentCardToSelectedSet = (options?: { notify?: boolean }) => {
     setShareMenuOpen(false);
 
-    const targetSet = cardSets.find((set) => set.id === selectedSetId) ?? cardSets[0];
+    const targetSetId = activeSetCardSetId ?? selectedSetId;
+
+    return saveCurrentCardToSet(targetSetId, options);
+  };
+
+  const saveCurrentCardToSet = (targetSetId: string, options?: { notify?: boolean }) => {
+    setShareMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
+
+    const targetSet = cardSets.find((set) => set.id === targetSetId) ?? cardSets[0];
 
     if (!targetSet) {
       return;
     }
 
     const activeSnapshot =
-      activeSetCardId && targetSet.cards.some((snapshot) => snapshot.id === activeSetCardId)
+      activeSetCardId &&
+      activeSetCardSetId === targetSet.id &&
+      targetSet.cards.some((snapshot) => snapshot.id === activeSetCardId)
         ? targetSet.cards.find((snapshot) => snapshot.id === activeSetCardId) ?? null
         : null;
-    const namedSnapshot = findNamedSetCardSnapshot(targetSet, card, activeSetCardId);
+    const namedSnapshot = findNamedSetCardSnapshot(targetSet, card, activeSnapshot?.id ?? null);
     const overwriteSnapshot = activeSnapshot ?? namedSnapshot;
 
     if (!overwriteSnapshot) {
@@ -9841,6 +10937,7 @@ export default function App() {
     setEditMenuOpen(false);
     setShareMenuOpen(false);
     setPhysicalBackMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
 
     if (!accountUser) {
       Alert.alert("Sign in required", "Sign in before sharing a card to the community feed.");
@@ -9892,7 +10989,7 @@ export default function App() {
       showBusyIndicator?: boolean;
     },
   ) => {
-    const exportCard = cloneCardDraft(communityCard);
+    const exportCard = await materializeCardDraftForExport(communityCard, `community-card-${userId}`);
     const flattenMasksExport = options?.flattenMasksExport ?? Platform.OS === "web";
     const exportTarget: FlatCardExportTarget = {
       kind: "card",
@@ -9920,7 +11017,7 @@ export default function App() {
       await waitForExportPreviewImages(exportPreview);
       await waitForRenderFrame(160);
       const uploadImage = Platform.OS === "web"
-        ? await createWebPngSetCardUploadImage(exportPreview)
+        ? await createWebSetCardUploadImage(exportPreview)
         : await createNativeSetCardUploadImage(await captureCardMagicPng(exportPreview));
 
       assertSetCardImageUploadBodyWithinLimit(uploadImage.uploadBody);
@@ -9945,7 +11042,7 @@ export default function App() {
     snapshotId: string,
     onStatus?: (status: SetCardImageRenderStatusDraft) => void,
   ) => {
-    const exportCard = await materializeRemoteCardDraftMedia(cloneCardDraft(savedCard));
+    const exportCard = await materializeCardDraftForExport(savedCard, `set-card-render-${setId}-${snapshotId}`);
     const exportTarget: FlatCardExportTarget = {
       kind: "card",
       card: exportCard,
@@ -9985,17 +11082,23 @@ export default function App() {
       });
 
       if (Platform.OS === "web") {
-        const uploadImage = await createWebPngSetCardUploadImage(exportPreview, onStatus);
+        const uploadImage = await createWebSetCardUploadImage(exportPreview, onStatus);
         onStatus?.({
           phase: "saving-local",
           label: "Saving local image",
-          detail: "Caching PNG set image before upload",
+          detail: "Caching compressed set image before upload",
         });
-        const localImageUrl = await persistWebMediaUri(
-          uploadImage.localImageUrl,
-          getSavedSetCardThumbnailUploadId(snapshotId),
-          SET_CARD_IMAGE_PNG_UPLOAD_CONTENT_TYPE,
-        );
+        const localImageUrl = uploadImage.localImageBlob
+          ? await persistWebMediaBlob(
+              uploadImage.localImageBlob,
+              getSavedSetCardThumbnailUploadId(snapshotId),
+              uploadImage.uploadContentType,
+            )
+          : await persistWebMediaUri(
+              uploadImage.localImageUrl,
+              getSavedSetCardThumbnailUploadId(snapshotId),
+              uploadImage.uploadContentType,
+            );
 
         return {
           localImageUrl,
@@ -10014,15 +11117,21 @@ export default function App() {
     }
   }, []);
 
-  async function materializeSetCardSnapshotCard(snapshot: SetCardSnapshot) {
+  async function materializeSetCardSnapshotCard(snapshot: SetCardSnapshot, setId?: string) {
     let sourceCard = cloneCardDraft(snapshot.card);
+    let remoteCardLoaded = false;
+    let remoteCardHasUnresolvedMedia = false;
 
     if (snapshot.remoteCardId) {
       try {
-        const remoteCard = await fetchRemoteCardDraftForEditing(snapshot.remoteCardId);
+        const remoteCard = await fetchRemoteCardDraftForEditing(snapshot.remoteCardId, {
+          mediaMode: setId ? "signed-url" : "data-uri",
+        });
 
         if (remoteCard) {
           sourceCard = remoteCard;
+          remoteCardLoaded = true;
+          remoteCardHasUnresolvedMedia = cardHasUnresolvedRemoteMedia(remoteCard);
         }
       } catch (error) {
         console.warn("Unable to fetch editable Supabase set card payload.", {
@@ -10030,9 +11139,41 @@ export default function App() {
           error,
         });
       }
+
+      if (setId && (!remoteCardLoaded || remoteCardHasUnresolvedMedia)) {
+        try {
+          const collaborationCard = await fetchCollaborationSetCardDraftForEditing(setId, snapshot.remoteCardId, {
+            mediaMode: "signed-url",
+          });
+
+          if (collaborationCard) {
+            sourceCard = collaborationCard;
+            remoteCardLoaded = true;
+            remoteCardHasUnresolvedMedia = cardHasUnresolvedRemoteMedia(collaborationCard);
+          }
+        } catch (error) {
+          console.warn("Unable to fetch editable collaboration set card payload.", {
+            setId,
+            cardId: snapshot.remoteCardId,
+            error,
+          });
+        }
+      }
     }
 
-    return materializeRemoteCardDraftMedia(cloneCardDraft(sourceCard));
+    if (setId) {
+      if (!shouldUseEditorReadySetCardDraft(sourceCard)) {
+        console.warn("Opening set card with unresolved private media references.", {
+          setId,
+          snapshotId: snapshot.id,
+          remoteCardId: snapshot.remoteCardId,
+        });
+      }
+
+      return sourceCard;
+    }
+
+    return materializeCardDraftForExport(sourceCard, `set-card-snapshot-${snapshot.id}`);
   }
 
   function getSavedSetCardImageRenderKey(ownerKey: string, setId: string, snapshot: SetCardSnapshot) {
@@ -11213,6 +12354,7 @@ export default function App() {
 
     setCard((current) => createNextBlankCard(current));
     setActiveSetCardId(null);
+    setActiveSetCardSetId(null);
     setCardHasUnsavedEdits(false);
     setActiveSection(null);
     setSheetSection(null);
@@ -11220,6 +12362,7 @@ export default function App() {
     setEditMenuOpen(false);
     setCardActionMenuOpen(false);
     setShareMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
   };
 
   const addFlipSideToCard = (options?: { initialFace?: "front" | "back" }) => {
@@ -11256,6 +12399,7 @@ export default function App() {
     setCardActionMenuOpen(false);
     setShareMenuOpen(false);
     setPhysicalBackMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
   };
 
   const removeFlipSideFromCard = () => {
@@ -11293,6 +12437,7 @@ export default function App() {
     setCardActionMenuOpen(false);
     setShareMenuOpen(false);
     setPhysicalBackMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
   };
 
   const confirmRemoveFlipSideFromCard = () => {
@@ -11474,6 +12619,7 @@ export default function App() {
     setSelectedSetId(setId);
     setCard(cloneCardDraft(nextSnapshot.card));
     setActiveSetCardId(nextSnapshot.id);
+    setActiveSetCardSetId(setId);
     setCardHasUnsavedEdits(false);
     setActiveSection(null);
     setSheetSection(null);
@@ -11481,7 +12627,7 @@ export default function App() {
     setPhysicalBackVisible(false);
     setInspectorTab("edit");
 
-    void materializeSetCardSnapshotCard(nextSnapshot)
+    void materializeSetCardSnapshotCard(nextSnapshot, setId)
       .then((materializedCard) => {
         const currentSet = cardSetsRef.current.find((set) => set.id === setId);
         const currentSnapshot = currentSet?.cards.find((setCard) =>
@@ -11494,7 +12640,7 @@ export default function App() {
         }
 
         if (
-          selectedSetIdRef.current !== setId ||
+          activeSetCardSetIdRef.current !== setId ||
           activeSetCardIdRef.current !== nextSnapshot.id ||
           cardHasUnsavedEditsRef.current
         ) {
@@ -11526,8 +12672,9 @@ export default function App() {
       return;
     }
 
-    if (activeSetCardId === cardId) {
+    if (activeSetCardId === cardId && activeSetCardSetId === setId) {
       setActiveSetCardId(null);
+      setActiveSetCardSetId(null);
     }
 
     const nextTombstones = addDeletedCardTombstone(deletionTombstonesRef.current, setId, cardId);
@@ -11626,7 +12773,10 @@ export default function App() {
     setDeletionTombstones(nextTombstones);
     persistAccountSetsNow(resolvedSets);
     setCardSets(resolvedSets);
-    setActiveSetCardId(null);
+    if (activeSetCardSetId === setId) {
+      setActiveSetCardId(null);
+      setActiveSetCardSetId(null);
+    }
     setDeleteUndo({
       id: `delete-set-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       kind: "set",
@@ -11737,6 +12887,22 @@ export default function App() {
     setShareMenuOpen(false);
     setShowReturnToTop(false);
     setInspectorTab(nextTab);
+  };
+
+  const refreshToLatestRelease = (deployment: CardMagicReleaseDeployment) => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      window.location.replace(deployment.branchUrl);
+      return;
+    }
+
+    void Linking.openURL(deployment.branchUrl);
+  };
+
+  const dismissRefreshPrompt = () => {
+    if (refreshPromptDeployment) {
+      dismissedRefreshPromptVersionRef.current = refreshPromptDeployment.version;
+    }
+    setRefreshPromptDeployment(null);
   };
 
   return (
@@ -11874,12 +13040,12 @@ export default function App() {
                     />
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={selectedSet ? `Save card to ${selectedSet.name}` : "Save card to set"}
+                      accessibilityLabel="Choose set to save card"
                       onPress={() => {
                         setEditMenuOpen(false);
                         setCardActionMenuOpen(false);
                         setShareMenuOpen(false);
-                        saveCurrentCardToSelectedSet({ notify: true });
+                        setSaveDestinationPromptOpen(true);
                       }}
                       style={{
                         width: 44,
@@ -12311,10 +13477,18 @@ export default function App() {
             visible={randomizeSavePromptOpen}
             cardName={faceCard.name || "Untitled Card"}
             sets={cardSets}
-            selectedSetId={selectedSetId}
+            selectedSetId={activeSetCardSetId ?? selectedSetId}
             onSaveToSet={saveCardToSetThenRandomize}
             onDiscard={performRandomizeCard}
             onClose={() => setRandomizeSavePromptOpen(false)}
+          />
+          <SaveDestinationSetModal
+            visible={saveDestinationPromptOpen}
+            cardName={faceCard.name || "Untitled Card"}
+            sets={cardSets}
+            selectedSetId={activeSetCardSetId ?? selectedSetId}
+            onSaveToSet={(setId) => saveCurrentCardToSet(setId, { notify: true })}
+            onClose={() => setSaveDestinationPromptOpen(false)}
           />
           <SaveCardChoiceModal
             prompt={saveCardChoicePrompt}
@@ -12435,6 +13609,7 @@ export default function App() {
           subjectMaskBusy={subjectMaskBusy}
           subjectMaskStatus={subjectMaskStatus}
           subjectMaskError={subjectMaskError}
+          subjectMaskTrace={subjectMaskTrace}
           onClose={() => setArtSourceOpen(false)}
         />
         <ArtGeneratorModal
@@ -12495,6 +13670,7 @@ export default function App() {
           subjectMaskBusy={subjectMaskBusy}
           subjectMaskStatus={subjectMaskStatus}
           subjectMaskError={subjectMaskError}
+          subjectMaskTrace={subjectMaskTrace}
           subjectMaskComponents={subjectMaskComponents}
           subjectMaskToggleBusy={subjectMaskToggleBusy}
           onToggleSubjectMaskComponent={toggleSubjectMaskComponent}
@@ -12571,6 +13747,13 @@ export default function App() {
           betaReleaseDeployment={betaReleaseDeployment}
           notes={CARDMAGIC_VISIBLE_PATCH_NOTES}
           onClose={() => setPatchNotesOpen(false)}
+        />
+        <VersionRefreshPromptModal
+          deployment={refreshPromptDeployment}
+          currentVersion={CARDMAGIC_APP_VERSION}
+          releaseBranch={CARDMAGIC_RELEASE_BRANCH}
+          onRefresh={refreshToLatestRelease}
+          onDismiss={dismissRefreshPrompt}
         />
       </GestureHandlerRootView>
     </HybridSymbolStyleProvider>
@@ -12790,6 +13973,129 @@ function CollaborationInviteModal({
   );
 }
 
+function VersionRefreshPromptModal({
+  deployment,
+  currentVersion,
+  releaseBranch,
+  onRefresh,
+  onDismiss,
+}: {
+  deployment: CardMagicReleaseDeployment | null;
+  currentVersion: string;
+  releaseBranch: CardMagicReleaseBranch;
+  onRefresh: (deployment: CardMagicReleaseDeployment) => void;
+  onDismiss: () => void;
+}) {
+  if (!deployment) {
+    return null;
+  }
+
+  const branchLabel = releaseBranch === "main" ? "production" : "beta";
+
+  return (
+    <Modal transparent animationType="fade" visible onRequestClose={onDismiss}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(9, 12, 18, 0.52)",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 18,
+        }}
+      >
+        <View
+          style={{
+            width: "100%",
+            maxWidth: 430,
+            borderRadius: 14,
+            borderCurve: "continuous",
+            borderWidth: 1,
+            borderColor: "#d8dbe2",
+            backgroundColor: "#ffffff",
+            padding: 16,
+            gap: 12,
+            shadowColor: "#000000",
+            shadowOpacity: 0.18,
+            shadowRadius: 18,
+            shadowOffset: { width: 0, height: 10 },
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: "#e9fbfd",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <RefreshCw size={18} color="#0b7180" strokeWidth={2.6} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text selectable={false} numberOfLines={2} style={{ color: "#151820", fontSize: 18, lineHeight: 22, fontWeight: "900" }}>
+                Update available
+              </Text>
+              <Text selectable={false} numberOfLines={2} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
+                New {branchLabel} build
+              </Text>
+            </View>
+          </View>
+
+          <Text selectable style={{ color: "#3d4653", fontSize: 13, lineHeight: 19, fontWeight: "800" }}>
+            You are running v{currentVersion}. The current {branchLabel} build is v{deployment.version}. Refresh to load the latest CardMagic bundle.
+          </Text>
+
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss update prompt"
+              onPress={onDismiss}
+              style={{
+                minHeight: 40,
+                borderRadius: 8,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#d8dbe2",
+                backgroundColor: "#ffffff",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 14,
+              }}
+            >
+              <Text selectable={false} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                Later
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Refresh to latest CardMagic version"
+              onPress={() => onRefresh(deployment)}
+              style={{
+                minHeight: 40,
+                borderRadius: 8,
+                borderCurve: "continuous",
+                backgroundColor: "#151820",
+                alignItems: "center",
+                justifyContent: "center",
+                flexDirection: "row",
+                gap: 8,
+                paddingHorizontal: 14,
+              }}
+            >
+              <RefreshCw size={16} color="#ffffff" strokeWidth={2.6} />
+              <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                Refresh now
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function ArtSourceModal({
   visible,
   hasArt,
@@ -12802,6 +14108,7 @@ function ArtSourceModal({
   subjectMaskBusy,
   subjectMaskStatus,
   subjectMaskError,
+  subjectMaskTrace,
   onClose,
 }: {
   visible: boolean;
@@ -12809,12 +14116,19 @@ function ArtSourceModal({
   artLibraryEntries: ArtLibraryEntry[];
   onPickPhoto: () => void;
   onGenerateArt: () => void;
-  onGenerateSubjectMask: (targetPrompt?: string) => void;
+  onGenerateSubjectMask: (
+    targetPrompt?: string,
+    boxPrompt?: SubjectMaskBoxPrompt,
+    pointPrompts?: SubjectMaskPointPrompt[],
+    brushSamples?: SubjectMaskSelectionSample[],
+    brushRadius?: number,
+  ) => void;
   onEditImage: () => void;
   onSelectLibraryArt: (entry: ArtLibraryEntry) => void;
   subjectMaskBusy: boolean;
   subjectMaskStatus: string | null;
   subjectMaskError: string | null;
+  subjectMaskTrace: SubjectMaskTraceEntry[];
   onClose: () => void;
 }) {
   const [activeLibrarySource, setActiveLibrarySource] = useState<ArtLibrarySource>("generated");
@@ -12920,6 +14234,37 @@ function ArtSourceModal({
                   <Text selectable style={{ color: "#334155", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
                     {subjectMaskStatus}
                   </Text>
+                </View>
+              ) : null}
+              {subjectMaskTrace.length > 0 ? (
+                <View
+                  style={{
+                    borderRadius: 12,
+                    backgroundColor: "#f8fafc",
+                    borderWidth: 1,
+                    borderColor: "#cbd5e1",
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    gap: 4,
+                  }}
+                >
+                  <Text selectable={false} style={{ color: "#334155", fontSize: 11, fontWeight: "900" }}>
+                    Mask debug trace
+                  </Text>
+                  {subjectMaskTrace.map((entry) => (
+                    <Text
+                      key={entry.id}
+                      selectable
+                      style={{
+                        color: entry.tone === "error" ? "#b42318" : entry.tone === "success" ? "#047857" : "#475569",
+                        fontSize: 11,
+                        lineHeight: 15,
+                        fontWeight: "800",
+                      }}
+                    >
+                      {entry.message}
+                    </Text>
+                  ))}
                 </View>
               ) : null}
             </>
@@ -13802,6 +15147,7 @@ function ArtAdjustmentModal({
   subjectMaskBusy,
   subjectMaskStatus,
   subjectMaskError,
+  subjectMaskTrace,
   subjectMaskComponents,
   subjectMaskToggleBusy,
   onToggleSubjectMaskComponent,
@@ -13814,10 +15160,17 @@ function ArtAdjustmentModal({
   card: CardDraft;
   initialMode: ArtAdjustmentInitialMode;
   onChange: (patch: Partial<CardDraft>) => void;
-  onGenerateSubjectMask: (targetPrompt?: string) => void;
+  onGenerateSubjectMask: (
+    targetPrompt?: string,
+    boxPrompt?: SubjectMaskBoxPrompt,
+    pointPrompts?: SubjectMaskPointPrompt[],
+    brushSamples?: SubjectMaskSelectionSample[],
+    brushRadius?: number,
+  ) => void;
   subjectMaskBusy: boolean;
   subjectMaskStatus: string | null;
   subjectMaskError: string | null;
+  subjectMaskTrace: SubjectMaskTraceEntry[];
   subjectMaskComponents: SubjectMaskComponent[];
   subjectMaskToggleBusy: boolean;
   onToggleSubjectMaskComponent: (concept: string) => void;
@@ -13836,7 +15189,11 @@ function ArtAdjustmentModal({
   const [maskPreviewUri, setMaskPreviewUri] = useState<string | null>(faceCard.artSubjectMaskUri ?? null);
   const subjectMaskEnabled = faceCard.artSubjectMaskDisabled !== true;
   const maskOverlayVisible = adjustMode === "mask" && subjectMaskEnabled && Boolean(maskPreviewUri);
+  const hasSubjectMaskPreview = Boolean(maskPreviewUri);
   const [maskTargetPrompt, setMaskTargetPrompt] = useState("");
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
+  const [roughSelectionActive, setRoughSelectionActive] = useState(false);
+  const [roughSelectionBrushSamples, setRoughSelectionBrushSamples] = useState<RoughSelectionBrushSample[]>([]);
   const artRect = getVisibleArtRectForCard(card);
   const artAspectRatio = artRect.width / artRect.height;
   const maxCropWidth = Math.min(width - 48, 460);
@@ -13872,12 +15229,18 @@ function ArtAdjustmentModal({
   const artRectRef = useRef(artRect);
   const cardRef = useRef(card);
   const artUriRef = useRef(artUri);
+  const maskPreviewUriRef = useRef(maskPreviewUri);
   const coordinateScaleRef = useRef(coordinateScale);
   const imageAspectRatioRef = useRef(imageAspectRatio);
+  const maskEditLayoutRef = useRef<MaskEditDisplayLayout | null>(null);
+  const roughSelectionBrushSamplesRef = useRef(roughSelectionBrushSamples);
+  const roughSelectionStrokeIdRef = useRef(0);
+  const roughSelectionBrushRadius = Math.max(34, cropWidth * 0.12);
 
   useEffect(() => {
     let cancelled = false;
     setImageAspectRatio(null);
+    setImageSize(null);
 
     if (!artUri) {
       return;
@@ -13888,11 +15251,13 @@ function ArtAdjustmentModal({
       (imageWidth, imageHeight) => {
         if (!cancelled && imageWidth > 0 && imageHeight > 0) {
           setImageAspectRatio(imageWidth / imageHeight);
+          setImageSize({ width: imageWidth, height: imageHeight });
         }
       },
       () => {
         if (!cancelled) {
           setImageAspectRatio(null);
+          setImageSize(null);
         }
       },
     );
@@ -13907,9 +15272,23 @@ function ArtAdjustmentModal({
     artRectRef.current = artRect;
     cardRef.current = card;
     artUriRef.current = artUri;
+    maskPreviewUriRef.current = maskPreviewUri;
     coordinateScaleRef.current = coordinateScale;
     imageAspectRatioRef.current = imageAspectRatio;
-  }, [artTransform, artRect, card, artUri, coordinateScale, imageAspectRatio]);
+    roughSelectionBrushSamplesRef.current = roughSelectionBrushSamples;
+    maskEditLayoutRef.current = {
+      cropWidth,
+      cropHeight,
+      imageLeft: fittedImageLayout.left,
+      imageTop: fittedImageLayout.top,
+      imageWidth: fittedImageLayout.width,
+      imageHeight: fittedImageLayout.height,
+      offsetX: artTransform.offsetX,
+      offsetY: artTransform.offsetY,
+      scale: artTransform.scale,
+      coordinateScale,
+    };
+  }, [artTransform, artRect, card, artUri, maskPreviewUri, coordinateScale, imageAspectRatio, roughSelectionBrushSamples, cropWidth, cropHeight, fittedImageLayout]);
 
   useEffect(() => {
     if (!visible) {
@@ -13920,6 +15299,9 @@ function ArtAdjustmentModal({
     pinchStartTransform.current = artTransform;
     setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
     setAdjustMode(initialMode);
+    setRoughSelectionActive(false);
+    roughSelectionBrushSamplesRef.current = [];
+    setRoughSelectionBrushSamples([]);
   }, [artUri, initialMode, visible]);
 
   useEffect(() => {
@@ -13947,6 +15329,211 @@ function ArtAdjustmentModal({
       scale: artTransform.scale + scaleDelta,
     });
   };
+
+  const addRoughSelectionBrushSample = useCallback((event: GestureResponderEvent) => {
+    const strokeId = roughSelectionStrokeIdRef.current;
+    const nextSample = {
+      x: clamp(event.nativeEvent.locationX, 0, cropWidth),
+      y: clamp(event.nativeEvent.locationY, 0, cropHeight),
+      strokeId,
+    };
+
+    setRoughSelectionBrushSamples((current) => {
+      const lastSample = current[current.length - 1];
+
+      if (lastSample && lastSample.strokeId === strokeId && Math.hypot(lastSample.x - nextSample.x, lastSample.y - nextSample.y) < 4) {
+        return current;
+      }
+
+      const next = [...current, nextSample].slice(-480);
+      roughSelectionBrushSamplesRef.current = next;
+      return next;
+    });
+  }, [cropHeight, cropWidth]);
+
+  const beginRoughSelectionStroke = useCallback((event: GestureResponderEvent) => {
+    roughSelectionStrokeIdRef.current += 1;
+    addRoughSelectionBrushSample(event);
+  }, [addRoughSelectionBrushSample]);
+
+  const undoLastRoughSelectionStroke = useCallback(() => {
+    if (subjectMaskBusy) {
+      return;
+    }
+
+    setRoughSelectionBrushSamples((current) => {
+      const lastSample = current[current.length - 1];
+
+      if (!lastSample) {
+        return current;
+      }
+
+      const next = current.filter((sample) => sample.strokeId !== lastSample.strokeId);
+      roughSelectionBrushSamplesRef.current = next;
+      return next;
+    });
+  }, [subjectMaskBusy]);
+
+  const getRoughSelectionSourcePoints = useCallback(() => {
+    const layout = maskEditLayoutRef.current;
+
+    if (!layout || !imageSize || roughSelectionBrushSamplesRef.current.length === 0) {
+      return [];
+    }
+
+    return roughSelectionBrushSamplesRef.current.flatMap((sample) => {
+      const sourcePoint = getMaskEditSourcePoint(sample, layout, imageSize.width, imageSize.height);
+      return sourcePoint ? [sourcePoint] : [];
+    });
+  }, [imageSize]);
+
+  const getRoughSelectionSourceBrushRadius = useCallback(() => {
+    const layout = maskEditLayoutRef.current;
+
+    if (!layout || !imageSize) {
+      return undefined;
+    }
+
+    const sourceBrushDiameterX = (roughSelectionBrushRadius / Math.max(1, layout.scale) / Math.max(1, layout.imageWidth)) * imageSize.width;
+    const sourceBrushDiameterY = (roughSelectionBrushRadius / Math.max(1, layout.scale) / Math.max(1, layout.imageHeight)) * imageSize.height;
+
+    return Math.max(sourceBrushDiameterX, sourceBrushDiameterY) / 2;
+  }, [imageSize, roughSelectionBrushRadius]);
+
+  const getRoughSelectionSourceBrushSamples = useCallback((): SubjectMaskSelectionSample[] => {
+    const layout = maskEditLayoutRef.current;
+
+    if (!layout || !imageSize || roughSelectionBrushSamplesRef.current.length === 0) {
+      return [];
+    }
+
+    return roughSelectionBrushSamplesRef.current.flatMap((sample) => {
+      const sourcePoint = getMaskEditSourcePoint(sample, layout, imageSize.width, imageSize.height);
+      return sourcePoint ? [{ ...sourcePoint, strokeId: sample.strokeId }] : [];
+    });
+  }, [imageSize]);
+
+  const getRoughSelectionBoxPrompt = useCallback((): SubjectMaskBoxPrompt | undefined => {
+    if (!imageSize) {
+      return undefined;
+    }
+
+    const sourcePoints = getRoughSelectionSourcePoints();
+
+    if (sourcePoints.length === 0) {
+      return undefined;
+    }
+
+    const layout = maskEditLayoutRef.current;
+
+    if (!layout) {
+      return undefined;
+    }
+
+    const sourceBrushRadiusX = (roughSelectionBrushRadius / Math.max(1, layout.scale) / Math.max(1, layout.imageWidth)) * imageSize.width;
+    const sourceBrushRadiusY = (roughSelectionBrushRadius / Math.max(1, layout.scale) / Math.max(1, layout.imageHeight)) * imageSize.height;
+    const xValues = sourcePoints.map((point) => point.x);
+    const yValues = sourcePoints.map((point) => point.y);
+
+    return {
+      x_min: Math.max(0, Math.round(Math.min(...xValues) - sourceBrushRadiusX / 2)),
+      y_min: Math.max(0, Math.round(Math.min(...yValues) - sourceBrushRadiusY / 2)),
+      x_max: Math.min(imageSize.width, Math.round(Math.max(...xValues) + sourceBrushRadiusX / 2)),
+      y_max: Math.min(imageSize.height, Math.round(Math.max(...yValues) + sourceBrushRadiusY / 2)),
+    };
+  }, [getRoughSelectionSourcePoints, imageSize, roughSelectionBrushRadius]);
+
+  const getRoughSelectionPointPrompts = useCallback((boxPrompt?: SubjectMaskBoxPrompt): SubjectMaskPointPrompt[] => {
+    const layout = maskEditLayoutRef.current;
+
+    if (!layout || !imageSize || roughSelectionBrushSamplesRef.current.length === 0) {
+      return [];
+    }
+
+    const strokes = groupRoughSelectionBrushSamples(roughSelectionBrushSamplesRef.current);
+
+    const prompts: SubjectMaskPointPrompt[] = [];
+    const maxForegroundPrompts = 16;
+    const maxPointsPerStroke = Math.max(1, Math.floor(maxForegroundPrompts / Math.max(1, strokes.length)));
+
+    strokes.forEach(([, samples]) => {
+      const sampleCount = Math.min(maxPointsPerStroke, samples.length);
+
+      for (let index = 0; index < sampleCount; index += 1) {
+        const sampleIndex = sampleCount === 1
+          ? Math.floor(samples.length / 2)
+          : Math.round((index / (sampleCount - 1)) * (samples.length - 1));
+        const sourcePoint = getMaskEditSourcePoint(samples[sampleIndex], layout, imageSize.width, imageSize.height);
+
+        if (sourcePoint) {
+          prompts.push({
+            x: sourcePoint.x,
+            y: sourcePoint.y,
+            label: 1,
+            object_id: 1,
+          });
+        }
+      }
+    });
+
+    if (boxPrompt) {
+      const boxWidth = boxPrompt.x_max - boxPrompt.x_min;
+      const boxHeight = boxPrompt.y_max - boxPrompt.y_min;
+      const insetX = Math.max(8, boxWidth * 0.18);
+      const insetY = Math.max(8, boxHeight * 0.18);
+      const backgroundCandidates = [
+        { x: boxPrompt.x_min - insetX, y: boxPrompt.y_min + boxHeight / 2 },
+        { x: boxPrompt.x_max + insetX, y: boxPrompt.y_min + boxHeight / 2 },
+        { x: boxPrompt.x_min + boxWidth / 2, y: boxPrompt.y_min - insetY },
+        { x: boxPrompt.x_min + boxWidth / 2, y: boxPrompt.y_max + insetY },
+      ];
+
+      for (const point of backgroundCandidates) {
+        if (point.x >= boxPrompt.x_min && point.x <= boxPrompt.x_max && point.y >= boxPrompt.y_min && point.y <= boxPrompt.y_max) {
+          continue;
+        }
+
+        const x = Math.round(clamp(point.x, 0, imageSize.width));
+        const y = Math.round(clamp(point.y, 0, imageSize.height));
+
+        if (x < boxPrompt.x_min || x > boxPrompt.x_max || y < boxPrompt.y_min || y > boxPrompt.y_max) {
+          prompts.push({ x, y, label: 0, object_id: 1 });
+        }
+      }
+    }
+
+    return prompts.slice(0, 24);
+  }, [imageSize]);
+
+  const submitRoughSelection = useCallback(() => {
+    const boxPrompt = getRoughSelectionBoxPrompt();
+    const pointPrompts = getRoughSelectionPointPrompts(boxPrompt);
+    const brushSamples = getRoughSelectionSourceBrushSamples();
+    const brushRadius = getRoughSelectionSourceBrushRadius();
+
+    if (subjectMaskBusy || pointPrompts.length === 0) {
+      return;
+    }
+
+    setRoughSelectionActive(false);
+    roughSelectionBrushSamplesRef.current = [];
+    setRoughSelectionBrushSamples([]);
+    onGenerateSubjectMask(maskTargetPrompt, boxPrompt, pointPrompts, brushSamples, brushRadius);
+  }, [
+    getRoughSelectionBoxPrompt,
+    getRoughSelectionPointPrompts,
+    getRoughSelectionSourceBrushRadius,
+    getRoughSelectionSourceBrushSamples,
+    maskTargetPrompt,
+    onGenerateSubjectMask,
+    subjectMaskBusy,
+  ]);
+
+  const roughSelectionBrushStrokes = useMemo(
+    () => groupRoughSelectionBrushSamples(roughSelectionBrushSamples),
+    [roughSelectionBrushSamples],
+  );
+  const brushSelectionCapturesTouch = adjustMode === "mask" && roughSelectionActive && !subjectMaskBusy;
 
   const artGesture = useMemo(() => {
     const panGesture = Gesture.Pan()
@@ -14018,6 +15605,7 @@ function ArtAdjustmentModal({
           />
           <ScrollView
             style={{ flex: 1, width: "100%" }}
+            scrollEnabled={!brushSelectionCapturesTouch}
             contentContainerStyle={{
               minHeight: height,
               alignItems: "center",
@@ -14101,7 +15689,23 @@ function ArtAdjustmentModal({
                   </View>
                 ) : null}
               </View>
-              <GestureDetector gesture={artGesture}>
+              {adjustMode === "crop" ? (
+                <GestureDetector gesture={artGesture}>
+                  <View
+                    collapsable={false}
+                    style={{
+                      width: cropWidth,
+                      height: cropHeight,
+                      borderRadius: ART_ADJUSTMENT_CROP_RADIUS,
+                      borderCurve: "continuous",
+                      borderWidth: 2,
+                      borderColor: "#ffffff",
+                      backgroundColor: "transparent",
+                      boxShadow: "0 18px 42px rgba(0, 0, 0, 0.36)",
+                    }}
+                  />
+                </GestureDetector>
+              ) : (
                 <View
                   collapsable={false}
                   style={{
@@ -14110,12 +15714,104 @@ function ArtAdjustmentModal({
                     borderRadius: ART_ADJUSTMENT_CROP_RADIUS,
                     borderCurve: "continuous",
                     borderWidth: 2,
-                    borderColor: maskOverlayVisible ? "#55dff5" : "#ffffff",
+                    borderColor: maskOverlayVisible ? "#55dff5" : "rgba(255, 255, 255, 0.72)",
                     backgroundColor: maskOverlayVisible ? "rgba(85, 223, 245, 0.08)" : "transparent",
                     boxShadow: "0 18px 42px rgba(0, 0, 0, 0.36)",
                   }}
                 />
-              </GestureDetector>
+              )}
+              {adjustMode === "mask" ? (
+                <View
+                  onStartShouldSetResponder={() => brushSelectionCapturesTouch}
+                  onMoveShouldSetResponder={() => brushSelectionCapturesTouch}
+                  onResponderTerminationRequest={() => false}
+                  onResponderGrant={(event) => {
+                    beginRoughSelectionStroke(event);
+                  }}
+                  onResponderMove={(event) => {
+                    addRoughSelectionBrushSample(event);
+                  }}
+                  pointerEvents={brushSelectionCapturesTouch ? "auto" : "none"}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    width: cropWidth,
+                    height: cropHeight,
+                    zIndex: 6,
+                    borderRadius: ART_ADJUSTMENT_CROP_RADIUS,
+                    borderCurve: "continuous",
+                    overflow: "hidden",
+                  }}
+                >
+                  {roughSelectionActive ? (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        borderRadius: ART_ADJUSTMENT_CROP_RADIUS,
+                        borderCurve: "continuous",
+                        borderWidth: 1.5,
+                        borderStyle: "dashed",
+                        borderColor: "rgba(85, 223, 245, 0.84)",
+                        backgroundColor: "rgba(85, 223, 245, 0.035)",
+                      }}
+                    />
+                  ) : null}
+                  {roughSelectionBrushSamples.length > 0 ? (
+                    <Svg
+                      pointerEvents="none"
+                      width={cropWidth}
+                      height={cropHeight}
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                      }}
+                    >
+                      {roughSelectionBrushStrokes.map(([strokeId, samples]) => {
+                        const path = createRoughSelectionBrushPath(samples);
+
+                        if (!path) {
+                          return null;
+                        }
+
+                        return (
+                          <Path
+                            key={`selection-brush-${strokeId}`}
+                            d={path}
+                            fill="none"
+                            stroke="rgba(85, 223, 245, 0.44)"
+                            strokeWidth={roughSelectionBrushRadius}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        );
+                      })}
+                      {roughSelectionBrushStrokes.map(([strokeId, samples]) => {
+                        const path = createRoughSelectionBrushPath(samples);
+
+                        if (!path) {
+                          return null;
+                        }
+
+                        return (
+                          <Path
+                            key={`selection-brush-edge-${strokeId}`}
+                            d={path}
+                            fill="none"
+                            stroke="rgba(183, 246, 255, 0.86)"
+                            strokeWidth={2}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        );
+                      })}
+                    </Svg>
+                  ) : null}
+                </View>
+              ) : null}
             </View>
             <View
               style={{
@@ -14160,69 +15856,101 @@ function ArtAdjustmentModal({
               })}
             </View>
             {adjustMode === "mask" ? (
-              <Pressable
-                accessibilityRole="switch"
-                accessibilityLabel="Enable subject mask compositing"
-                accessibilityState={{ checked: subjectMaskEnabled, disabled: !faceCard.artSubjectMaskUri }}
-                disabled={!faceCard.artSubjectMaskUri}
-                onPress={() => {
-                  onChange(toDfcFacePatch(cardRef.current, {
-                    artSubjectMaskDisabled: subjectMaskEnabled,
-                  }));
-                }}
-                style={({ pressed }) => ({
+              <View
+                style={{
                   width: cropWidth,
                   minHeight: 48,
                   borderRadius: 14,
                   borderCurve: "continuous",
                   borderWidth: 1,
-                  borderColor: subjectMaskEnabled ? "rgba(85, 223, 245, 0.62)" : "rgba(255, 255, 255, 0.24)",
-                  backgroundColor: subjectMaskEnabled
-                    ? "rgba(85, 223, 245, 0.16)"
-                    : pressed
-                      ? "rgba(255, 255, 255, 0.14)"
-                      : "rgba(255, 255, 255, 0.08)",
-                  opacity: faceCard.artSubjectMaskUri ? 1 : 0.52,
+                  borderColor: "rgba(255, 255, 255, 0.24)",
+                  backgroundColor: "rgba(255, 255, 255, 0.1)",
                   paddingHorizontal: 12,
                   paddingVertical: 10,
                   flexDirection: "row",
+                  flexWrap: "wrap",
                   alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                })}
+                  gap: 8,
+                }}
               >
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
-                    SUBJECT MASK COMPOSITING
-                  </Text>
-                  <Text selectable={false} style={{ color: "rgba(230, 247, 251, 0.66)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
-                    {faceCard.artSubjectMaskUri
-                      ? "Toggle the foreground cutout without deleting the saved alpha matte."
-                      : "Generate a subject mask before enabling compositing."}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    width: 46,
-                    height: 26,
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={subjectMaskBusy ? "Generating mask" : "Generate mask"}
+                  accessibilityState={{ busy: subjectMaskBusy }}
+                  disabled={subjectMaskBusy}
+                  onPress={() => {
+                    if (roughSelectionBrushSamplesRef.current.length > 0) {
+                      submitRoughSelection();
+                    } else {
+                      onGenerateSubjectMask(maskTargetPrompt);
+                    }
+                  }}
+                  style={({ pressed }) => ({
+                    flex: 1,
+                    minWidth: 132,
+                    minHeight: 36,
                     borderRadius: 999,
                     borderCurve: "continuous",
-                    backgroundColor: subjectMaskEnabled && faceCard.artSubjectMaskUri ? "#31d0e0" : "rgba(255, 255, 255, 0.22)",
-                    padding: 3,
-                    alignItems: subjectMaskEnabled && faceCard.artSubjectMaskUri ? "flex-end" : "flex-start",
+                    borderWidth: 1,
+                    borderColor: subjectMaskBusy ? "rgba(85, 223, 245, 0.78)" : "rgba(85, 223, 245, 0.84)",
+                    backgroundColor: subjectMaskBusy
+                      ? "rgba(85, 223, 245, 0.2)"
+                      : pressed
+                        ? "rgba(85, 223, 245, 0.3)"
+                        : "rgba(85, 223, 245, 0.22)",
+                    alignItems: "center",
                     justifyContent: "center",
-                  }}
+                    flexDirection: "row",
+                    gap: 7,
+                    paddingHorizontal: 12,
+                    opacity: subjectMaskBusy ? 0.76 : 1,
+                  })}
                 >
-                  <View
+                  {subjectMaskBusy ? (
+                    <ActivityIndicator color="#b7f6ff" />
+                  ) : (
+                    <Layers size={16} color="#b7f6ff" strokeWidth={2.7} />
+                  )}
+                  <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
+                    {subjectMaskBusy ? "Generating" : "Generate"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={hasSubjectMaskPreview ? "Done editing mask" : "Cancel mask editing"}
+                  disabled={subjectMaskBusy}
+                  onPress={onClose}
+                  style={({ pressed }) => ({
+                    minHeight: 36,
+                    borderRadius: 999,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: hasSubjectMaskPreview ? "rgba(255, 255, 255, 0.92)" : "rgba(255, 255, 255, 0.24)",
+                    backgroundColor: hasSubjectMaskPreview
+                      ? pressed
+                        ? "rgba(255, 255, 255, 0.82)"
+                        : "#ffffff"
+                      : pressed
+                        ? "rgba(255, 255, 255, 0.16)"
+                        : "rgba(255, 255, 255, 0.06)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    paddingHorizontal: 12,
+                    opacity: subjectMaskBusy ? 0.48 : 1,
+                  })}
+                >
+                  <Text
+                    selectable={false}
                     style={{
-                      width: 20,
-                      height: 20,
-                      borderRadius: 10,
-                      backgroundColor: "#ffffff",
+                      color: hasSubjectMaskPreview ? "#151820" : "rgba(255, 255, 255, 0.76)",
+                      fontSize: 12,
+                      fontWeight: "900",
                     }}
-                  />
-                </View>
-              </Pressable>
+                  >
+                    {hasSubjectMaskPreview ? "Done" : "Cancel"}
+                  </Text>
+                </Pressable>
+              </View>
             ) : null}
             {adjustMode === "mask" ? (
               <View
@@ -14263,9 +15991,84 @@ function ArtAdjustmentModal({
                     paddingVertical: 8,
                   }}
                 />
-                <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.62)", fontSize: 11, lineHeight: 15, fontWeight: "700" }}>
-                  Leave blank for the normal foreground matte. Add a phrase to use fal.ai SAM semantic segmentation.
-                </Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: roughSelectionActive, disabled: subjectMaskBusy }}
+                    accessibilityLabel={roughSelectionActive ? "Stop painting subject selection" : "Start painting subject selection"}
+                    disabled={subjectMaskBusy}
+                    onPress={() => setRoughSelectionActive((current) => !current)}
+                    style={({ pressed }) => ({
+                      minHeight: 36,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: roughSelectionActive ? "rgba(85, 223, 245, 0.84)" : "rgba(255, 255, 255, 0.28)",
+                      backgroundColor: roughSelectionActive
+                        ? "rgba(85, 223, 245, 0.22)"
+                        : pressed
+                          ? "rgba(255, 255, 255, 0.16)"
+                          : "rgba(255, 255, 255, 0.08)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                    })}
+                  >
+                    <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
+                      {roughSelectionActive ? "Painting" : "Paint selection"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Undo last painted subject stroke"
+                    disabled={subjectMaskBusy || roughSelectionBrushSamples.length === 0}
+                    onPress={undoLastRoughSelectionStroke}
+                    style={({ pressed }) => ({
+                      minHeight: 36,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: "rgba(255, 255, 255, 0.24)",
+                      backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexDirection: "row",
+                      gap: 6,
+                      paddingHorizontal: 12,
+                      opacity: subjectMaskBusy || roughSelectionBrushSamples.length === 0 ? 0.46 : 1,
+                    })}
+                  >
+                    <Undo2 size={14} color="rgba(255, 255, 255, 0.76)" strokeWidth={2.7} />
+                    <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.76)", fontSize: 12, fontWeight: "900" }}>
+                      Undo
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear painted subject selection"
+                    disabled={subjectMaskBusy || roughSelectionBrushSamples.length === 0}
+                    onPress={() => {
+                      roughSelectionBrushSamplesRef.current = [];
+                      setRoughSelectionBrushSamples([]);
+                    }}
+                    style={({ pressed }) => ({
+                      minHeight: 36,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: "rgba(255, 255, 255, 0.24)",
+                      backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      opacity: subjectMaskBusy || roughSelectionBrushSamples.length === 0 ? 0.46 : 1,
+                    })}
+                  >
+                    <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.76)", fontSize: 12, fontWeight: "900" }}>
+                      Clear
+                    </Text>
+                  </Pressable>
+                </View>
               </View>
             ) : null}
             <View
@@ -14324,48 +16127,6 @@ function ArtAdjustmentModal({
                 </Pressable>
               </View>
               ) : null}
-              {adjustMode === "mask" ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={subjectMaskBusy ? "Generating target mask" : "Generate target mask"}
-                  accessibilityState={{ busy: subjectMaskBusy }}
-                  disabled={subjectMaskBusy}
-                  onPress={() => onGenerateSubjectMask(maskTargetPrompt)}
-                  style={({ pressed }) => ({
-                    minHeight: 46,
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: subjectMaskBusy ? "rgba(85, 223, 245, 0.78)" : "rgba(255, 255, 255, 0.38)",
-                    backgroundColor: subjectMaskBusy
-                      ? "rgba(85, 223, 245, 0.2)"
-                      : pressed
-                        ? "rgba(255, 255, 255, 0.2)"
-                        : "rgba(255, 255, 255, 0.12)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    paddingHorizontal: 14,
-                    flexDirection: "row",
-                    gap: 7,
-                    opacity: subjectMaskBusy ? 0.78 : 1,
-                  })}
-                >
-                  {subjectMaskBusy ? (
-                    <ActivityIndicator color="#b7f6ff" />
-                  ) : (
-                    <Layers size={17} color="#ffffff" strokeWidth={2.5} />
-                  )}
-                  <Text
-                    selectable={false}
-                    style={{
-                      color: subjectMaskBusy ? "#b7f6ff" : "#ffffff",
-                      fontSize: 14,
-                      fontWeight: "800",
-                    }}
-                  >
-                    {subjectMaskBusy ? "Masking" : "Generate target mask"}
-                  </Text>
-                </Pressable>
-              ) : null}
               {(subjectMaskStatus || subjectMaskError) && adjustMode === "mask" ? (
                 <View
                   style={{
@@ -14392,6 +16153,40 @@ function ArtAdjustmentModal({
                   >
                     {subjectMaskError ?? subjectMaskStatus}
                   </Text>
+                </View>
+              ) : null}
+              {subjectMaskTrace.length > 0 && adjustMode === "mask" ? (
+                <View
+                  style={{
+                    width: "100%",
+                    maxWidth: cropWidth,
+                    borderRadius: 12,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: "rgba(148, 163, 184, 0.38)",
+                    backgroundColor: "rgba(15, 23, 42, 0.74)",
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    gap: 4,
+                  }}
+                >
+                  <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
+                    MASK DEBUG TRACE
+                  </Text>
+                  {subjectMaskTrace.map((entry) => (
+                    <Text
+                      key={entry.id}
+                      selectable
+                      style={{
+                        color: entry.tone === "error" ? "#ffd4ce" : entry.tone === "success" ? "#9bedf7" : "rgba(226, 232, 240, 0.82)",
+                        fontSize: 11,
+                        lineHeight: 15,
+                        fontWeight: "800",
+                      }}
+                    >
+                      {entry.message}
+                    </Text>
+                  ))}
                 </View>
               ) : null}
               {subjectMaskComponents.length > 0 && adjustMode === "mask" ? (
@@ -14568,23 +16363,25 @@ function ArtAdjustmentModal({
                   </Pressable>
                 </>
               ) : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Done editing image"
-                onPress={onClose}
-                style={{
-                  minHeight: 46,
-                  borderRadius: 999,
-                  backgroundColor: "#ffffff",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingHorizontal: 22,
-                }}
-              >
-                <Text selectable={false} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
-                  Done
-                </Text>
-              </Pressable>
+              {adjustMode !== "mask" ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Done editing image"
+                  onPress={onClose}
+                  style={{
+                    minHeight: 46,
+                    borderRadius: 999,
+                    backgroundColor: "#ffffff",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    paddingHorizontal: 22,
+                  }}
+                >
+                  <Text selectable={false} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+                    Done
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
             </View>
           </ScrollView>
@@ -15298,6 +17095,141 @@ function RandomizeSavePromptModal({
   );
 }
 
+function SaveDestinationSetModal({
+  visible,
+  cardName,
+  sets,
+  selectedSetId,
+  onSaveToSet,
+  onClose,
+}: {
+  visible: boolean;
+  cardName: string;
+  sets: CardSet[];
+  selectedSetId: string;
+  onSaveToSet: (setId: string) => void;
+  onClose: () => void;
+}) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(12, 15, 22, 0.46)",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+        }}
+      >
+        <View
+          style={{
+            width: "100%",
+            maxWidth: 420,
+            maxHeight: "86%",
+            borderRadius: 18,
+            borderCurve: "continuous",
+            backgroundColor: "#ffffff",
+            padding: 18,
+            gap: 14,
+            shadowColor: "#000000",
+            shadowOpacity: 0.2,
+            shadowRadius: 24,
+            shadowOffset: { width: 0, height: 14 },
+            elevation: 16,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
+            <View style={{ flex: 1, gap: 4 }}>
+              <Text selectable style={{ color: "#11151c", fontSize: 21, fontWeight: "900" }}>
+                Save to set
+              </Text>
+              <Text selectable style={{ color: "#5f6570", fontSize: 14, lineHeight: 19, fontWeight: "700" }}>
+                Pick the destination set for {cardName || "this card"}.
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel save"
+              onPress={onClose}
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                backgroundColor: "#eef0f4",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <X size={19} color="#222733" strokeWidth={2.5} />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={{ maxHeight: 320 }}
+            contentContainerStyle={{ gap: 8 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            {sets.map((set) => {
+              const selected = set.id === selectedSetId;
+
+              return (
+                <Pressable
+                  key={set.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Save ${cardName || "card"} to ${set.name}`}
+                  onPress={() => onSaveToSet(set.id)}
+                  style={{
+                    minHeight: 54,
+                    borderRadius: 10,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: selected ? "#151820" : "#d8dbe2",
+                    backgroundColor: selected ? "#151820" : "#f8f9fb",
+                    paddingHorizontal: 12,
+                    paddingVertical: 9,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                  }}
+                >
+                  <Save size={18} color={selected ? "#ffffff" : "#20242d"} strokeWidth={2.4} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text
+                      selectable={false}
+                      numberOfLines={1}
+                      style={{
+                        color: selected ? "#ffffff" : "#151820",
+                        fontSize: 15,
+                        fontWeight: "900",
+                      }}
+                    >
+                      {set.name}
+                    </Text>
+                    <Text
+                      selectable={false}
+                      style={{
+                        color: selected ? "rgba(255,255,255,0.74)" : "#68707d",
+                        fontSize: 12,
+                        fontWeight: "800",
+                      }}
+                    >
+                      {set.cards.length} {set.cards.length === 1 ? "card" : "cards"}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function SavedCardPromptModal({
   prompt,
   onKeepEditing,
@@ -15724,6 +17656,7 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
   const nativeIdRef = useRef(`cardmagic-set-thumbnail-${Math.random().toString(36).slice(2, 10)}`);
   const height = width / CARD_BACK_PREVIEW_ASPECT_RATIO;
   const requestRenderRef = useRef(onRequestRender);
+  const resolvedImageRevokeRef = useRef<(() => void) | null>(null);
   const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
   const [imageResolutionError, setImageResolutionError] = useState<string | null>(null);
   const effectiveRenderedImageUrl = renderedImageUrl ?? renderStatus?.imageUrl;
@@ -15739,16 +17672,19 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
     },
     [imageResolutionError, resolvedImageUrl, width],
   );
-  const statusLabel = imageResolutionError
-    ? "Image load failed"
-    : effectiveRenderedImageUrl && !resolvedImageUrl
-      ? "Resolving image"
-      : renderStatus?.label ?? "Render pending";
-  const statusDetail = imageResolutionError ?? renderStatus?.detail;
-  const showImageStatusOverlay = Boolean(
+  const hasRenderFailure = isSetCardImageRenderFailure(renderStatus);
+  const isResolvingImage = Boolean(effectiveRenderedImageUrl && !resolvedImageUrl && !imageResolutionError);
+  const isRenderProgressing = isResolvingImage || isSetCardImageRenderProgress(renderStatus);
+  const statusLabel = imageResolutionError ? "Image load failed" : hasRenderFailure ? renderStatus?.label : undefined;
+  const statusDetail = imageResolutionError ?? (hasRenderFailure ? renderStatus?.detail : undefined);
+  const showProgressOverlay = Boolean(
     imageSource &&
-    renderStatus &&
-    renderStatus.phase !== "ready-remote",
+    !imageResolutionError &&
+    isRenderProgressing,
+  );
+  const showFailureOverlay = Boolean(
+    imageSource &&
+    (imageResolutionError || hasRenderFailure),
   );
 
   useEffect(() => {
@@ -15757,8 +17693,13 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
 
   useEffect(() => {
     let cancelled = false;
+    const revokePreviousResolvedImage = () => {
+      resolvedImageRevokeRef.current?.();
+      resolvedImageRevokeRef.current = null;
+    };
 
     if (!effectiveRenderedImageUrl) {
+      revokePreviousResolvedImage();
       setResolvedImageUrl(null);
       setImageResolutionError(null);
       return () => {
@@ -15767,6 +17708,7 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
     }
 
     if (!isWebMediaReference(effectiveRenderedImageUrl)) {
+      revokePreviousResolvedImage();
       setImageResolutionError(null);
       setResolvedImageUrl(effectiveRenderedImageUrl);
       return () => {
@@ -15776,12 +17718,17 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
 
     setImageResolutionError(null);
     setResolvedImageUrl(null);
-    void resolveWebMediaUri(effectiveRenderedImageUrl, "image/png")
-      .then((uri) => {
+    void resolveWebMediaObjectUrl(effectiveRenderedImageUrl, "image/png")
+      .then((resolvedImage) => {
         if (!cancelled) {
+          revokePreviousResolvedImage();
+          resolvedImageRevokeRef.current = resolvedImage.revoke ?? null;
           setImageResolutionError(null);
-          setResolvedImageUrl(uri);
+          setResolvedImageUrl(resolvedImage.uri);
+          return;
         }
+
+        resolvedImage.revoke?.();
       })
       .catch((error) => {
         if (!cancelled) {
@@ -15792,6 +17739,7 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
 
     return () => {
       cancelled = true;
+      revokePreviousResolvedImage();
     };
   }, [effectiveRenderedImageUrl, renderReadinessKey]);
 
@@ -15845,7 +17793,24 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
               setImageResolutionError("Image component could not load the thumbnail URL.");
             }}
           />
-          {showImageStatusOverlay ? (
+          {showProgressOverlay ? (
+            <View
+              style={{
+                position: "absolute",
+                left: 6,
+                bottom: 6,
+                width: Math.max(24, width * 0.16),
+                height: Math.max(24, width * 0.16),
+                borderRadius: 999,
+                backgroundColor: "rgba(16, 24, 38, 0.72)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <ActivityIndicator color="#ffffff" size="small" />
+            </View>
+          ) : null}
+          {showFailureOverlay ? (
             <View
               style={{
                 position: "absolute",
@@ -15859,11 +17824,11 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
               }}
             >
               <Text selectable={false} numberOfLines={1} style={{ color: "#ffffff", fontSize: Math.max(7, width * 0.064), fontWeight: "900", textTransform: "uppercase" }}>
-                {renderStatus?.label}
+                {statusLabel}
               </Text>
-              {renderStatus?.detail ? (
+              {statusDetail ? (
                 <Text selectable={false} numberOfLines={1} style={{ color: "rgba(255, 255, 255, 0.78)", fontSize: Math.max(6, width * 0.052), fontWeight: "800" }}>
-                  {renderStatus.detail}
+                  {statusDetail}
                 </Text>
               ) : null}
             </View>
@@ -15876,6 +17841,7 @@ const SetCardImageThumbnail = memo(function SetCardImageThumbnail({
           cornerRadius={cornerRadius}
           statusLabel={statusLabel}
           statusDetail={statusDetail}
+          loading={!statusLabel}
         />
       )}
     </View>
@@ -15888,12 +17854,14 @@ function CardThumbnailFallback({
   cornerRadius,
   statusLabel = "Preview repaired",
   statusDetail,
+  loading = false,
 }: {
   card: CardDraft;
   width: number;
   cornerRadius: number;
   statusLabel?: string;
   statusDetail?: string;
+  loading?: boolean;
 }) {
   const height = width / CARD_BACK_PREVIEW_ASPECT_RATIO;
   const face = getEditableCardFace(card);
@@ -15921,16 +17889,22 @@ function CardThumbnailFallback({
           {face.typeLine || "Card"}
         </Text>
       </View>
-      <View style={{ gap: 2 }}>
-        <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: Math.max(6, width * 0.065), fontWeight: "900", textTransform: "uppercase" }}>
-          {statusLabel}
-        </Text>
-        {statusDetail ? (
-          <Text selectable={false} numberOfLines={2} style={{ color: "#747d8f", fontSize: Math.max(6, width * 0.052), lineHeight: Math.max(8, width * 0.068), fontWeight: "800" }}>
-            {statusDetail}
+      {loading ? (
+        <View style={{ alignItems: "flex-start", justifyContent: "center", minHeight: Math.max(28, width * 0.16) }}>
+          <ActivityIndicator color="#68707d" size="small" />
+        </View>
+      ) : (
+        <View style={{ gap: 2 }}>
+          <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: Math.max(6, width * 0.065), fontWeight: "900", textTransform: "uppercase" }}>
+            {statusLabel}
           </Text>
-        ) : null}
-      </View>
+          {statusDetail ? (
+            <Text selectable={false} numberOfLines={2} style={{ color: "#747d8f", fontSize: Math.max(6, width * 0.052), lineHeight: Math.max(8, width * 0.068), fontWeight: "800" }}>
+              {statusDetail}
+            </Text>
+          ) : null}
+        </View>
+      )}
     </View>
   );
 }
@@ -17122,6 +19096,13 @@ function SetCardsGrid({
   const rowStride = blankCardHeight + gridGap;
   const gridItemCount = 1 + visibleSetCards.length + (hiddenCardCount > 0 ? 1 : 0);
   const gridRowCount = Math.max(1, Math.ceil(gridItemCount / safeGridColumns));
+  const compactVirtualization = Platform.OS === "web" && safeGridColumns <= 2;
+  const initialMountRows = compactVirtualization
+    ? SET_GRID_COMPACT_INITIAL_MOUNT_ROWS
+    : SET_GRID_INITIAL_MOUNT_ROWS;
+  const virtualOverscanPx = compactVirtualization
+    ? SET_GRID_COMPACT_VIRTUAL_OVERSCAN_PX
+    : SET_GRID_VIRTUAL_OVERSCAN_PX;
 
   const measureGridViewport = useCallback(() => {
     gridRef.current?.measureInWindow((_x, y) => {
@@ -17148,20 +19129,20 @@ function SetCardsGrid({
     if (!Number.isFinite(rowStride) || rowStride <= 0) {
       return {
         startRow: 0,
-        endRow: Math.min(gridRowCount, SET_GRID_INITIAL_MOUNT_ROWS),
+        endRow: Math.min(gridRowCount, initialMountRows),
       };
     }
 
     if (gridViewportY === null) {
       return {
         startRow: 0,
-        endRow: Math.min(gridRowCount, SET_GRID_INITIAL_MOUNT_ROWS),
+        endRow: Math.min(gridRowCount, initialMountRows),
       };
     }
 
     const visibleViewportHeight = Math.max(1, scrollWindow?.viewportHeight ?? viewportHeight);
-    const virtualTop = -gridViewportY - SET_GRID_VIRTUAL_OVERSCAN_PX;
-    const virtualBottom = visibleViewportHeight - gridViewportY + SET_GRID_VIRTUAL_OVERSCAN_PX;
+    const virtualTop = -gridViewportY - virtualOverscanPx;
+    const virtualBottom = visibleViewportHeight - gridViewportY + virtualOverscanPx;
     const startRow = Math.max(0, Math.min(gridRowCount - 1, Math.floor(virtualTop / rowStride)));
     const endRow = Math.max(
       startRow + 1,
@@ -17169,7 +19150,7 @@ function SetCardsGrid({
     );
 
     return { startRow, endRow };
-  }, [gridRowCount, gridViewportY, rowStride, scrollWindow?.viewportHeight, viewportHeight]);
+  }, [gridRowCount, gridViewportY, initialMountRows, rowStride, scrollWindow?.viewportHeight, viewportHeight, virtualOverscanPx]);
 
   const shouldMountGridItem = useCallback((itemIndex: number) => {
     const rowIndex = Math.floor(itemIndex / safeGridColumns);
@@ -17254,7 +19235,7 @@ function SetCardsGrid({
                 renderedImageUrl={snapshot.renderedImageUrl}
                 renderStatus={getSetCardImageRenderStatus(set.id, snapshot)}
                 renderReadinessKey={setCardImageRemoteHydrated ? "remote-ready" : "remote-pending"}
-                onRequestRender={() => onEnsureSetCardImage(set.id, snapshot)}
+                onRequestRender={compactVirtualization ? undefined : () => onEnsureSetCardImage(set.id, snapshot)}
               />
             </View>
             {isEditingSet ? (
@@ -17456,6 +19437,13 @@ function SetsPanel({
   const gridGap = 8;
   const gridContentWidth = Math.max(220, measuredGridContentWidth || viewportWidth - 52);
   const forceTwoColumnMobile = gridContentWidth < 430;
+  const compactSetGrid = Platform.OS === "web" && forceTwoColumnMobile;
+  const initialVisibleCardLimit = compactSetGrid
+    ? SET_GRID_COMPACT_INITIAL_CARD_LIMIT
+    : SET_GRID_INITIAL_CARD_LIMIT;
+  const visibleCardPageSize = compactSetGrid
+    ? SET_GRID_COMPACT_PAGE_SIZE
+    : SET_GRID_PAGE_SIZE;
   const minimumGridItemWidth = forceTwoColumnMobile ? 118 : 168;
   const gridColumns = forceTwoColumnMobile
     ? 2
@@ -17712,9 +19700,9 @@ function SetsPanel({
   const showMoreCards = useCallback((setId: string) => {
     setVisibleCardLimits((current) => ({
       ...current,
-      [setId]: (current[setId] ?? SET_GRID_INITIAL_CARD_LIMIT) + SET_GRID_PAGE_SIZE,
+      [setId]: (current[setId] ?? initialVisibleCardLimit) + visibleCardPageSize,
     }));
-  }, []);
+  }, [initialVisibleCardLimit, visibleCardPageSize]);
 
   const confirmDelete = useCallback((
     title: string,
@@ -17821,7 +19809,7 @@ function SetsPanel({
           const setCardBackOption = getCardBackOption(setCardBackId, customCardBacks);
           const setBarGradient = getSetBarGradient(set);
           const isEditingSet = editingSetId === set.id;
-          const visibleCardLimit = visibleCardLimits[set.id] ?? SET_GRID_INITIAL_CARD_LIMIT;
+          const visibleCardLimit = visibleCardLimits[set.id] ?? initialVisibleCardLimit;
           const visibleSetCards = set.cards.slice(0, visibleCardLimit);
           const hiddenCardCount = Math.max(0, set.cards.length - visibleSetCards.length);
           const canDeleteSetContent = canDeleteCardSetContent(set, accountUserId);

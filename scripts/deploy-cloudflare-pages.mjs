@@ -29,21 +29,24 @@ try {
     "--project-name",
     projectName,
     "--commit-dirty=true",
+    "--skip-caching",
   ];
 
   if (releaseBranch === "beta") {
     deployArgs.push("--branch", "beta");
   }
 
-  run("npx", deployArgs);
+  // Run Wrangler outside the repository so its deployment metadata collection cannot
+  // block on a slow or wedged local `git status` scan.
+  run("npx", deployArgs, {}, tmpdir());
   run("npm", ["run", "release:metadata", "--", releaseBranch]);
 } finally {
   await rm(outputDirectory, { recursive: true, force: true });
 }
 
-function run(command, args, extraEnv = {}) {
+function run(command, args, extraEnv = {}, cwd = process.cwd()) {
   const result = spawnSync(command, args, {
-    cwd: process.cwd(),
+    cwd,
     env: {
       ...process.env,
       ...extraEnv,

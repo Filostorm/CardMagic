@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseUrl } from "@/lib/supabase";
 import type { CardDraft, SubjectMaskComponent } from "@/types/card";
 
 const CARDMAGIC_REMOTE_MEDIA_BUCKET = "cardmagic-user-media";
@@ -33,6 +33,10 @@ type RemoteMediaReference = {
   bucket: string;
   path: string;
   mimeType: string;
+};
+
+type RemoteMediaMaterializeOptions = {
+  mode?: "data-uri" | "signed-url";
 };
 
 const remoteMediaDataUriCache = new Map<string, { dataUri: string; byteLength: number }>();
@@ -87,15 +91,12 @@ export async function persistRemoteImageUri(
   return pendingUpload;
 }
 
-export async function materializeRemoteImageUri(uri: string | undefined): Promise<string | undefined> {
+export async function materializeRemoteImageUri(
+  uri: string | undefined,
+  options: RemoteMediaMaterializeOptions = {},
+): Promise<string | undefined> {
   if (!uri || !isCardMagicRemoteMediaReference(uri)) {
     return uri;
-  }
-
-  const cached = getRemoteMediaDataUriCacheEntry(uri);
-
-  if (cached) {
-    return cached;
   }
 
   const reference = parseRemoteMediaReference(uri);
@@ -106,6 +107,22 @@ export async function materializeRemoteImageUri(uri: string | undefined): Promis
 
   if (!supabase) {
     throw new Error("Supabase is not configured.");
+  }
+
+  if (options.mode === "signed-url") {
+    const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+      .from(reference.bucket)
+      .createSignedUrl(reference.path, 60 * 60);
+
+    if (!signedUrlError && signedUrlData?.signedUrl) {
+      return signedUrlData.signedUrl;
+    }
+  }
+
+  const cached = getRemoteMediaDataUriCacheEntry(uri);
+
+  if (cached) {
+    return cached;
   }
 
   const { data, error } = await supabase.storage.from(reference.bucket).download(reference.path);
@@ -131,10 +148,13 @@ export async function persistRemoteCardDraftMedia(
   );
 }
 
-export async function materializeRemoteCardDraftMedia(card: CardDraft): Promise<CardDraft> {
+export async function materializeRemoteCardDraftMedia(
+  card: CardDraft,
+  options: RemoteMediaMaterializeOptions = {},
+): Promise<CardDraft> {
   return transformCardDraftMedia(card, async (uri) => {
     try {
-      return await materializeRemoteImageUri(uri);
+      return await materializeRemoteImageUri(uri, options);
     } catch (error) {
       console.warn("Unable to materialize Supabase media reference.", error);
       return uri;
@@ -235,8 +255,26 @@ function shouldPersistRemoteMediaUri(uri: string) {
     uri.startsWith("data:") ||
     uri.startsWith("blob:") ||
     uri.startsWith("file:") ||
-    uri.startsWith("content:")
+    uri.startsWith("content:") ||
+    isSupabaseSignedStorageUrl(uri)
   );
+}
+
+function isSupabaseSignedStorageUrl(uri: string) {
+  if (!supabase) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(uri);
+    const supabaseHost = new URL(supabaseUrl).host;
+
+    return parsed.host === supabaseHost &&
+      parsed.pathname.includes("/storage/v1/object/sign/") &&
+      parsed.searchParams.has("token");
+  } catch {
+    return false;
+  }
 }
 
 function getRemoteMediaPath(scope: RemoteMediaScope, fileName: string) {

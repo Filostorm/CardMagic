@@ -117,6 +117,20 @@ export async function resolveWebMediaUri(uri: string, fallbackMimeType: string) 
   return readBlobAsDataUri(blob);
 }
 
+export async function resolveWebMediaObjectUrl(uri: string, fallbackMimeType: string) {
+  if (Platform.OS !== "web" || typeof window === "undefined" || !isWebMediaReference(uri)) {
+    return { uri, revoke: undefined as (() => void) | undefined };
+  }
+
+  const blob = await getWebImageBlob(uri, fallbackMimeType);
+  const objectUrl = window.URL.createObjectURL(blob);
+
+  return {
+    uri: objectUrl,
+    revoke: () => window.URL.revokeObjectURL(objectUrl),
+  };
+}
+
 export async function getWebStorageItem(key: string): Promise<string | null> {
   if (Platform.OS !== "web" || typeof window === "undefined") {
     return null;

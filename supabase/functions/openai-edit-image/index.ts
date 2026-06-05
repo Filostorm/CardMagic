@@ -9,7 +9,7 @@ import {
 
 type ImageEditSize = "1024x1024" | "1536x1024" | "1024x1536";
 
-const OPENAI_IMAGE_MODELS = ["gpt-image-1.5", "gpt-image-1"] as const;
+const OPENAI_IMAGE_MODELS = ["gpt-image-2", "gpt-image-1.5", "gpt-image-1"] as const;
 const MAX_JSON_BODY_BYTES = 12 * 1024 * 1024;
 const MAX_IMAGE_DATA_URL_CHARS = 10 * 1024 * 1024;
 const MAX_PROMPT_LENGTH = 4000;

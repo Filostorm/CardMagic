@@ -12,7 +12,7 @@ type ImageGenerationOptions = {
   quality?: "medium" | "high";
 };
 
-const OPENAI_IMAGE_MODELS = ["gpt-image-1.5", "gpt-image-1"] as const;
+const OPENAI_IMAGE_MODELS = ["gpt-image-2", "gpt-image-1.5", "gpt-image-1"] as const;
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_PROMPT_LENGTH = 4000;
 const IMAGE_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);

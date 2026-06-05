@@ -28,6 +28,20 @@ type FalImageResult = {
   message?: unknown;
 };
 
+type SubjectMaskBoxPrompt = {
+  x_min: number;
+  y_min: number;
+  x_max: number;
+  y_max: number;
+};
+
+type SubjectMaskPointPrompt = {
+  x: number;
+  y: number;
+  label: 0 | 1;
+  object_id?: number;
+};
+
 type ReplicatePrediction = {
   id?: string;
   status?: "starting" | "processing" | "succeeded" | "failed" | "canceled";
@@ -88,7 +102,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const FAL_SAM_FETCH_TIMEOUT_MS = 18000;
+const FAL_SAM_FETCH_TIMEOUT_MS = 90000;
 const MAX_JSON_BODY_BYTES = 12 * 1024 * 1024;
 const MAX_IMAGE_DATA_URL_CHARS = 10 * 1024 * 1024;
 const MAX_TARGET_PROMPT_LENGTH = 160;
@@ -109,9 +123,11 @@ serve(async (request) => {
       return json({ error: "Sign in before generating subject masks." }, 401);
     }
 
-    const { imageDataUrl, targetPrompt, clientRequestId } = await readJsonBody<{
+    const { imageDataUrl, targetPrompt, boxPrompt, pointPrompts, clientRequestId } = await readJsonBody<{
       imageDataUrl?: string;
       targetPrompt?: string;
+      boxPrompt?: Partial<SubjectMaskBoxPrompt>;
+      pointPrompts?: Array<Partial<SubjectMaskPointPrompt>>;
       clientRequestId?: string;
     }>(request, MAX_JSON_BODY_BYTES);
 
@@ -125,9 +141,15 @@ serve(async (request) => {
 
     const normalizedTargetPrompt =
       typeof targetPrompt === "string" ? targetPrompt.trim().slice(0, MAX_TARGET_PROMPT_LENGTH) : "";
+    const normalizedBoxPrompt = normalizeBoxPrompt(boxPrompt);
+    const normalizedPointPrompts = normalizePointPrompts(pointPrompts);
     console.log("[subject-matte] request received", {
       hasImage: imageDataUrl.startsWith("data:image/"),
-      targetPrompt: normalizedTargetPrompt || "(foreground)",
+      targetPrompt:
+        normalizedTargetPrompt ||
+        (normalizedPointPrompts.length > 0 ? "(rough point selection)" : normalizedBoxPrompt ? "(painted selection)" : "(foreground)"),
+      hasBoxPrompt: Boolean(normalizedBoxPrompt),
+      pointPromptCount: normalizedPointPrompts.length,
     });
 
     const supabaseUrl = requireEnv("SUPABASE_URL").replace(/\/$/, "");
@@ -142,6 +164,8 @@ serve(async (request) => {
       referenceId: createAiSpendReferenceId("generate-subject-matte", clientRequestId),
       metadata: {
         prompted: Boolean(normalizedTargetPrompt),
+        boxPrompted: Boolean(normalizedBoxPrompt),
+        pointPrompted: normalizedPointPrompts.length > 0,
       },
     });
 
@@ -149,14 +173,20 @@ serve(async (request) => {
       const falKey = Deno.env.get("FAL_KEY");
 
       if (falKey) {
-        if (normalizedTargetPrompt) {
-          const result = await segmentImageWithFalSam(imageDataUrl, normalizedTargetPrompt, falKey);
+        if (normalizedTargetPrompt || normalizedBoxPrompt || normalizedPointPrompts.length > 0) {
+          const result = await segmentImageWithFalSam(
+            imageDataUrl,
+            normalizedTargetPrompt,
+            falKey,
+            normalizedBoxPrompt,
+            normalizedPointPrompts,
+          );
           return json({
             url: result.subjectMasks[0]?.url,
             urls: result.subjectMasks.map((mask) => mask.url),
             subjectMasks: result.subjectMasks,
             provider: "fal-sam",
-            targetPrompt: normalizedTargetPrompt,
+            targetPrompt: normalizedTargetPrompt || "Painted selection",
             diagnostics: result.diagnostics,
             progress: spend.progress,
             creditSpend: spend,
@@ -167,7 +197,7 @@ serve(async (request) => {
         return json({ url, provider: "fal", progress: spend.progress, creditSpend: spend });
       }
 
-      if (normalizedTargetPrompt) {
+      if (normalizedTargetPrompt || normalizedBoxPrompt || normalizedPointPrompts.length > 0) {
         throw new RequestValidationError("Configure FAL_KEY for prompted subject segmentation.", 501);
       }
 
@@ -224,6 +254,74 @@ class RequestValidationError extends Error {
   }
 }
 
+function normalizeBoxPrompt(boxPrompt: Partial<SubjectMaskBoxPrompt> | undefined): SubjectMaskBoxPrompt | null {
+  if (!boxPrompt || typeof boxPrompt !== "object") {
+    return null;
+  }
+
+  const xMin = normalizeCoordinate(boxPrompt.x_min);
+  const yMin = normalizeCoordinate(boxPrompt.y_min);
+  const xMax = normalizeCoordinate(boxPrompt.x_max);
+  const yMax = normalizeCoordinate(boxPrompt.y_max);
+
+  if (xMin === null || yMin === null || xMax === null || yMax === null) {
+    throw new RequestValidationError("Painted subject selection coordinates are invalid.", 400);
+  }
+
+  if (xMax - xMin < 4 || yMax - yMin < 4) {
+    throw new RequestValidationError("Paint a larger subject selection before snapping the mask.", 400);
+  }
+
+  return {
+    x_min: xMin,
+    y_min: yMin,
+    x_max: xMax,
+    y_max: yMax,
+  };
+}
+
+function normalizePointPrompts(pointPrompts: Array<Partial<SubjectMaskPointPrompt>> | undefined): SubjectMaskPointPrompt[] {
+  if (!Array.isArray(pointPrompts) || pointPrompts.length === 0) {
+    return [];
+  }
+
+  const normalized = pointPrompts.slice(0, 24).map((pointPrompt) => {
+    const x = normalizeCoordinate(pointPrompt.x);
+    const y = normalizeCoordinate(pointPrompt.y);
+    const label: 0 | 1 = pointPrompt.label === 0 ? 0 : 1;
+    const objectId = pointPrompt.object_id === undefined ? undefined : normalizeCoordinate(pointPrompt.object_id);
+
+    if (x === null || y === null) {
+      throw new RequestValidationError("Rough subject selection points are invalid.", 400);
+    }
+
+    return {
+      x,
+      y,
+      label,
+      ...(objectId && objectId > 0 ? { object_id: objectId } : {}),
+    };
+  });
+
+  const foregroundCount = normalized.filter((pointPrompt) => pointPrompt.label === 1).length;
+
+  if (foregroundCount === 0) {
+    throw new RequestValidationError("Rough-select at least one foreground point before snapping the mask.", 400);
+  }
+
+  return normalized;
+}
+
+function normalizeCoordinate(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round(numeric));
+}
+
 async function getAuthenticatedUser(authorization: string | null): Promise<SupabaseAuthUser | null> {
   if (!authorization?.startsWith("Bearer ")) {
     return null;
@@ -277,7 +375,13 @@ async function readJsonBody<T>(request: Request, maxBytes: number): Promise<T> {
   }
 }
 
-async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string, key: string) {
+async function segmentImageWithFalSam(
+  imageDataUrl: string,
+  targetPrompt: string,
+  key: string,
+  boxPrompt: SubjectMaskBoxPrompt | null = null,
+  pointPrompts: SubjectMaskPointPrompt[] = [],
+) {
   const startedAt = Date.now();
   // Mirror the background-removal path: a synchronous fal.run call that returns a
   // prompted-subject cutout (apply_mask) — same shape as normal masking.
@@ -286,8 +390,12 @@ async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string
   // prompts like "bow and arrow" are less reliable than separate "bow" and
   // "arrow" calls. Split simple conjunctions and let the client union cutouts.
   const endpointId = "fal-ai/sam-3-1/image";
-  const concepts = getTargetConcepts(targetPrompt);
-  const conceptList = concepts.length > 0 ? concepts : [targetPrompt.trim()];
+  const usesGeometryPrompt = Boolean(boxPrompt) || pointPrompts.length > 0;
+  const geometryPrompt = targetPrompt.trim() || "object";
+  const concepts = usesGeometryPrompt ? [] : getTargetConcepts(targetPrompt);
+  const conceptList = usesGeometryPrompt
+    ? [geometryPrompt]
+    : concepts.length > 0 ? concepts : [targetPrompt.trim()];
   const attempts: FalSamDiagnosticAttempt[] = [];
   const subjectMasks: { concept: string; url: string }[] = [];
 
@@ -296,7 +404,7 @@ async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string
   // concurrent uploads no longer trip the HTTP/2 stream error; fetchWithRetry
   // covers any residual transport blip.
   const settled = await Promise.allSettled(
-    conceptList.map((concept) => callFalSamSyncEndpoint(endpointId, imageDataUrl, concept, key)),
+    conceptList.map((concept) => callFalSamSyncEndpoint(endpointId, imageDataUrl, concept, key, boxPrompt, pointPrompts)),
   );
 
   settled.forEach((outcome, index) => {
@@ -315,6 +423,8 @@ async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string
   if (subjectMasks.length > 0) {
     console.log("[subject-matte] fal SAM segmentation completed", {
       targetPrompt,
+      hasBoxPrompt: Boolean(boxPrompt),
+      pointPromptCount: pointPrompts.length,
       conceptCount: conceptList.length,
       matchedCount: subjectMasks.length,
       durationMs: Date.now() - startedAt,
@@ -324,10 +434,12 @@ async function segmentImageWithFalSam(imageDataUrl: string, targetPrompt: string
 
   console.warn("fal SAM prompted segmentation failed.", {
     targetPrompt,
+    hasBoxPrompt: Boolean(boxPrompt),
+    pointPromptCount: pointPrompts.length,
     durationMs: Date.now() - startedAt,
     attempts,
   });
-  const diagnostics = getFalSamDiagnostics(targetPrompt, attempts);
+  const diagnostics = getFalSamDiagnostics(targetPrompt || "Painted selection", attempts);
   throw new FalSamSegmentationError(
     getFalSamUserMessage(conceptList),
     diagnostics,
@@ -381,13 +493,13 @@ function getFalSamDiagnostics(targetPrompt: string, attempts: FalSamDiagnosticAt
   };
 }
 
-// Retries transient transport failures (e.g. Deno HTTP/2 "unspecific protocol
-// error" while uploading a large body). Only network-level throws are retried —
-// an HTTP error response is returned as-is for the caller to handle.
+// Wraps fal transport with an abort deadline. Painted SAM prompts can run close
+// to a minute, so keep a single long attempt instead of short retries that race
+// the browser-side Edge Function timeout.
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
-  attempts = 2,
+  attempts = 1,
   timeoutMs = FAL_SAM_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
   let lastError: unknown;
@@ -421,12 +533,22 @@ async function callFalSamSyncEndpoint(
   imageDataUrl: string,
   targetPrompt: string,
   key: string,
+  boxPrompt: SubjectMaskBoxPrompt | null = null,
+  pointPrompts: SubjectMaskPointPrompt[] = [],
 ) {
   const startedAt = Date.now();
-  console.log("[subject-matte] calling fal", { endpointId, targetPrompt, timeoutMs: FAL_SAM_FETCH_TIMEOUT_MS });
+  console.log("[subject-matte] calling fal", {
+    endpointId,
+    targetPrompt,
+    hasBoxPrompt: Boolean(boxPrompt),
+    pointPromptCount: pointPrompts.length,
+    timeoutMs: FAL_SAM_FETCH_TIMEOUT_MS,
+  });
   const body = JSON.stringify({
     image_url: imageDataUrl,
-    prompt: targetPrompt,
+    prompt: boxPrompt || pointPrompts.length > 0 ? (targetPrompt || "object") : targetPrompt,
+    ...(boxPrompt ? { box_prompts: [{ ...boxPrompt, object_id: 1 }] } : {}),
+    ...(pointPrompts.length > 0 ? { point_prompts: pointPrompts } : {}),
     apply_mask: true,
     output_format: "png",
     sync_mode: true,
@@ -446,7 +568,7 @@ async function callFalSamSyncEndpoint(
       "Content-Type": "application/json",
     },
     body,
-  }, 2, FAL_SAM_FETCH_TIMEOUT_MS);
+  }, 1, FAL_SAM_FETCH_TIMEOUT_MS);
   const payload = await response.json().catch(() => ({})) as FalImageResult;
   console.log("[subject-matte] fal responded", {
     endpointId,

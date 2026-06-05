@@ -1,6 +1,6 @@
 {
   "name": "cardmagic",
-  "version": "3.35.2",
+  "version": "3.36.29",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --port 8082",
@@ -8,7 +8,7 @@
     "ios": "expo run:ios --port 8082",
     "web": "expo start --web --port 8082",
     "clean:duplicates": "node scripts/clean-duplicate-artifacts.mjs",
-    "export:web": "EXPO_USE_FAST_RESOLVER=0 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear --output-dir \"${CARDMAGIC_CLOUDFLARE_OUTPUT_DIR:-dist}\"",
+    "export:web": "EXPO_USE_FAST_RESOLVER=1 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear --output-dir \"${CARDMAGIC_CLOUDFLARE_OUTPUT_DIR:-dist}\"",
     "export:cloudflare": "npm run clean:duplicates && node scripts/clean-cloudflare-output.mjs && npm run export:web && npm run clean:duplicates && node scripts/prepare-cloudflare-pages.mjs",
     "release:verify": "node scripts/verify-release-notes.mjs",
     "release:metadata": "node scripts/update-release-metadata.mjs",
@@ -46,11 +46,14 @@
     "react-native-svg": "15.12.1",
     "react-native-url-polyfill": "^3.0.0",
     "react-native-view-shot": "4.0.3",
-    "react-native-web": "^0.21.0"
+    "react-native-web": "^0.21.0",
+    "react-native-worklets": "^0.8.3"
   },
   "devDependencies": {
+    "@expo/cli": "^54.0.25",
     "@types/react": "~19.1.0",
     "babel-preset-expo": "~54.0.10",
+    "json5": "^2.2.3",
     "typescript": "~5.9.2"
   },
   "private": true

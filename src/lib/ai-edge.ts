@@ -49,6 +49,20 @@ export type SubjectMatteDiagnostics = {
   attempts?: SubjectMatteDiagnosticAttempt[];
 };
 
+export type SubjectMaskBoxPrompt = {
+  x_min: number;
+  y_min: number;
+  x_max: number;
+  y_max: number;
+};
+
+export type SubjectMaskPointPrompt = {
+  x: number;
+  y: number;
+  label: 0 | 1;
+  object_id?: number;
+};
+
 type SubjectMatteFunctionResponse = AiImageResult & AiCreditProgressResponse & {
   provider?: "fal" | "fal-sam" | "replicate";
   // One cutout URL per matched concept (prompted multi-concept segmentation).
@@ -62,7 +76,7 @@ type SubjectMatteFunctionResponse = AiImageResult & AiCreditProgressResponse & {
 
 const OPENAI_IMAGE_EDGE_TIMEOUT_MS = 90000;
 const OPENAI_RULES_TEXT_EDGE_TIMEOUT_MS = 30000;
-const SUBJECT_MATTE_EDGE_TIMEOUT_MS = 30000;
+const SUBJECT_MATTE_EDGE_TIMEOUT_MS = 120000;
 const EDGE_IMAGE_FETCH_TIMEOUT_MS = 20000;
 const MAX_EDGE_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 const BASE64_CHUNK_SIZE = 0x8000;
@@ -137,9 +151,13 @@ export async function generateAiImageEditViaEdge({
 export async function generateSubjectMatteViaEdge({
   imageUri,
   targetPrompt,
+  boxPrompt,
+  pointPrompts,
 }: {
   imageUri: string;
   targetPrompt?: string;
+  boxPrompt?: SubjectMaskBoxPrompt;
+  pointPrompts?: SubjectMaskPointPrompt[];
 }) {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
@@ -159,14 +177,15 @@ export async function generateSubjectMatteViaEdge({
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ imageDataUrl, targetPrompt }),
+      body: JSON.stringify({ imageDataUrl, targetPrompt, boxPrompt, pointPrompts }),
       signal: controller.signal,
     });
   } catch (error) {
     if (controller.signal.aborted) {
+      const hasGeometryPrompt = Boolean(boxPrompt) || Boolean(pointPrompts?.length);
       throw new SubjectMatteProviderError(
-        targetPrompt
-          ? "Targeted masking is taking too long. Try one simpler visible object, or try again in a moment."
+        targetPrompt || hasGeometryPrompt
+          ? "Targeted masking is taking longer than expected. Try a smaller painted selection, one simpler visible object, or try again in a moment."
           : "Subject masking is taking too long. Try again in a moment.",
       );
     }

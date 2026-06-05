@@ -864,7 +864,7 @@ export async function uploadCommunityCardImage(
   userId: string,
   cardId: string,
   image: Blob | ArrayBuffer | Uint8Array,
-  contentType = "image/png",
+  contentType = "image/jpeg",
 ): Promise<string> {
   return uploadCommunityCardImageToPath(
     getCommunityCardImageStoragePath(userId, cardId, `${Date.now()}`),
@@ -876,7 +876,7 @@ export async function uploadCommunityCardImage(
 export async function uploadCommunityCardImageToPath(
   path: string,
   image: Blob | ArrayBuffer | Uint8Array,
-  contentType = "image/png",
+  contentType = "image/jpeg",
 ): Promise<string> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
@@ -907,7 +907,10 @@ export type RemoteCardRenderedImage = {
   updatedAt?: string;
 };
 
-export async function fetchRemoteCardDraftForEditing(cardId: string): Promise<CardDraft | null> {
+export async function fetchRemoteCardDraftForEditing(
+  cardId: string,
+  options: { mediaMode?: "data-uri" | "signed-url" } = {},
+): Promise<CardDraft | null> {
   if (!supabase) {
     return null;
   }
@@ -928,7 +931,7 @@ export async function fetchRemoteCardDraftForEditing(cardId: string): Promise<Ca
     return null;
   }
 
-  return materializeRemoteCardDraftMedia(data.card);
+  return materializeRemoteCardDraftMedia(data.card, { mode: options.mediaMode ?? "data-uri" });
 }
 
 export async function findRemoteCardRenderedImageById(
@@ -1905,6 +1908,32 @@ export async function fetchCollaborationSetCards(setId: string): Promise<Communi
   }
 
   return mapCommunityCardRows((data ?? []) as CommunityCardRow[]);
+}
+
+export async function fetchCollaborationSetCardDraftForEditing(
+  setId: string,
+  cardId: string,
+  options: { mediaMode?: "data-uri" | "signed-url" } = {},
+): Promise<CardDraft | null> {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase.rpc("collaboration_set_cards", {
+    p_set_id: setId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const row = ((data ?? []) as CommunityCardRow[]).find((entry) => entry.id === cardId);
+
+  if (!row || !isCardDraft(row.card)) {
+    return null;
+  }
+
+  return materializeRemoteCardDraftMedia(row.card, { mode: options.mediaMode ?? "data-uri" });
 }
 
 export async function addCollaborationSetCard(payload: {

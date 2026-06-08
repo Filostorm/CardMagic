@@ -1964,6 +1964,21 @@ export async function addCollaborationSetCard(payload: {
   return String(data);
 }
 
+export async function removeCollaborationSetCard(setId: string, cardId: string): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.rpc("remove_collaboration_set_card", {
+    p_set_id: setId,
+    p_card_id: cardId,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
 export async function fetchCollaborationSetComments(setId: string): Promise<CollaborationSetCommentPayload[]> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");

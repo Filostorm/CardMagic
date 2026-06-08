@@ -20,6 +20,60 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.36.35",
+    date: "2026-06-06",
+    title: "Shared card removal",
+    branches: ["beta", "main"],
+    bullets: [
+      "Card creators can now remove their own cards from shared sets.",
+    ],
+  },
+  {
+    version: "3.36.34",
+    date: "2026-06-06",
+    title: "New card autosave fix",
+    branches: ["beta", "main"],
+    bullets: [
+      "Starting a new card after saving no longer autosaves an unchanged blank card into the set.",
+    ],
+  },
+  {
+    version: "3.36.33",
+    date: "2026-06-05",
+    title: "Editor session restore",
+    branches: ["beta", "main"],
+    bullets: [
+      "Refreshing now restores the active tab and the set-card source context.",
+    ],
+  },
+  {
+    version: "3.36.32",
+    date: "2026-06-05",
+    title: "Shorter patch notes",
+    branches: ["beta", "main"],
+    bullets: [
+      "Patch notes are now shorter and more direct by default.",
+    ],
+  },
+  {
+    version: "3.36.31",
+    date: "2026-06-05",
+    title: "Stable card credit attribution",
+    branches: ["beta", "main"],
+    bullets: [
+      "Card footer credits now persist on the card instead of changing based on the current editor.",
+    ],
+  },
+  {
+    version: "3.36.30",
+    date: "2026-06-05",
+    title: "Shared set art storage access fix",
+    branches: ["beta", "main"],
+    bullets: [
+      "Shared-set collaborators can now load owner-uploaded card art from Supabase Storage.",
+    ],
+  },
+  {
     version: "3.36.29",
     date: "2026-06-05",
     title: "Shared editor production fix",

@@ -143,6 +143,7 @@ import {
   previewCollaborationSetInviteCode,
   publishCommunityCard,
   redeemCollaborationSetInviteCode,
+  removeCollaborationSetCard,
   replaceRemoteCustomSetSymbols,
   replaceRemoteCardSets,
   saveCommunityCardComment,
@@ -218,6 +219,7 @@ import {
   toDfcFacePatch,
 } from "@/lib/dfc";
 import { createRandomCard } from "@/lib/random-card";
+import { DEFAULT_CARD_COPYRIGHT_LINE } from "@/lib/printing";
 import {
   applyProgressEvent,
   canSpendCredits,
@@ -406,14 +408,37 @@ function mergeSetCardRenderedImageUrl(
   };
 }
 
-function getSetCardFooterOwnerName(snapshot: SetCardSnapshot, fallbackOwnerName: string) {
-  const authorName = snapshot.authorName?.trim();
+function getDefaultCardCreditLine(ownerName: string) {
+  const normalizedOwnerName = ownerName.trim();
 
-  if (authorName) {
-    return authorName;
+  if (!normalizedOwnerName || normalizedOwnerName === "CardMagic Creator") {
+    return null;
   }
 
-  return fallbackOwnerName;
+  return `${normalizedOwnerName} & ${new Date().getFullYear()} CardMagic`;
+}
+
+function shouldAutofillCardCredit(copyrightLine: string | undefined) {
+  const normalizedCopyrightLine = copyrightLine?.trim();
+
+  return !normalizedCopyrightLine || normalizedCopyrightLine === DEFAULT_CARD_COPYRIGHT_LINE;
+}
+
+function withDefaultCardCredit(card: CardDraft, ownerName: string) {
+  if (!shouldAutofillCardCredit(card.copyrightLine)) {
+    return card;
+  }
+
+  const defaultCreditLine = getDefaultCardCreditLine(ownerName);
+
+  if (!defaultCreditLine) {
+    return card;
+  }
+
+  return {
+    ...card,
+    copyrightLine: defaultCreditLine,
+  };
 }
 
 function normalizeCollaborationInviteCode(value: string | null | undefined) {
@@ -611,6 +636,14 @@ type StoredCollaborationSetCache = {
   userId: string;
   cachedAt: string;
   sets: CardSet[];
+};
+
+type StoredEditorSessionState = {
+  schemaVersion: 1;
+  selectedSetId: string;
+  activeSetCardId: string | null;
+  activeSetCardSetId: string | null;
+  inspectorTab: VisibleInspectorTab;
 };
 
 type ArtLibrarySource = "generated" | "added";
@@ -826,6 +859,7 @@ const COLLABORATION_INVITE_QUERY_PARAMS = [
 ] as const;
 const DELETION_TOMBSTONE_STORAGE_KEY = "cardmagic.deletionTombstones.v1";
 const ACTIVE_CARD_STORAGE_KEY = "cardmagic.activeCard.v1";
+const EDITOR_SESSION_STORAGE_KEY = "cardmagic.editorSession.v1";
 const CARD_RECOVERY_SNAPSHOT_STORAGE_KEY = "cardmagic.cardRecoverySnapshots.v1";
 const CARD_RECOVERY_SNAPSHOT_LIMIT = 24;
 const ART_LIBRARY_STORAGE_KEY = "cardmagic.artLibrary.v1";
@@ -3638,6 +3672,22 @@ function canDeleteCardSetContent(set: CardSet, accountUserId?: string) {
   return !set.ownerUserId || set.ownerUserId === accountUserId;
 }
 
+function isSetCardSnapshotCreator(snapshot: SetCardSnapshot, accountUserId?: string) {
+  if (!accountUserId) {
+    return false;
+  }
+
+  if (snapshot.remoteImageOwnerUserId === accountUserId) {
+    return true;
+  }
+
+  return Boolean(snapshot.remoteCardId?.startsWith(`${accountUserId}:`));
+}
+
+function canRemoveCardSetSnapshot(set: CardSet, snapshot: SetCardSnapshot, accountUserId?: string) {
+  return canDeleteCardSetContent(set, accountUserId) || isSetCardSnapshotCreator(snapshot, accountUserId);
+}
+
 function getOwnedAccountCardSets(sets: CardSet[], accountUserId: string): CardSet[] {
   return normalizeCardSets(sets).filter((set) => isOwnedAccountCardSet(set, accountUserId));
 }
@@ -4902,6 +4952,57 @@ async function loadStoredActiveCardDraft(): Promise<CardDraft | null> {
   }
 }
 
+function normalizeStoredEditorSessionState(value: unknown): StoredEditorSessionState | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const rawSession = value as Partial<StoredEditorSessionState>;
+  const inspectorTab =
+    rawSession.inspectorTab === "sets" || rawSession.inspectorTab === "community"
+      ? rawSession.inspectorTab
+      : "edit";
+
+  if (typeof rawSession.selectedSetId !== "string") {
+    return null;
+  }
+
+  return {
+    schemaVersion: 1,
+    selectedSetId: rawSession.selectedSetId,
+    activeSetCardId: typeof rawSession.activeSetCardId === "string" ? rawSession.activeSetCardId : null,
+    activeSetCardSetId:
+      typeof rawSession.activeSetCardSetId === "string" ? rawSession.activeSetCardSetId : null,
+    inspectorTab,
+  };
+}
+
+async function loadStoredEditorSessionState(): Promise<StoredEditorSessionState | null> {
+  try {
+    const rawSession =
+      Platform.OS === "web" && typeof window !== "undefined"
+        ? await getWebStorageItem(EDITOR_SESSION_STORAGE_KEY)
+        : await (await getNativeStorageAdapter())?.getItem(EDITOR_SESSION_STORAGE_KEY);
+
+    if (!rawSession) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawSession) as unknown;
+    const candidate =
+      Boolean(parsed) &&
+      typeof parsed === "object" &&
+      (parsed as StoredEditorSessionState).schemaVersion === 1
+        ? parsed
+        : null;
+
+    return normalizeStoredEditorSessionState(candidate);
+  } catch (error) {
+    console.warn("Unable to load CardMagic editor session state.", error);
+    return null;
+  }
+}
+
 function normalizeCardRecoverySnapshot(value: unknown): CardRecoverySnapshot | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -5398,6 +5499,24 @@ async function storeActiveCardDraft(card: CardDraft) {
     await (await getNativeStorageAdapter())?.setItem(ACTIVE_CARD_STORAGE_KEY, serializedCard);
   } catch (error) {
     console.warn("Unable to persist active CardMagic draft.", error);
+  }
+}
+
+async function storeEditorSessionState(session: StoredEditorSessionState) {
+  try {
+    const serializedSession = JSON.stringify({
+      ...session,
+      schemaVersion: 1,
+    } satisfies StoredEditorSessionState);
+
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      await setWebStorageItem(EDITOR_SESSION_STORAGE_KEY, serializedSession);
+      return;
+    }
+
+    await (await getNativeStorageAdapter())?.setItem(EDITOR_SESSION_STORAGE_KEY, serializedSession);
+  } catch (error) {
+    console.warn("Unable to persist CardMagic editor session state.", error);
   }
 }
 
@@ -7575,6 +7694,7 @@ export default function App() {
   const [artLibraryHydrated, setArtLibraryHydrated] = useState(false);
   const [customCardBacksHydrated, setCustomCardBacksHydrated] = useState(false);
   const [generatedSetSymbolsHydrated, setGeneratedSetSymbolsHydrated] = useState(false);
+  const [editorSessionHydrated, setEditorSessionHydrated] = useState(false);
   const [userProgressHydrated, setUserProgressHydrated] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [showReturnToTop, setShowReturnToTop] = useState(false);
@@ -7661,6 +7781,21 @@ export default function App() {
     accountUser?.user_metadata?.full_name,
     accountUser?.user_metadata?.name,
   ]);
+  useEffect(() => {
+    if (!accountUser) {
+      return;
+    }
+
+    setCard((current) => {
+      const creditedCard = withDefaultCardCredit(current, accountFooterOwnerName);
+
+      if (creditedCard === current) {
+        return current;
+      }
+
+      return creditedCard;
+    });
+  }, [accountFooterOwnerName, accountUser]);
   const isSplitFrame = isSplitTypeFrame(card);
   const splitFrameSummary = useMemo(() => {
     if (!isSplitTypeFrame(card)) {
@@ -8269,6 +8404,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!setsHydrated) {
+      return;
+    }
+
+    let cancelled = false;
+
+    loadStoredEditorSessionState().then((storedSession) => {
+      if (cancelled) {
+        return;
+      }
+
+      if (storedSession) {
+        setSelectedSetId(storedSession.selectedSetId);
+        setActiveSetCardId(storedSession.activeSetCardId);
+        setActiveSetCardSetId(storedSession.activeSetCardSetId);
+        setInspectorTab(storedSession.inspectorTab);
+      }
+
+      setEditorSessionHydrated(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setsHydrated]);
+
+  useEffect(() => {
     let cancelled = false;
 
     loadStoredDeletionTombstones().then((storedTombstones) => {
@@ -8445,6 +8607,32 @@ export default function App() {
 
     void storeCardSets(cardSets);
   }, [cardSets, generatedSetSymbolsHydrated, setsHydrated]);
+
+  useEffect(() => {
+    if (!editorSessionHydrated) {
+      return;
+    }
+
+    const persistEditorSession = setTimeout(() => {
+      void storeEditorSessionState({
+        schemaVersion: 1,
+        selectedSetId,
+        activeSetCardId,
+        activeSetCardSetId,
+        inspectorTab: inspectorTab === "keywords" ? "edit" : inspectorTab,
+      });
+    }, 200);
+
+    return () => {
+      clearTimeout(persistEditorSession);
+    };
+  }, [
+    activeSetCardId,
+    activeSetCardSetId,
+    editorSessionHydrated,
+    inspectorTab,
+    selectedSetId,
+  ]);
 
   useEffect(() => {
     cardSetsRef.current = cardSets;
@@ -10672,7 +10860,8 @@ export default function App() {
     },
   ) => {
     const activeSnapshotId = targetSetId === activeSetCardSetId ? activeSetCardId : null;
-    const result = saveCardDraftIntoSet(cardSets, targetSetId, card, activeSnapshotId, {
+    const cardToSave = withDefaultCardCredit(card, accountFooterOwnerName);
+    const result = saveCardDraftIntoSet(cardSets, targetSetId, cardToSave, activeSnapshotId, {
       saveMode: options?.saveMode,
       overwriteSnapshotId: options?.overwriteSnapshotId,
     });
@@ -10690,6 +10879,8 @@ export default function App() {
 
     if (options?.updateCurrentCard !== false) {
       setCard(cloneCardDraft(result.snapshot.card));
+    } else if (cardToSave !== card) {
+      setCard(cardToSave);
     }
 
     if (options?.clearDirty !== false) {
@@ -10950,10 +11141,9 @@ export default function App() {
       : `community-${accountUser.id}-${createUuid()}`;
 
     try {
-      const communityCard = cloneCardDraft(previewCard);
+      const communityCard = cloneCardDraft(withDefaultCardCredit(previewCard, accountFooterOwnerName));
       const imageUrl = await renderCardImageForUpload(
         communityCard,
-        accountFooterOwnerName,
         accountUser.id,
         communityCardId,
       );
@@ -10980,7 +11170,6 @@ export default function App() {
 
   const renderCardImageForUpload = useCallback(async (
     communityCard: CardDraft,
-    footerOwnerName: string,
     userId: string,
     communityCardId: string,
     options?: {
@@ -10994,7 +11183,6 @@ export default function App() {
     const exportTarget: FlatCardExportTarget = {
       kind: "card",
       card: exportCard,
-      footerOwnerName,
       artImageAspectRatio: await getCardExportArtImageAspectRatio(exportCard),
       renderWidth: options?.renderWidth,
       flattenMasksExport,
@@ -11037,7 +11225,6 @@ export default function App() {
 
   const renderSetCardImage = useCallback(async (
     savedCard: CardDraft,
-    footerOwnerName: string,
     setId: string,
     snapshotId: string,
     onStatus?: (status: SetCardImageRenderStatusDraft) => void,
@@ -11046,7 +11233,6 @@ export default function App() {
     const exportTarget: FlatCardExportTarget = {
       kind: "card",
       card: exportCard,
-      footerOwnerName,
       artImageAspectRatio: await getCardExportArtImageAspectRatio(exportCard),
       renderWidth: SET_CARD_RENDER_IMAGE_WIDTH,
       flattenMasksExport: Platform.OS === "web",
@@ -11624,7 +11810,6 @@ export default function App() {
 
       const { localImageUrl, uploadBody, uploadContentType } = await renderSetCardImage(
         renderCard,
-        getSetCardFooterOwnerName(request.snapshot, accountFooterOwnerName),
         request.setId,
         request.snapshot.id,
         (status) => setSavedSetCardImageRenderStatus(renderKey, status),
@@ -11988,7 +12173,6 @@ export default function App() {
       : {
           kind: "card",
           card: exportCard,
-          footerOwnerName: accountFooterOwnerName,
           artImageAspectRatio,
           flattenMasksExport: Platform.OS === "web",
         };
@@ -12664,13 +12848,21 @@ export default function App() {
       return;
     }
 
-    if (!canDeleteCardSetContent(targetSet, accountUser?.id)) {
+    if (!canRemoveCardSetSnapshot(targetSet, targetSnapshot, accountUser?.id)) {
       Alert.alert(
-        "Only the set creator can remove cards",
-        "Collaborators can edit and add cards, but only the set creator can remove cards from this set.",
+        "Card removal unavailable",
+        "Only the set creator or the card creator can remove this card from the set.",
       );
       return;
     }
+
+    const shouldRemoveRemoteSharedCard = Boolean(
+      accountUser &&
+      targetSet.ownerUserId &&
+      targetSet.ownerUserId !== accountUser.id &&
+      targetSnapshot.remoteCardId &&
+      isSetCardSnapshotCreator(targetSnapshot, accountUser.id),
+    );
 
     if (activeSetCardId === cardId && activeSetCardSetId === setId) {
       setActiveSetCardId(null);
@@ -12694,6 +12886,15 @@ export default function App() {
       persistAccountSetsNow(nextSets);
       return nextSets;
     });
+    if (shouldRemoveRemoteSharedCard && targetSnapshot.remoteCardId) {
+      void removeCollaborationSetCard(setId, targetSnapshot.remoteCardId).catch((error) => {
+        console.warn("Unable to remove shared set card from Supabase.", error);
+        Alert.alert(
+          "Shared card removal failed",
+          error instanceof Error ? error.message : "CardMagic could not remove this card from the shared set.",
+        );
+      });
+    }
     setDeleteUndo({
       id: `delete-card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       kind: "card",
@@ -13124,7 +13325,6 @@ export default function App() {
                                 exportCaptureMode={visibleCardExportActive}
                                 exportSetSymbolMode={visibleCardExportActive}
                                 artGenerating={artGeneratorBusy}
-                                footerOwnerName={accountFooterOwnerName}
                                 onSectionPress={handlePreviewSectionPress}
                                 onChange={updateCard}
                               />
@@ -19043,7 +19243,7 @@ function getInviteUsernameSearchQuery(value: string) {
 
 function SetCardsGrid({
   set,
-  canDeleteSetContent,
+  canRemoveCardSnapshot,
   visibleSetCards,
   hiddenCardCount,
   previewWidth,
@@ -19064,7 +19264,7 @@ function SetCardsGrid({
   showMoreCards,
 }: {
   set: CardSet;
-  canDeleteSetContent: boolean;
+  canRemoveCardSnapshot: (snapshot: SetCardSnapshot) => boolean;
   visibleSetCards: SetCardSnapshot[];
   hiddenCardCount: number;
   previewWidth: number;
@@ -19264,7 +19464,7 @@ function SetCardsGrid({
                 >
                   <RefreshCw size={16} color="#ffffff" strokeWidth={2.7} />
                 </Pressable>
-                {canDeleteSetContent ? (
+                {canRemoveCardSnapshot(snapshot) ? (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`Remove ${setCard.name || "Untitled Card"} from ${set.name}`}
@@ -20840,7 +21040,7 @@ function SetsPanel({
 
                   <SetCardsGrid
                     set={set}
-                    canDeleteSetContent={canDeleteSetContent}
+                    canRemoveCardSnapshot={(snapshot) => canRemoveCardSetSnapshot(set, snapshot, accountUserId)}
                     visibleSetCards={visibleSetCards}
                     hiddenCardCount={hiddenCardCount}
                     previewWidth={previewWidth}

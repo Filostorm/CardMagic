@@ -29,7 +29,6 @@ try {
     "--project-name",
     projectName,
     "--commit-dirty=true",
-    "--skip-caching",
   ];
 
   if (releaseBranch === "beta") {

@@ -286,11 +286,29 @@ async function getRequiredSupabaseAccessToken(actionLabel: string) {
 
   const token = data.session?.access_token;
 
-  if (!token) {
-    throw new Error(`Sign in before ${actionLabel}.`);
+  if (token) {
+    return token;
   }
 
-  return token;
+  const { data: guestData, error: guestError } = await supabase.auth.signInAnonymously({
+    options: {
+      data: {
+        source: "cardmagic-guest-ai-credit-spend",
+      },
+    },
+  });
+
+  if (guestError) {
+    throw new Error(`CardMagic could not start a guest credit session before ${actionLabel}. ${guestError.message}`);
+  }
+
+  const guestToken = guestData.session?.access_token;
+
+  if (!guestToken) {
+    throw new Error(`CardMagic could not start a guest credit session before ${actionLabel}.`);
+  }
+
+  return guestToken;
 }
 
 async function invokeAiEdgeFunction<T extends { error?: string }>({

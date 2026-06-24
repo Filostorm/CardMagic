@@ -45,6 +45,8 @@ export function getEditableCardFace(card: CardDraft): CardDraft {
     artSubjectMaskUri: card.backArtSubjectMaskUri,
     artSubjectMaskDisabled: card.backArtSubjectMaskDisabled,
     artSubjectMaskComponents: card.backArtSubjectMaskComponents,
+    artSubjectMaskSections: card.backArtSubjectMaskSections,
+    artSubjectMaskFitMode: card.backArtSubjectMaskFitMode,
     artTransform: card.backArtTransform,
     frameSelection:
       card.backFrameSelection ?? backDefaults.backFrameSelection ?? card.frameSelection,
@@ -75,6 +77,8 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
     artSubjectMaskUri,
     artSubjectMaskDisabled,
     artSubjectMaskComponents,
+    artSubjectMaskSections,
+    artSubjectMaskFitMode,
     artTransform,
     frameSelection,
     frameColors,
@@ -142,6 +146,14 @@ export function toDfcFacePatch(card: CardDraft, patch: Partial<CardDraft>): Part
 
   if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskComponents")) {
     nextPatch.backArtSubjectMaskComponents = artSubjectMaskComponents;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskSections")) {
+    nextPatch.backArtSubjectMaskSections = artSubjectMaskSections;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "artSubjectMaskFitMode")) {
+    nextPatch.backArtSubjectMaskFitMode = artSubjectMaskFitMode;
   }
 
   if (artTransform !== undefined) {

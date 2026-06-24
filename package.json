@@ -1,8 +1,10 @@
 {
   "name": "cardmagic",
-  "version": "3.36.35",
+  "version": "3.37.4",
   "main": "index.ts",
   "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
     "start": "expo start --port 8082",
     "android": "expo run:android",
     "ios": "expo run:ios --port 8082",
@@ -54,7 +56,8 @@
     "@types/react": "~19.1.0",
     "babel-preset-expo": "~54.0.10",
     "json5": "^2.2.3",
-    "typescript": "~5.9.2"
+    "typescript": "~5.9.2",
+    "vitest": "^4.1.8"
   },
   "private": true
 }

@@ -152,6 +152,9 @@ export type SubjectMaskComponent = {
   enabled: boolean;
 };
 
+export type SubjectMaskSection = "title" | "typeLine" | "text" | "frame";
+export type SubjectMaskFitMode = "expanded" | "artOpening";
+
 export type CardDraft = {
   name: string;
   baseCardName?: string;
@@ -198,11 +201,15 @@ export type CardDraft = {
   artSubjectMaskUri?: string;
   artSubjectMaskDisabled?: boolean;
   artSubjectMaskComponents?: SubjectMaskComponent[];
+  artSubjectMaskSections?: SubjectMaskSection[];
+  artSubjectMaskFitMode?: SubjectMaskFitMode;
   artTransform?: ArtTransform;
   backArtUri?: string;
   backArtSubjectMaskUri?: string;
   backArtSubjectMaskDisabled?: boolean;
   backArtSubjectMaskComponents?: SubjectMaskComponent[];
+  backArtSubjectMaskSections?: SubjectMaskSection[];
+  backArtSubjectMaskFitMode?: SubjectMaskFitMode;
   backArtTransform?: ArtTransform;
   setSymbolPreset?: string;
   setSymbolId?: string;

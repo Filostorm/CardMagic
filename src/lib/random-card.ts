@@ -232,6 +232,88 @@ const FLAVOR_TEXTS = [
   "Some warnings arrive already sharpened.",
 ];
 
+const SLOP_NAME_PREFIXES = [
+  "Moist",
+  "Incorrect",
+  "Budget",
+  "Almost-Legal",
+  "Wobbly",
+  "Unlicensed",
+  "Forgotten",
+  "Reverse",
+  "Diagonal",
+  "Emotionally Tapped",
+];
+
+const SLOP_NAME_NOUNS = [
+  "Mana Appliance",
+  "Chair Wizard",
+  "Goblet Accountant",
+  "Island With Teeth",
+  "Receipt Dragon",
+  "Soup Oracle",
+  "Helmet Swamp",
+  "Omen Appendix",
+  "Tiny Siege",
+  "Prophecy Drawer",
+];
+
+const SLOP_NAME_LOCATIONS = [
+  "the Sideboard",
+  "Loose Priority",
+  "Tuesday Combat",
+  "the Ninth Main Phase",
+  "Target Library",
+  "the Graveyard's Attic",
+  "Reminder Text",
+  "the Beige Stack",
+];
+
+const SLOP_TYPE_LINES = [
+  "Creature — Bureaucrat Fungus",
+  "Artifact Creature — Appliance Advisor",
+  "Enchantment — Aura Room Clue",
+  "Kindred Sorcery — Hat",
+  "Legendary Artifact — Sandwich Equipment",
+  "Creature — Island Horse Wizard",
+  "Enchantment Creature — Rule Book",
+  "Artifact — Vehicle Food",
+];
+
+const SLOP_RULE_OPENERS = [
+  "Whenever NAME becomes mostly declared, each opponent mills a feeling.",
+  "At the beginning of the first end step after your upkeep, untap target sentence.",
+  "If a permanent would ask a question, investigate the nearest basic land instead.",
+  "Creatures you control have menu until they remember a color.",
+  "When NAME enters, exchange control of two numbers written on cards.",
+  "During combat on odd turns, NAME is also a spell you forgot to announce.",
+];
+
+const SLOP_RULE_PAYOFFS = [
+  "Then create a tapped 0/1 colorless Apology token with no known subtypes.",
+  "If this is the third time this ability resolved this paragraph, draw half a card.",
+  "You may pay {2}. If you do, target opponent chooses left or soup.",
+  "Cards in your hand perpetually become slightly more foil until end of turn.",
+  "Scry X, where X is the number of sleeves touching the battlefield.",
+  "Until your next lunch, lands you control are suspicious in addition to their other types.",
+];
+
+const SLOP_FLAVOR_TEXTS = [
+  "The oracle was clear, but only because nobody asked what it meant.",
+  "It taps for one mana of whichever color the table is thinking about.",
+  "A perfect tactical error, preserved for competitive kitchen use.",
+  "Some spells are printed upside down on purpose. This was not one of them.",
+];
+
+const SLOP_ART_PROMPT_EXTRAS = [
+  "a heroic wizard arguing with a floating soup tureen and a tiny castle made of sleeves",
+  "a dragon made of receipts perched on a battlefield that is also a dining table",
+  "an enchanted office chair galloping through a swamp full of glowing rulebooks",
+  "a solemn artifact appliance with angel wings spilling mana-colored noodles",
+  "a crooked island with teeth wearing armor while tiny soldiers audit it",
+  "a surreal prophecy drawer opening into a storm of dice, feathers, and wet parchment",
+];
+
 const ADVENTURE_NAMES_BY_COLOR: Record<ManaColor, string[]> = {
   W: ["Brave the Path", "Call for Aid", "Light the Way"],
   U: ["Slip Away", "Read the Clouds", "Borrow Time"],
@@ -357,6 +439,106 @@ export function createRandomCard(previous?: CardDraft): CardDraft {
     typeFrame: previous?.typeFrame,
     frameCustomization: previous?.frameCustomization,
   };
+}
+
+export function createSlopCard(previous?: CardDraft): CardDraft {
+  const rarity = weightedPick(RARITY_WEIGHTS);
+  const colors = chance(0.18) ? [] : shuffle(COLORS).slice(0, randomInt(1, 3));
+  const manaValue = colors.length === 0 ? randomInt(0, 6) : randomInt(Math.max(1, colors.length), 8);
+  const typeLine = pick(SLOP_TYPE_LINES);
+  const isCreature = /\bCreature\b/.test(typeLine);
+  const name = `${pick(SLOP_NAME_PREFIXES)} ${pick(SLOP_NAME_NOUNS)} of ${pick(SLOP_NAME_LOCATIONS)}`;
+  const rulesText = useCardNameToken(`${pick(SLOP_RULE_OPENERS)}\n${pick(SLOP_RULE_PAYOFFS)}`);
+
+  return {
+    name,
+    baseCardName: undefined,
+    manaCost: buildManaCost("artifactCreature", colors, manaValue),
+    typeLine,
+    rarity,
+    rulesText,
+    flavorText: pick(SLOP_FLAVOR_TEXTS),
+    keywords: undefined,
+    adventureName: undefined,
+    adventureManaCost: undefined,
+    adventureTypeLine: undefined,
+    adventureRulesText: undefined,
+    dfcMode: undefined,
+    dfcFace: undefined,
+    backName: undefined,
+    backBaseCardName: undefined,
+    backManaCost: undefined,
+    backTypeLine: undefined,
+    backRulesText: undefined,
+    backRulesTextColors: undefined,
+    backRulesTextColor: undefined,
+    backFlavorText: undefined,
+    backKeywords: undefined,
+    backPower: undefined,
+    backToughness: undefined,
+    defense: undefined,
+    startingLoyalty: undefined,
+    loyaltyAbilities: undefined,
+    splitLayout: undefined,
+    splitLeft: undefined,
+    splitRight: undefined,
+    splitFuseText: undefined,
+    power: isCreature ? String(randomInt(0, 7)) : "",
+    toughness: isCreature ? String(randomInt(1, 8)) : "",
+    artist: "Unknown Artist",
+    setCode: previous?.setCode || "CMG",
+    collectorNumber: previous?.collectorNumber || "001",
+    setSize: previous?.setSize || DEFAULT_CARD_SET_SIZE,
+    language: previous?.language || DEFAULT_CARD_LANGUAGE,
+    copyrightLine: previous?.copyrightLine || DEFAULT_CARD_COPYRIGHT_LINE,
+    cardBackId: previous?.cardBackId,
+    artUri: undefined,
+    artSubjectMaskUri: undefined,
+    artSubjectMaskDisabled: undefined,
+    artSubjectMaskComponents: undefined,
+    artSubjectMaskSections: undefined,
+    artSubjectMaskFitMode: undefined,
+    artTransform: undefined,
+    backArtUri: undefined,
+    backArtSubjectMaskUri: undefined,
+    backArtSubjectMaskDisabled: undefined,
+    backArtSubjectMaskComponents: undefined,
+    backArtSubjectMaskSections: undefined,
+    backArtSubjectMaskFitMode: undefined,
+    backArtTransform: undefined,
+    setSymbolPreset: previous?.setSymbolPreset,
+    setSymbolId: previous?.setSymbolId,
+    setSymbolUri: previous?.setSymbolUri,
+    setSymbolUsesRarityTreatment: previous?.setSymbolUsesRarityTreatment,
+    watermarkPreset: previous?.watermarkPreset,
+    watermarkUri: previous?.watermarkUri,
+    watermarkOpacity: previous?.watermarkOpacity,
+    watermarkScale: previous?.watermarkScale,
+    frameSelection: previous?.frameSelection,
+    frameColors: colors,
+    frameTreatment: previous?.frameTreatment,
+    showcaseFrame: previous?.showcaseFrame,
+    backFrameSelection: undefined,
+    backFrameColors: undefined,
+    backFrameTreatment: undefined,
+    backShowcaseFrame: undefined,
+    typeFrame: undefined,
+    frameCustomization: previous?.frameCustomization,
+  };
+}
+
+export function buildSlopCardArtPrompt(card: CardDraft): string {
+  const visualAnchor = pick(SLOP_ART_PROMPT_EXTRAS);
+
+  return [
+    "Create nonsensical fantasy trading card art that almost matches this fake card but is clearly conceptually wrong.",
+    `Card name: ${card.name}.`,
+    `Type line: ${card.typeLine}.`,
+    `Rules text inspiration: ${card.rulesText.replace(/\s+/g, " ")}.`,
+    `Main image concept: ${visualAnchor}.`,
+    "The artwork should look polished and painterly, with coherent lighting and color, but the subject matter should be absurd, self-contradictory, and mildly confusing.",
+    "No text, no card frame, no logos, no watermark, no UI, no realistic gore.",
+  ].join(" ");
 }
 
 function buildPlanShell(input: Omit<GeneratedPlan, "rulesText" | "power" | "toughness">): GeneratedPlan {

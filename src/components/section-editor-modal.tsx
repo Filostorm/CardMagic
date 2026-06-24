@@ -155,6 +155,12 @@ function loadCardDatabaseSearchModule(): Promise<CardDatabaseSearchModule> {
 }
 
 const RARITIES: CardRarity[] = ["common", "uncommon", "rare", "mythic"];
+const RARITY_LABELS: Record<CardRarity, string> = {
+  common: "Common",
+  uncommon: "Uncommon",
+  rare: "Rare",
+  mythic: "Mythic",
+};
 const STANDARD_FRAME_TREATMENTS: FrameTreatment[] = [
   "standard",
   "borderless",
@@ -265,7 +271,7 @@ type SectionEditorModalProps = {
   onEditArt: () => void;
   onPickArt: () => void;
   onPickSetSymbol: () => void;
-  onGenerateSetSymbol: () => void;
+  onGenerateSetSymbol?: () => void;
   onAddCardBack?: () => void;
   onGenerateCardBack?: () => void;
   onPickCustomCardBack?: () => void;
@@ -772,33 +778,57 @@ export function SectionEditorModal({
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                   {RARITIES.map((rarity) => {
                     const selected = card.rarity === rarity;
+                    const previewPreset = card.setSymbolPreset ?? setSymbolDefaults?.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id;
+                    const previewImageUri = card.setSymbolUri ?? setSymbolDefaults?.setSymbolUri;
 
                     return (
                       <Pressable
                         key={rarity}
                         accessibilityRole="button"
+                        accessibilityLabel={`${RARITY_LABELS[rarity]} rarity`}
+                        accessibilityState={{ selected }}
                         onPress={() => onChange({ rarity })}
                         style={{
-                          minHeight: 40,
-                          borderRadius: 8,
-                          borderCurve: "continuous",
-                          borderWidth: 1,
-                          borderColor: selected ? "#151820" : "#d4d8e0",
-                          backgroundColor: selected ? "#151820" : "#ffffff",
+                          width: 64,
                           alignItems: "center",
-                          justifyContent: "center",
-                          paddingHorizontal: 12,
+                          gap: 4,
                         }}
                       >
-                        <Text
-                          selectable={false}
+                        <View
                           style={{
-                            color: selected ? "#ffffff" : "#1f2530",
-                            fontWeight: "800",
-                            textTransform: "capitalize",
+                            width: 48,
+                            height: 44,
+                            borderRadius: 8,
+                            borderCurve: "continuous",
+                            borderWidth: selected ? 2 : 1,
+                            borderColor: selected ? "#151820" : "#d4d8e0",
+                            backgroundColor: selected ? "#f2f4f7" : "#ffffff",
+                            alignItems: "center",
+                            justifyContent: "center",
                           }}
                         >
-                          {rarity}
+                          <SetSymbolMark
+                            presetId={previewPreset}
+                            imageUri={previewImageUri}
+                            usesRarityTreatment
+                            rarity={rarity}
+                            size={30}
+                          />
+                        </View>
+                        <Text
+                          selectable={false}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.72}
+                          style={{
+                            color: selected ? "#151820" : "#5f6470",
+                            fontSize: 11,
+                            lineHeight: 13,
+                            fontWeight: "900",
+                            textAlign: "center",
+                          }}
+                        >
+                          {RARITY_LABELS[rarity]}
                         </Text>
                       </Pressable>
                     );
@@ -807,7 +837,6 @@ export function SectionEditorModal({
               </View>
               <SetSymbolEditor
                 card={card}
-                setSymbolDefaults={setSymbolDefaults}
                 generatedSetSymbols={generatedSetSymbols}
                 onChange={onChange}
                 onChangeSetDefaultSymbol={onChangeSetDefaultSymbol}
@@ -1619,7 +1648,6 @@ function DfcFaceToggle({
 
 function SetSymbolEditor({
   card,
-  setSymbolDefaults,
   generatedSetSymbols,
   onChange,
   onChangeSetDefaultSymbol,
@@ -1627,129 +1655,70 @@ function SetSymbolEditor({
   onGenerateSetSymbol,
 }: {
   card: CardDraft;
-  setSymbolDefaults?: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">;
   generatedSetSymbols: GeneratedSetSymbolEntry[];
   onChange: (patch: Partial<CardDraft>) => void;
   onChangeSetDefaultSymbol?: (
     patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
   ) => void;
   onPickSetSymbol: () => void;
-  onGenerateSetSymbol: () => void;
+  onGenerateSetSymbol?: () => void;
 }) {
   const activePreset = card.setSymbolPreset ?? SET_SYMBOL_PRESETS[0].id;
-  const activeCustomSymbol = generatedSetSymbols.find((symbol) => symbol.uri === card.setSymbolUri);
   const applySymbolPatch = onChangeSetDefaultSymbol ?? onChange;
-  const customSymbolLabel = card.setSymbolUsesRarityTreatment
-    ? activeCustomSymbol?.label ?? "Custom symbol"
-    : card.setSymbolUri
-      ? "Custom uploaded image"
-      : "Preset icon";
-  const hasSetSymbolDefault = Boolean(
-    setSymbolDefaults?.setSymbolPreset ||
-      setSymbolDefaults?.setSymbolUri ||
-      typeof setSymbolDefaults?.setSymbolUsesRarityTreatment === "boolean",
-  );
 
   return (
     <View style={{ gap: 12 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-        <View
-          style={{
-            width: 46,
-            height: 46,
-            borderRadius: 8,
-            borderCurve: "continuous",
-            borderWidth: 1,
-            borderColor: "#d4d8e0",
-            backgroundColor: "#ffffff",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <SetSymbolMark
-            presetId={activePreset}
-            imageUri={card.setSymbolUri}
-            usesRarityTreatment={card.setSymbolUsesRarityTreatment}
-            rarity={card.rarity}
-            size={card.setSymbolUri && card.setSymbolUsesRarityTreatment ? 32 : 28}
-          />
-        </View>
-        <View style={{ flex: 1, gap: 3 }}>
-          <Text
-            selectable
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        {onGenerateSetSymbol ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Generate set symbol"
+            onPress={onGenerateSetSymbol}
             style={{
-              color: "#5f6470",
-              fontSize: 12,
-              fontWeight: "800",
-              textTransform: "uppercase",
+              minHeight: 36,
+              borderRadius: 8,
+              borderCurve: "continuous",
+              backgroundColor: "#0b7180",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 7,
+              paddingHorizontal: 11,
             }}
           >
-            Set Symbol
-          </Text>
-          <Text selectable style={{ color: "#1f2530", fontSize: 14, fontWeight: "800" }}>
-            {customSymbolLabel}
-          </Text>
-          {hasSetSymbolDefault ? (
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
-              Using set default
+            <Sparkles size={16} color="#ffffff" strokeWidth={2.5} />
+            <Text
+              selectable={false}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              style={{ color: "#ffffff", fontSize: 12, fontWeight: "900" }}
+            >
+              Generate symbol
             </Text>
-          ) : null}
-        </View>
-      </View>
-
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Generate set symbol"
-          onPress={onGenerateSetSymbol}
-          style={{
-            flexGrow: 1,
-            flexBasis: 168,
-            minHeight: 46,
-            borderRadius: 8,
-            borderCurve: "continuous",
-            backgroundColor: "#0b7180",
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "row",
-            gap: 9,
-            paddingHorizontal: 12,
-          }}
-        >
-          <Sparkles size={18} color="#ffffff" strokeWidth={2.3} />
-          <Text
-            selectable={false}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}
-          >
-            Generate symbol
-          </Text>
-        </Pressable>
+          </Pressable>
+        ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Upload custom set symbol"
           onPress={onPickSetSymbol}
           style={{
-            flexGrow: 1,
-            flexBasis: 168,
-            minHeight: 46,
+            minHeight: 36,
             borderRadius: 8,
             borderCurve: "continuous",
             backgroundColor: "#151820",
             alignItems: "center",
             justifyContent: "center",
             flexDirection: "row",
-            gap: 9,
-            paddingHorizontal: 12,
+            gap: 7,
+            paddingHorizontal: 11,
           }}
         >
-          <ImagePlus size={18} color="#ffffff" strokeWidth={2.3} />
+          <ImagePlus size={16} color="#ffffff" strokeWidth={2.5} />
           <Text
             selectable={false}
             numberOfLines={1}
             adjustsFontSizeToFit
-            style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}
+            style={{ color: "#ffffff", fontSize: 12, fontWeight: "900" }}
           >
             Upload symbol
           </Text>

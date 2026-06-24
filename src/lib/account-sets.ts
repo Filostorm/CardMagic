@@ -26,6 +26,22 @@ export type AccountCustomSetSymbolPayload = {
   createdAt?: string;
 };
 
+export type AccountDeletedSetTombstonePayload = {
+  id: string;
+  deletedAt: string;
+};
+
+export type AccountDeletedCardTombstonePayload = {
+  setId: string;
+  cardId: string;
+  deletedAt: string;
+};
+
+export type AccountDeletionTombstonesPayload = {
+  sets: AccountDeletedSetTombstonePayload[];
+  cards: AccountDeletedCardTombstonePayload[];
+};
+
 export type AccountCardSnapshotPayload = {
   id: string;
   savedAt?: string;
@@ -145,6 +161,7 @@ export type CommunityPollPayload = {
 };
 
 export type CollaborationSetRole = "owner" | "editor";
+export type CollaborationSetInviteLinkRole = "editor" | "viewer";
 
 export type CollaborationSetPayload = {
   id: string;
@@ -204,7 +221,7 @@ export type CollaborationSetInviteLinkPayload = {
   inviteCode: string;
   setId: string;
   setName: string;
-  role: Extract<CollaborationSetRole, "editor">;
+  role: CollaborationSetInviteLinkRole;
   expiresAt?: string;
 };
 
@@ -213,7 +230,7 @@ export type CollaborationSetInvitePreviewPayload = {
   setName: string;
   ownerUserId: string;
   ownerName: string;
-  role: Extract<CollaborationSetRole, "editor">;
+  role: CollaborationSetInviteLinkRole;
   expiresAt?: string;
 };
 
@@ -221,7 +238,7 @@ export type CollaborationSetInviteRedemptionPayload = {
   setId: string;
   setName: string;
   ownerUserId: string;
-  role: CollaborationSetRole;
+  role: CollaborationSetRole | "viewer";
 };
 
 export type CollaborationSetMemberPayload = {
@@ -259,6 +276,17 @@ type CustomSetSymbolRow = {
   label: string;
   uri: string;
   created_at: string;
+};
+
+type DeletedSetTombstoneRow = {
+  set_id: string;
+  deleted_at: string;
+};
+
+type DeletedCardTombstoneRow = {
+  set_id: string;
+  card_id: string;
+  deleted_at: string;
 };
 
 type LegacyCardSetRow = {
@@ -590,7 +618,7 @@ export async function fetchRemoteCardSets(userId: string): Promise<AccountCardSe
     return sets;
   }
 
-  return materializeRemoteCardSetPayloads(await hydrateRemoteSetCards(userId, sets));
+  return materializeRemoteCardSetShellPayloads(await hydrateRemoteSetCards(userId, sets));
 }
 
 async function fetchLegacyRemoteCardSets(userId: string): Promise<AccountCardSetPayload[]> {
@@ -609,7 +637,7 @@ async function fetchLegacyRemoteCardSets(userId: string): Promise<AccountCardSet
     throw new Error(error.message);
   }
 
-  return materializeRemoteCardSetPayloads((data ?? []).map((row) => ({
+  return materializeRemoteCardSetShellPayloads((data ?? []).map((row) => ({
     id: row.id,
     name: row.name,
     cardBackId: row.card_back_id ?? undefined,
@@ -654,6 +682,143 @@ export async function replaceRemoteCardSets(userId: string, sets: AccountCardSet
   await deleteStaleRemoteSets(userId, remoteMediaSets);
 }
 
+export async function fetchRemoteDeletionTombstones(userId: string): Promise<AccountDeletionTombstonesPayload> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const [setResult, cardResult] = await Promise.all([
+    supabase
+      .from("card_set_deletion_tombstones")
+      .select("set_id, deleted_at")
+      .eq("user_id", userId)
+      .returns<DeletedSetTombstoneRow[]>(),
+    supabase
+      .from("card_deletion_tombstones")
+      .select("set_id, card_id, deleted_at")
+      .eq("user_id", userId)
+      .returns<DeletedCardTombstoneRow[]>(),
+  ]);
+
+  if (setResult.error) {
+    if (isMissingDeletionTombstoneSchemaError(setResult.error)) {
+      return { sets: [], cards: [] };
+    }
+
+    throw new Error(setResult.error.message);
+  }
+
+  if (cardResult.error) {
+    if (isMissingDeletionTombstoneSchemaError(cardResult.error)) {
+      return { sets: [], cards: [] };
+    }
+
+    throw new Error(cardResult.error.message);
+  }
+
+  return {
+    sets: (setResult.data ?? []).map((row) => ({
+      id: row.set_id,
+      deletedAt: row.deleted_at,
+    })),
+    cards: (cardResult.data ?? []).map((row) => ({
+      setId: row.set_id,
+      cardId: row.card_id,
+      deletedAt: row.deleted_at,
+    })),
+  };
+}
+
+export async function upsertRemoteDeletionTombstones(
+  userId: string,
+  tombstones: AccountDeletionTombstonesPayload,
+) {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const setRows = tombstones.sets.map((entry) => ({
+    user_id: userId,
+    set_id: entry.id,
+    deleted_at: entry.deletedAt,
+  }));
+  const cardRows = tombstones.cards.map((entry) => ({
+    user_id: userId,
+    set_id: entry.setId,
+    card_id: entry.cardId,
+    deleted_at: entry.deletedAt,
+  }));
+
+  if (setRows.length > 0) {
+    const { error } = await supabase.from("card_set_deletion_tombstones").upsert(setRows, {
+      onConflict: "user_id,set_id",
+    });
+
+    if (error) {
+      if (isMissingDeletionTombstoneSchemaError(error)) {
+        return;
+      }
+
+      throw new Error(error.message);
+    }
+  }
+
+  if (cardRows.length > 0) {
+    const { error } = await supabase.from("card_deletion_tombstones").upsert(cardRows, {
+      onConflict: "user_id,set_id,card_id",
+    });
+
+    if (error) {
+      if (isMissingDeletionTombstoneSchemaError(error)) {
+        return;
+      }
+
+      throw new Error(error.message);
+    }
+  }
+}
+
+export async function removeRemoteDeletedSetTombstone(userId: string, setId: string) {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase
+    .from("card_set_deletion_tombstones")
+    .delete()
+    .eq("user_id", userId)
+    .eq("set_id", setId);
+
+  if (error) {
+    if (isMissingDeletionTombstoneSchemaError(error)) {
+      return;
+    }
+
+    throw new Error(error.message);
+  }
+}
+
+export async function removeRemoteDeletedCardTombstone(userId: string, setId: string, cardId: string) {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase
+    .from("card_deletion_tombstones")
+    .delete()
+    .eq("user_id", userId)
+    .eq("set_id", setId)
+    .eq("card_id", cardId);
+
+  if (error) {
+    if (isMissingDeletionTombstoneSchemaError(error)) {
+      return;
+    }
+
+    throw new Error(error.message);
+  }
+}
+
 async function persistRemoteCardSetPayloads(
   userId: string,
   sets: AccountCardSetPayload[],
@@ -676,22 +841,26 @@ async function persistRemoteCardSetPayloads(
   })));
 }
 
-async function materializeRemoteCardSetPayloads(
+async function materializeRemoteCardSetShellPayloads(
   sets: AccountCardSetPayload[],
 ): Promise<AccountCardSetPayload[]> {
   return Promise.all(sets.map(async (set) => ({
     ...set,
-    setSymbolUri: await materializeRemoteImageUriSafely(set.setSymbolUri, `set-${set.id}-default-symbol`),
-    cards: await Promise.all(set.cards.map(async (snapshot) => ({
-      ...snapshot,
-      card: await materializeRemoteCardDraftMedia(snapshot.card),
-    }))),
+    setSymbolUri: await materializeRemoteImageUriSafely(
+      set.setSymbolUri,
+      `set-${set.id}-default-symbol`,
+      { mode: "signed-url" },
+    ),
   })));
 }
 
-async function materializeRemoteImageUriSafely(uri: string | undefined, sourceLabel: string) {
+async function materializeRemoteImageUriSafely(
+  uri: string | undefined,
+  sourceLabel: string,
+  options?: Parameters<typeof materializeRemoteImageUri>[1],
+) {
   try {
-    return await materializeRemoteImageUri(uri);
+    return await materializeRemoteImageUri(uri, options);
   } catch (error) {
     console.warn(`Unable to materialize Supabase media reference for ${sourceLabel}.`, error);
     return uri;
@@ -1363,6 +1532,15 @@ function isMissingCustomSetSymbolsSchemaError(error: { code?: string; message?: 
   return message.includes("custom_set_symbols") || message.includes("set_symbol_id");
 }
 
+function isMissingDeletionTombstoneSchemaError(error: { code?: string; message?: string; details?: string | null }) {
+  const message = `${error.code ?? ""} ${error.message ?? ""} ${error.details ?? ""}`;
+
+  return (
+    message.includes("card_set_deletion_tombstones") ||
+    message.includes("card_deletion_tombstones")
+  );
+}
+
 function isMissingNormalizedSetMembershipError(error: { code?: string; message?: string; details?: string | null }) {
   const message = `${error.code ?? ""} ${error.message ?? ""} ${error.details ?? ""}`;
 
@@ -1690,13 +1868,29 @@ export async function inviteCollaborationSetMember(setId: string, inviteIdentifi
   }
 }
 
-export async function createCollaborationSetInviteLink(setId: string): Promise<CollaborationSetInviteLinkPayload> {
+function normalizeCollaborationSetInviteLinkRole(role: string | null | undefined): CollaborationSetInviteLinkRole {
+  return role === "viewer" ? "viewer" : "editor";
+}
+
+function normalizeCollaborationSetRedemptionRole(role: string | null | undefined): CollaborationSetRole | "viewer" {
+  if (role === "owner" || role === "viewer") {
+    return role;
+  }
+
+  return "editor";
+}
+
+export async function createCollaborationSetInviteLink(
+  setId: string,
+  role: CollaborationSetInviteLinkRole = "editor",
+): Promise<CollaborationSetInviteLinkPayload> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
   }
 
   const { data, error } = await supabase.rpc("create_collaboration_set_invite_link", {
     p_set_id: setId,
+    p_role: role,
   });
 
   if (error) {
@@ -1713,7 +1907,7 @@ export async function createCollaborationSetInviteLink(setId: string): Promise<C
     inviteCode: row.invite_code,
     setId: row.set_id,
     setName: row.set_name ?? "Shared set",
-    role: "editor",
+    role: normalizeCollaborationSetInviteLinkRole(row.role),
     expiresAt: row.expires_at ?? undefined,
   };
 }
@@ -1744,7 +1938,7 @@ export async function previewCollaborationSetInviteCode(
     setName: row.set_name ?? "Shared set",
     ownerUserId: row.owner_user_id,
     ownerName: row.owner_name ?? "another user",
-    role: "editor",
+    role: normalizeCollaborationSetInviteLinkRole(row.role),
     expiresAt: row.expires_at ?? undefined,
   };
 }
@@ -1774,7 +1968,7 @@ export async function redeemCollaborationSetInviteCode(
     setId: row.set_id,
     setName: row.set_name ?? "Shared set",
     ownerUserId: row.owner_user_id,
-    role: row.role === "owner" ? "owner" : "editor",
+    role: normalizeCollaborationSetRedemptionRole(row.role),
   };
 }
 

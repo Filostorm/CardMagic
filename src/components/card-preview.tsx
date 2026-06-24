@@ -157,8 +157,13 @@ import {
   FrameTreatment,
   ManaColor,
   SplitCardHalf,
+  SubjectMaskSection,
   TypeFrame,
 } from "@/types/card";
+import {
+  DEFAULT_SUBJECT_MASK_FIT_MODE,
+  resolveSubjectMaskSections,
+} from "@/lib/subject-mask-sections";
 
 function getSvgMaskTypeProps(maskType: "alpha" | "luminance"): Partial<ComponentProps<typeof Mask>> {
   return Platform.OS === "web"
@@ -196,6 +201,7 @@ type CoordinateRect = {
   y: number;
   width: number;
   height: number;
+  radius?: number;
 };
 
 function getDisplayArtistName(artist: string | undefined) {
@@ -275,6 +281,9 @@ const FRAME_TREATMENT_ART_RECTS: Record<FrameTreatment, CoordinateRect> = {
   etchedFoil: { x: 29, y: 59, width: 316, height: 231 },
 };
 
+const MSE_M15_TEXTBOX_FRAME_RECT: CoordinateRect = { x: 29, y: 327, width: 314, height: 154 };
+const MSE_M15_FULL_ART_TEXTBOX_FRAME_RECT: CoordinateRect = { x: 24, y: 356, width: 327, height: 130 };
+
 type FrameTreatmentLayout = {
   art: CoordinateRect;
   name: CoordinateRect;
@@ -282,6 +291,7 @@ type FrameTreatmentLayout = {
   typeLine: CoordinateRect;
   setSymbol: CoordinateRect;
   textArea: CoordinateRect;
+  textBoxFrame: CoordinateRect;
   rulesFlavorDivider: CoordinateRect;
   ptBox: CoordinateRect;
   powerToughness: CoordinateRect;
@@ -297,6 +307,7 @@ const DEFAULT_FRAME_TREATMENT_LAYOUT: FrameTreatmentLayout = {
   typeLine: CARD_COORDINATES.typeLine,
   setSymbol: CARD_COORDINATES.setSymbol,
   textArea: CARD_COORDINATES.textArea,
+  textBoxFrame: MSE_M15_TEXTBOX_FRAME_RECT,
   rulesFlavorDivider: CARD_COORDINATES.rulesFlavorDivider,
   ptBox: CARD_COORDINATES.ptBox,
   powerToughness: CARD_COORDINATES.powerToughness,
@@ -314,6 +325,7 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     typeLine: { x: 32, y: 329, width: 270, height: 20 },
     setSymbol: { x: 304, y: 329, width: 40, height: 22 },
     textArea: { x: 35, y: 359, width: 304, height: 122 },
+    textBoxFrame: MSE_M15_FULL_ART_TEXTBOX_FRAME_RECT,
     rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
     ptBox: { x: 273, y: 466, width: 81, height: 42 },
     powerToughness: { x: 286, y: 469, width: 60, height: 28 },
@@ -327,6 +339,7 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     typeLine: { x: 33, y: 447, width: 268, height: 18 },
     setSymbol: { x: 304, y: 445, width: 40, height: 20 },
     textArea: { x: 40, y: 260, width: 299, height: 174 },
+    textBoxFrame: { x: 40, y: 260, width: 299, height: 174 },
     rulesFlavorDivider: { x: 50, y: 427, width: 275, height: 2 },
     ptBox: { x: 271, y: 461, width: 81, height: 42 },
     powerToughness: { x: 284, y: 466, width: 60, height: 28 },
@@ -340,6 +353,7 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     typeLine: { x: 28, y: 296, width: 274, height: 20 },
     setSymbol: { x: 304, y: 297, width: 40, height: 22 },
     textArea: { x: 35, y: 327, width: 304, height: 154 },
+    textBoxFrame: MSE_M15_TEXTBOX_FRAME_RECT,
     rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
     ptBox: { x: 273, y: 466, width: 81, height: 42 },
     powerToughness: { x: 286, y: 471, width: 60, height: 28 },
@@ -357,6 +371,7 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     typeLine: { x: 28, y: 296, width: 274, height: 20 },
     setSymbol: { x: 304, y: 297, width: 40, height: 22 },
     textArea: { x: 35, y: 327, width: 304, height: 154 },
+    textBoxFrame: MSE_M15_TEXTBOX_FRAME_RECT,
     rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
     ptBox: { x: 273, y: 466, width: 81, height: 42 },
     powerToughness: { x: 286, y: 469, width: 60, height: 28 },
@@ -370,6 +385,7 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     typeLine: { x: 32, y: 296, width: 0, height: 0 },
     setSymbol: { x: 0, y: 0, width: 0, height: 0 },
     textArea: { x: 42, y: 330, width: 291, height: 0 },
+    textBoxFrame: { x: 42, y: 330, width: 291, height: 0 },
     rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 0 },
     ptBox: { x: 284, y: 452, width: 70, height: 39 },
     powerToughness: { x: 294, y: 458, width: 48, height: 25 },
@@ -384,6 +400,7 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     typeLine: { x: 39, y: 289, width: 270, height: 24 },
     setSymbol: { x: 308, y: 290, width: 34, height: 22 },
     textArea: { x: 49, y: 320, width: 279, height: 141 },
+    textBoxFrame: { x: 49, y: 320, width: 279, height: 141 },
     rulesFlavorDivider: { x: 61, y: 389, width: 252, height: 2 },
     ptBox: { x: 295, y: 470, width: 47, height: 27 },
     powerToughness: { x: 295, y: 470, width: 47, height: 27 },
@@ -397,6 +414,7 @@ const FRAME_TREATMENT_LAYOUTS: Record<FrameTreatment, FrameTreatmentLayout> = {
     typeLine: { x: 28, y: 296, width: 310, height: 20 },
     setSymbol: { x: 300, y: 297, width: 44, height: 22 },
     textArea: { x: 29, y: 327, width: 314, height: 154 },
+    textBoxFrame: MSE_M15_TEXTBOX_FRAME_RECT,
     rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
     ptBox: { x: 273, y: 466, width: 81, height: 42 },
     powerToughness: { x: 286, y: 469, width: 60, height: 28 },
@@ -411,6 +429,7 @@ const STELLAR_SIGHTS_TREATMENT_LAYOUT: FrameTreatmentLayout = {
   typeLine: { x: 31, y: 351, width: 304, height: 22 },
   setSymbol: { x: 0, y: 0, width: 0, height: 0 },
   textArea: { x: 45, y: 373, width: 262, height: 105 },
+  textBoxFrame: { x: 45, y: 373, width: 262, height: 105 },
   rulesFlavorDivider: { x: 50, y: 424, width: 275, height: 2 },
   footer: { x: 24, y: 488, width: 326, height: 24 },
   rulesContentVerticalAlign: "bottom",
@@ -490,6 +509,7 @@ const AFTERMATH_COORDINATES = {
 } as const;
 
 const CARD_SKIN_ALIAS_RECT = { x: 54, y: 58, width: 268, height: 17 } as const;
+const BORDERLESS_CARD_SKIN_ALIAS_RECT = { x: 45, y: 55, width: 285, height: 18 } as const;
 const FUTURESHIFTED_NAME_RECT: CoordinateRect = { x: 73, y: 28, width: 269, height: 26 };
 const FUTURESHIFTED_MANA_COST_RECT: CoordinateRect = { x: 4, y: 39, width: 82, height: 254 };
 const FUTURESHIFTED_TYPE_SYMBOL_RECT: CoordinateRect = { x: 19, y: 18, width: 30, height: 30 };
@@ -511,6 +531,7 @@ const FUTURESHIFTED_TREATMENT_LAYOUT: FrameTreatmentLayout = {
   typeLine: { x: 49, y: 298, width: 279, height: 20 },
   setSymbol: { x: 331, y: 303, width: 22, height: 22 },
   textArea: { x: 36, y: 328, width: 301, height: 138 },
+  textBoxFrame: { x: 36, y: 328, width: 301, height: 138 },
   rulesFlavorDivider: { x: 50, y: 426, width: 275, height: 2 },
   ptBox: { x: 285, y: 452, width: 70, height: 52 },
   powerToughness: { x: 287, y: 469, width: 60, height: 28 },
@@ -732,6 +753,20 @@ const FUTURESHIFTED_TYPELINE_LAYER_RECT: CoordinateRect = { x: 18, y: 17, width:
 const MSE_M15_FUTURE_TEXTBOX_TEXTURE_SIZE = { width: 335, height: 152 };
 const FUTURESHIFTED_TEXTBOX_LAYER_RECT: CoordinateRect = { x: 23, y: 320, width: 335, height: 152 };
 const FUTURESHIFTED_TITLE_TERMINAL_DOT_RECT: CoordinateRect = { x: 348, y: 73, width: 7, height: 7 };
+const SUBJECT_MASK_TITLE_PLATE_OUTSETS = {
+  left: 15,
+  top: 7,
+  right: 12,
+  bottom: 7,
+  radius: 10,
+} as const;
+const SUBJECT_MASK_TYPE_PLATE_OUTSETS = {
+  left: 11,
+  top: 6,
+  right: 13,
+  bottom: 12,
+  radius: 10,
+} as const;
 const TITLE_KERNING_FIX = {
   letterSpacing: 0,
   // Beleren's V kerning pairs render too tight in RN Web TextInput.
@@ -993,7 +1028,7 @@ function securityStampRectStyle(
   return rectStyle(rect);
 }
 
-function TextlessBottomBarLayer() {
+function TextlessBottomBarLayerImpl() {
   return (
     <Svg
       pointerEvents="none"
@@ -1747,6 +1782,13 @@ function CardPreviewComponent({
   const isRetroTreatment = typeFrame === "standard" && frameTreatment === "retro";
   const isBorderlessTreatment =
     typeFrame === "standard" && frameTreatment === "borderless";
+  const baseCardName = faceCard.baseCardName?.trim() ?? "";
+  const showsCardSkinAlias =
+    baseCardName.length > 0 &&
+    typeFrame === "standard" &&
+    (frameTreatment === "standard" || frameTreatment === "borderless") &&
+    !showcaseSpec &&
+    !isRetroTreatment;
   const [isManaCostFocused, setIsManaCostFocused] = useState(false);
   const hasManaSymbols = manaSymbols.length > 0;
   const shouldReserveTitleManaCostSpace =
@@ -1770,10 +1812,18 @@ function CardPreviewComponent({
     frameColors.length > 0
       ? getMseM15StandardColorSecurityStampBackingSource(frameColors, stampBackingColorBlend)
       : null;
+  const borderlessGodzillaLandStampBackingSource =
+    typeFrame === "standard" &&
+    frameTreatment === "borderless" &&
+    showsCardSkinAlias &&
+    stampBackingFrameIdentity === "land"
+      ? getMseM15SecurityStampBackingSource("colorless", null)
+      : null;
   const standardStampBackingSource =
     typeFrame === "saga"
       ? getMseM15SecurityStampBackingSource("black", null)
-      : artifactStampBackingSource ??
+      : borderlessGodzillaLandStampBackingSource ??
+        artifactStampBackingSource ??
         getMseM15SecurityStampBackingSource(stampBackingFrameIdentity, stampBackingColorBlend);
   const mainframeColorCacheKey = artifactMainframeColorSource
     ? `artifact-${mseAccentColorBlend?.mode ?? "single"}-${mseAccentColorBlend?.key ?? frameColors.join("")}`
@@ -1796,7 +1846,13 @@ function CardPreviewComponent({
   const frameEffectSources =
     typeFrame === "saga"
       ? getMseM15SagaOverlaySources(frameIdentity, frameEffects, frameColors)
-      : getMseM15OverlaySources(frameIdentity, frameEffects, frameColors, frameTreatment);
+      : getMseM15OverlaySources(frameIdentity, frameEffects, frameColors, frameTreatment, {
+          usesGodzillaAlias: showsCardSkinAlias,
+        });
+  const usesBorderlessGodzillaLegendaryOverlay =
+    showsCardSkinAlias &&
+    frameTreatment === "borderless" &&
+    frameEffects.includes("legendary");
   const showPowerToughness =
     typeFrame === "saga" || typeFrame === "planeswalker"
       ? false
@@ -1853,6 +1909,12 @@ function CardPreviewComponent({
             regularMseColorBlend,
           )
       : null;
+  const borderlessPinlineRestoreSource =
+    artifactMainframeColorSource ??
+    treatmentFrameSource ??
+    getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend);
+  const borderlessPinlineRestoreSplitSources =
+    artifactMainframeColorSource ? null : borderlessTreatmentFrameBlendSources;
   const showcaseFrameUnderlaySource =
     showcaseSpec ? getShowcaseFrameUnderlaySource(showcaseFrame, frameIdentity) : null;
   const showcaseFrameBlendSources = getTwoColorShowcaseFrameBlendSources(
@@ -1939,16 +2001,12 @@ function CardPreviewComponent({
     shouldReserveTitleManaCostSpace && !isFutureshiftedShowcase && defaultManaRect.width > 0
       ? manaLayout.rect
       : { ...defaultManaRect, x: titleBaseRect.x + titleBaseRect.width + 8, width: 0 };
-  const baseCardName = faceCard.baseCardName?.trim() ?? "";
-  const showsCardSkinAlias =
-    baseCardName.length > 0 &&
-    typeFrame === "standard" &&
-    (frameTreatment === "standard" || frameTreatment === "borderless") &&
-    !showcaseSpec &&
-    !isRetroTreatment;
-  const cardSkinAliasSource = showsCardSkinAlias
+  const cardSkinAliasSource = showsCardSkinAlias && !usesBorderlessGodzillaLegendaryOverlay
     ? getMseM15GodzillaAliasSource(frameIdentity, mseColorBlend)
     : null;
+  const cardSkinAliasRect = usesBorderlessGodzillaLegendaryOverlay
+    ? BORDERLESS_CARD_SKIN_ALIAS_RECT
+    : CARD_SKIN_ALIAS_RECT;
   const titleLayout = getTitleLayout(
     faceCard.name,
     showsCardSkinAlias ? "" : baseCardName,
@@ -1957,22 +2015,31 @@ function CardPreviewComponent({
     isRetroTreatment ? 19.5 : frameTreatment === "etchedFoil" ? 16 : 18,
     isRetroTreatment ? FULL_MAGIC_PACK.fontFamilies.retroTitle : FULL_MAGIC_PACK.fontFamilies.title,
   );
-  const subjectMaskFrameApprovalRects = shouldUseSubjectMaskAsPrimaryArt
-    ? getSubjectMaskFrameApprovalRects(
-        frameTreatment,
+  const textBoxFrameRect = getTextBoxFrameRect(typeFrame, treatmentLayout);
+  const subjectMaskSectionRects = shouldUseSubjectMaskAsPrimaryArt
+      ? getSubjectMaskSectionRects({
         artRect,
-        titleBaseRect,
-        titleManaRect,
+        titleRect: titleBaseRect,
+        manaRect: defaultManaRect,
         typeLineRect,
         setSymbolRect,
-      )
+        textBoxFrameRect,
+      })
+    : [];
+  const activeSubjectMaskSections = new Set(resolveSubjectMaskSections(faceCard.artSubjectMaskSections));
+  const subjectMaskFrameApprovalRects = shouldUseSubjectMaskAsPrimaryArt
+    ? getSubjectMaskApprovalRects(subjectMaskSectionRects, activeSubjectMaskSections)
     : [];
   const subjectMaskArtBounds = shouldUseSubjectMaskAsPrimaryArt
     ? getSubjectMaskExpandedArtBounds(artRect, subjectMaskFrameApprovalRects)
     : artRect;
+  const subjectMaskFitBounds =
+    (faceCard.artSubjectMaskFitMode ?? DEFAULT_SUBJECT_MASK_FIT_MODE) === "artOpening"
+      ? artRect
+      : subjectMaskArtBounds;
   const subjectMaskOverlayBottomY =
-    isBorderlessTreatment && treatmentLayout?.textArea
-      ? treatmentLayout.textArea.y
+    isBorderlessTreatment && !activeSubjectMaskSections.has("text")
+      ? textBoxFrameRect.y
       : CARD_COORDINATES.height;
   const sagaTextLayout = typeFrame === "saga" ? parseSagaText(displayedRulesText) : null;
   const futureTypeSymbolSource = isFutureshiftedShowcase
@@ -2070,11 +2137,10 @@ function CardPreviewComponent({
     displayedFlavorContentHeightScaled,
     10 * scale,
   );
-  // The text box's surrounding frame "ring" (the area just outside the text box,
-  // which otherwise falls through to the frame catch-all) opens the rules sheet.
-  // Expand the text-area rect outward on the sides/bottom to cover that ring.
+  // The textbox furniture ring would otherwise fall through to the frame
+  // catch-all, so include it in the rules-sheet tap target.
   const rulesSheetHitRect = (() => {
-    const base = treatmentLayout?.textArea ?? getTextAreaRect(typeFrame);
+    const base = textBoxFrameRect;
     const sideMargin = 20;
     const bottomMargin = 18;
     const left = Math.max(0, base.x - sideMargin);
@@ -2086,6 +2152,7 @@ function CardPreviewComponent({
       height: Math.min(CARD_COORDINATES.height - base.y, base.height + bottomMargin),
     };
   })();
+  const rulesSheetZoneRect = textBoxFrameRect;
   const handleRulesTextPress = (event: GestureResponderEvent) => {
     if (
       activeSection !== "rules" &&
@@ -2797,24 +2864,16 @@ function CardPreviewComponent({
           {borderlessPinlineOnlyRestoreMaskSource ? (
             exportFlattenMasks ? (
               <FlattenedMaskedFrameLayer
-                source={
-                  treatmentFrameSource ??
-                  artifactMainframeColorSource ??
-                  getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
-                }
-                splitSources={borderlessTreatmentFrameBlendSources}
+                source={borderlessPinlineRestoreSource}
+                splitSources={borderlessPinlineRestoreSplitSources}
                 maskSource={borderlessPinlineOnlyRestoreMaskSource}
                 mirrorX={Boolean(treatmentFrameMirrorX)}
               />
             ) : (
               <MsePinlineOnlyRestoreLayer
                 cacheKey={`mainframe-standard-${frameTreatment}-${regularMseColorBlend?.mode ?? "plain"}-${regularMseColorBlend?.key ?? regularFrameIdentity}-${securityStamped ? "stamped" : "unstamped"}-pinline-only`}
-                source={
-                  treatmentFrameSource ??
-                  artifactMainframeColorSource ??
-                  getMseM15MainframeSource(regularFrameIdentity, "standard", regularMseColorBlend)
-                }
-                splitSources={borderlessTreatmentFrameBlendSources}
+                source={borderlessPinlineRestoreSource}
+                splitSources={borderlessPinlineRestoreSplitSources}
                 maskSource={borderlessPinlineOnlyRestoreMaskSource}
                 mirrorX={Boolean(treatmentFrameMirrorX)}
               />
@@ -2855,9 +2914,26 @@ function CardPreviewComponent({
             renderScale={scale}
             artTransform={artTransform}
             imageAspectRatio={imageAspectRatio}
-            fitRect={subjectMaskArtBounds}
+            fitRect={subjectMaskFitBounds}
           />
         </View>
+      ) : null}
+
+      {shouldUseSubjectMaskAsPrimaryArt && !showArtGenerating ? (
+        <>
+          <SubjectMaskArtOverlay
+            faceCard={faceCard}
+            artRect={artRect}
+            artBounds={subjectMaskFitBounds}
+            artTransform={artTransform}
+            imageAspectRatio={imageAspectRatio}
+            overlayBottomY={subjectMaskOverlayBottomY}
+            approvalRects={subjectMaskFrameApprovalRects}
+            hardApprovalEdges={!isBorderlessTreatment}
+            occludeSoftMaskEdges={isBorderlessTreatment}
+            cacheKey={`foreground-subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
+          />
+        </>
       ) : null}
 
       {typeFrame === "saga" ? (
@@ -2927,20 +3003,6 @@ function CardPreviewComponent({
       {frameEffectSources.map((layer, index) => (
         <MseOverlayLayerView key={`frame-effect-${index}`} cacheKey={`frame-effect-${index}`} layer={layer} />
       ))}
-
-      {shouldUseSubjectMaskAsPrimaryArt && !showArtGenerating ? (
-        <SubjectMaskArtOverlay
-          faceCard={faceCard}
-          artRect={artRect}
-          artBounds={subjectMaskArtBounds}
-          artTransform={artTransform}
-          imageAspectRatio={imageAspectRatio}
-          overlayBottomY={subjectMaskOverlayBottomY}
-          approvalRects={subjectMaskFrameApprovalRects}
-          hardApprovalEdges={!isBorderlessTreatment}
-          cacheKey={`foreground-subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
-        />
-      ) : null}
 
       <WatermarkLayer
         card={card}
@@ -3126,22 +3188,25 @@ function CardPreviewComponent({
         ) : null}
       </Pressable>
 
-      {cardSkinAliasSource ? (
+      {cardSkinAliasSource || showsCardSkinAlias ? (
         <>
-          <StableFrameImage
-            cacheKey={`godzilla-alias-${frameIdentity}-${mseColorBlend?.mode ?? "single"}-${mseColorBlend?.key ?? "none"}`}
-            source={cardSkinAliasSource}
-            resizeMode="stretch"
-            containerStyle={{ zIndex: 4 }}
-          />
+          {cardSkinAliasSource ? (
+            <StableFrameImage
+              cacheKey={`godzilla-alias-${frameIdentity}-${mseColorBlend?.mode ?? "single"}-${mseColorBlend?.key ?? "none"}`}
+              source={cardSkinAliasSource}
+              resizeMode="stretch"
+              containerStyle={{ zIndex: 4 }}
+            />
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Edit base card name"
             onPress={() => onSectionPress("identity", { openSheet: true })}
             style={{
-              ...rectStyle(CARD_SKIN_ALIAS_RECT),
+              ...rectStyle(cardSkinAliasRect),
               alignItems: "center",
-              justifyContent: "center",
+              justifyContent: usesBorderlessGodzillaLegendaryOverlay ? "flex-end" : "center",
+              paddingBottom: usesBorderlessGodzillaLegendaryOverlay ? 1 * scale : 0,
               zIndex: 8,
               ...zone("identity"),
             }}
@@ -3155,9 +3220,9 @@ function CardPreviewComponent({
                 width: "100%",
                 color: "#ffffff",
                 fontFamily: FULL_MAGIC_PACK.fontFamilies.italic,
-                fontSize: 12 * scale,
+                fontSize: (usesBorderlessGodzillaLegendaryOverlay ? 10 : 12) * scale,
                 fontWeight: "400",
-                lineHeight: 14 * scale,
+                lineHeight: (usesBorderlessGodzillaLegendaryOverlay ? 12 : 14) * scale,
                 includeFontPadding: false,
                 textAlign: "center",
               }}
@@ -3577,7 +3642,6 @@ function CardPreviewComponent({
             // rules text) so they stay tappable.
             zIndex: 0,
             elevation: 0,
-            ...zone("rules", 3),
           }}
         />
       ) : null}
@@ -3592,7 +3656,6 @@ function CardPreviewComponent({
             ...showcaseEditableHitPriority,
             zIndex: 3,
             elevation: 3,
-            ...zone("rules", 3),
           }}
         >
           {activeSection === "rules" ? (
@@ -3724,7 +3787,6 @@ function CardPreviewComponent({
             ...showcaseEditableHitPriority,
             zIndex: 3,
             elevation: 3,
-            ...zone("rules", 3),
           }}
         >
           {activeSection === "rules" ? (
@@ -3778,6 +3840,18 @@ function CardPreviewComponent({
             </View>
           )}
         </Pressable>
+      ) : null}
+
+      {typeFrame !== "saga" && !isTextlessTreatment && activeSection === "rules" ? (
+        <View
+          pointerEvents="none"
+          style={{
+            ...rectStyle(rulesSheetZoneRect),
+            zIndex: 31,
+            elevation: 31,
+            ...zone("rules", 3),
+          }}
+        />
       ) : null}
 
       {backFacePowerToughnessText ? (
@@ -7717,7 +7791,7 @@ function getStableFrameInitialSource(
   );
 }
 
-function StableFrameImage({
+function StableFrameImageImpl({
   source,
   cacheKey = "default-frame",
   fill = true,
@@ -7824,7 +7898,7 @@ function StableFrameImage({
   );
 }
 
-function DirectFrameImage({
+function DirectFrameImageImpl({
   source,
   resizeMode = "stretch",
 }: {
@@ -8440,7 +8514,7 @@ function ShowcaseOverlayMaskLayers({
   );
 }
 
-function ShowcaseFrameImage({
+function ShowcaseFrameImageImpl({
   source,
   spec,
   cacheKey,
@@ -8514,7 +8588,7 @@ function ShowcaseFrameImage({
   );
 }
 
-function ShowcaseFrameBlendImage({
+function ShowcaseFrameBlendImageImpl({
   sources,
   spec,
   cacheKey,
@@ -8771,7 +8845,7 @@ function getSvgBlendMaskId(cacheKey: string): string {
   return `${cacheKey}-blend-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
-function MseFrameImage({
+function MseFrameImageImpl({
   source,
   cacheKey,
   mirrorX = false,
@@ -9005,7 +9079,7 @@ function MsePinlineOnlyRestoreLayer({
   );
 }
 
-function MseSplitFrameImage({
+function MseSplitFrameImageImpl({
   sources,
   cacheKey,
   mirrorX = false,
@@ -9120,7 +9194,7 @@ function MseSplitFrameImage({
   );
 }
 
-function MseTextureLayer({
+function MseTextureLayerImpl({
   source,
   sourceSize,
   targetRect,
@@ -9153,7 +9227,7 @@ function MseTextureLayer({
   );
 }
 
-function FutureFrameBlendTextureLayer({
+function FutureFrameBlendTextureLayerImpl({
   colors,
   hybrid,
   texture,
@@ -9239,7 +9313,7 @@ function FutureFrameBlendTextureLayer({
   );
 }
 
-function FutureFrameMulticolorUnderlay({
+function FutureFrameMulticolorUnderlayImpl({
   baseSource,
   blendMaskSource,
   colors,
@@ -9620,6 +9694,7 @@ function SubjectMaskArtOverlay({
   approvalMaskSource,
   approvalRects,
   hardApprovalEdges = false,
+  occludeSoftMaskEdges = false,
   cacheKey,
 }: {
   faceCard: CardDraft;
@@ -9634,6 +9709,9 @@ function SubjectMaskArtOverlay({
   // so the subject shows at full opacity within the approved region instead of
   // fading. Used for non-borderless frames; borderless keeps the soft fade.
   hardApprovalEdges?: boolean;
+  // Draw a hard-alpha subject underlay below the normal soft mask. This keeps
+  // borderless mask edges soft while fully occluding frame pinlines underneath.
+  occludeSoftMaskEdges?: boolean;
   cacheKey: string;
 }) {
   const resolvedArtUri = useSvgCompatibleArtUri(faceCard.artUri);
@@ -9643,6 +9721,8 @@ function SubjectMaskArtOverlay({
   }
 
   const maskId = `${cacheKey}-alpha-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const hardMaskId = `${cacheKey}-hard-alpha-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const hardMaskThresholdId = `${cacheKey}-hard-alpha-threshold`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const approvalMaskId = `${cacheKey}-approval-mask`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const approvalThresholdId = `${cacheKey}-approval-threshold`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const clipId = `${cacheKey}-subject-overlay-clip`.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -9650,6 +9730,10 @@ function SubjectMaskArtOverlay({
     (rect) => rect.width > 0 && rect.height > 0,
   );
   const hasApprovalMask = Boolean(approvalMaskSource || normalizedApprovalRects.length > 0);
+  if (!hasApprovalMask) {
+    return null;
+  }
+
   const fitBounds = artBounds ?? artRect;
   const fittedLayout = getCoverFittedImageLayout(fitBounds.width, fitBounds.height, imageAspectRatio);
   const artX = fitBounds.x + fittedLayout.left;
@@ -9695,6 +9779,35 @@ function SubjectMaskArtOverlay({
 	            preserveAspectRatio="none"
 	          />
 	        </Mask>
+        {occludeSoftMaskEdges ? (
+          <>
+            <Filter id={hardMaskThresholdId} x="0" y="0" width="100%" height="100%">
+              <FeColorMatrix
+                type="matrix"
+                values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -6.5"
+              />
+            </Filter>
+            <Mask
+              id={hardMaskId}
+              x="0"
+              y="0"
+              width={CARD_COORDINATES.width}
+              height={CARD_COORDINATES.height}
+              maskUnits="userSpaceOnUse"
+              {...getSvgMaskTypeProps("alpha")}
+            >
+              <SvgImage
+                href={{ uri: faceCard.artSubjectMaskUri } as never}
+                x={transformedArtRect.x}
+                y={transformedArtRect.y}
+                width={transformedArtRect.width}
+                height={transformedArtRect.height}
+                preserveAspectRatio="none"
+                filter={`url(#${hardMaskThresholdId})`}
+              />
+            </Mask>
+          </>
+        ) : null}
         {hasApprovalMask ? (
           <>
             {approvalMaskSource && hardApprovalEdges ? (
@@ -9735,8 +9848,8 @@ function SubjectMaskArtOverlay({
                   y={rect.y}
                   width={rect.width}
                   height={rect.height}
-                  rx={3}
-                  ry={3}
+                  rx={rect.radius ?? 3}
+                  ry={rect.radius ?? 3}
                   fill="#ffffff"
                 />
               ))}
@@ -9754,6 +9867,20 @@ function SubjectMaskArtOverlay({
       </Defs>
       <G clipPath={`url(#${clipId})`}>
         <G mask={hasApprovalMask ? `url(#${approvalMaskId})` : undefined}>
+          {occludeSoftMaskEdges ? (
+            <G mask={`url(#${hardMaskId})`}>
+              {resolvedArtUri ? (
+                <SvgImage
+                  href={{ uri: resolvedArtUri } as never}
+                  x={transformedArtRect.x}
+                  y={transformedArtRect.y}
+                  width={transformedArtRect.width}
+                  height={transformedArtRect.height}
+                  preserveAspectRatio="none"
+                />
+              ) : null}
+            </G>
+          ) : null}
           <G mask={`url(#${maskId})`}>
             {resolvedArtUri ? (
               <SvgImage
@@ -9772,27 +9899,96 @@ function SubjectMaskArtOverlay({
   );
 }
 
-function getSubjectMaskFrameApprovalRects(
-  treatment: FrameTreatment,
-  artRect: CoordinateRect,
-  titleRect: CoordinateRect,
-  manaRect: CoordinateRect,
-  typeLineRect: CoordinateRect,
-  setSymbolRect: CoordinateRect,
-): CoordinateRect[] {
-  const allowsTypeLineOverlap = treatment === "borderless";
-  const upperArtSurroundRect: CoordinateRect = {
+export type SubjectMaskSectionRect = {
+  id: SubjectMaskSection;
+  label: string;
+  approvalRects: CoordinateRect[];
+  guideRects: CoordinateRect[];
+  rect: CoordinateRect;
+};
+
+function getSubjectMaskSectionRects({
+  artRect,
+  titleRect,
+  manaRect,
+  typeLineRect,
+  setSymbolRect,
+  textBoxFrameRect,
+}: {
+  artRect: CoordinateRect;
+  titleRect: CoordinateRect;
+  manaRect: CoordinateRect;
+  typeLineRect: CoordinateRect;
+  setSymbolRect: CoordinateRect;
+  textBoxFrameRect: CoordinateRect;
+}): SubjectMaskSectionRect[] {
+  const titleRects = filterRenderableRects([
+    expandRectToPlateEnvelope(
+      unionNonEmptyRects([titleRect, manaRect]),
+      SUBJECT_MASK_TITLE_PLATE_OUTSETS,
+    ),
+  ]);
+  const typeLineRects = filterRenderableRects([
+    expandRectToPlateEnvelope(
+      unionNonEmptyRects([typeLineRect, setSymbolRect]),
+      SUBJECT_MASK_TYPE_PLATE_OUTSETS,
+    ),
+  ]);
+  const textRects = filterRenderableRects([
+    textBoxFrameRect,
+  ]);
+  const typeLineGuideRects = filterRenderableRects(
+    typeLineRects.map((rect) => clampRectBottom(rect, textBoxFrameRect.y - 1)),
+  );
+  const titleMaskRect = unionNonEmptyRects(titleRects);
+  const typeLineMaskRect = unionNonEmptyRects(typeLineRects);
+  const textMaskRect = unionNonEmptyRects(textRects);
+  const frameEnvelopeBottom = Math.max(
+    artRect.y + artRect.height,
+    titleMaskRect ? titleMaskRect.y + titleMaskRect.height : 0,
+    typeLineMaskRect ? typeLineMaskRect.y + typeLineMaskRect.height : 0,
+  );
+  const frameEnvelope: CoordinateRect = {
     x: 18,
     y: 18,
     width: CARD_COORDINATES.width - 36,
-    height: Math.max(0, typeLineRect.y - 18),
+    height: Math.max(0, Math.min(CARD_COORDINATES.height - 18, frameEnvelopeBottom) - 18),
   };
+  const frameRects = subtractRects(
+    frameEnvelope,
+    filterRenderableRects([
+      artRect,
+      titleMaskRect,
+      typeLineMaskRect,
+      textMaskRect,
+    ]),
+  );
 
-  return [
-    expandRect(unionNonEmptyRects([upperArtSurroundRect, artRect]), 0, 0),
-    expandRect(unionNonEmptyRects([titleRect, manaRect]), 18, 6),
-    allowsTypeLineOverlap ? expandRect(unionNonEmptyRects([typeLineRect, setSymbolRect]), 4, 2) : null,
-  ].filter((rect): rect is CoordinateRect => Boolean(rect));
+  const sections: Array<SubjectMaskSectionRect | null> = [
+    createSubjectMaskSectionRect("frame", "Frame", frameRects),
+    createSubjectMaskSectionRect("title", "Title", titleRects),
+    createSubjectMaskSectionRect(
+      "typeLine",
+      "Type",
+      typeLineRects,
+      typeLineGuideRects.length > 0 ? typeLineGuideRects : typeLineRects,
+    ),
+    createSubjectMaskSectionRect("text", "Text", textRects),
+  ];
+
+  return sections.filter(
+    (section): section is SubjectMaskSectionRect =>
+      Boolean(section && section.rect.width > 0 && section.rect.height > 0),
+  );
+}
+
+function getSubjectMaskApprovalRects(
+  sectionRects: SubjectMaskSectionRect[],
+  activeSections: Set<SubjectMaskSection>,
+): CoordinateRect[] {
+  return sectionRects
+    .filter((section) => activeSections.has(section.id))
+    .flatMap((section) => section.approvalRects);
 }
 
 function getSubjectMaskExpandedArtBounds(
@@ -9817,17 +10013,139 @@ function unionNonEmptyRects(rects: CoordinateRect[]): CoordinateRect | null {
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-function expandRect(rect: CoordinateRect | null, horizontalInset: number, verticalInset: number): CoordinateRect | null {
+function expandRectToPlateEnvelope(
+  rect: CoordinateRect | null,
+  outsets: { left: number; top: number; right: number; bottom: number; radius?: number },
+): CoordinateRect | null {
   if (!rect) {
     return null;
   }
 
-  const left = Math.max(0, rect.x - horizontalInset);
-  const top = Math.max(0, rect.y - verticalInset);
-  const right = Math.min(CARD_COORDINATES.width, rect.x + rect.width + horizontalInset);
-  const bottom = Math.min(CARD_COORDINATES.height, rect.y + rect.height + verticalInset);
+  const left = Math.max(0, rect.x - outsets.left);
+  const top = Math.max(0, rect.y - outsets.top);
+  const right = Math.min(CARD_COORDINATES.width, rect.x + rect.width + outsets.right);
+  const bottom = Math.min(CARD_COORDINATES.height, rect.y + rect.height + outsets.bottom);
 
-  return { x: left, y: top, width: right - left, height: bottom - top };
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+    radius: outsets.radius,
+  };
+}
+
+function clampRectBottom(rect: CoordinateRect, maxBottom: number): CoordinateRect | null {
+  const bottom = Math.min(rect.y + rect.height, maxBottom);
+
+  if (bottom <= rect.y) {
+    return null;
+  }
+
+  return {
+    ...rect,
+    height: bottom - rect.y,
+  };
+}
+
+function createSubjectMaskSectionRect(
+  id: SubjectMaskSection,
+  label: string,
+  approvalRects: CoordinateRect[],
+  guideRects = approvalRects,
+): SubjectMaskSectionRect | null {
+  const normalizedApprovalRects = filterRenderableRects(approvalRects);
+  const normalizedGuideRects = filterRenderableRects(guideRects);
+  const rect = unionNonEmptyRects(normalizedGuideRects);
+
+  if (!rect) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    approvalRects: normalizedApprovalRects,
+    guideRects: normalizedGuideRects,
+    rect,
+  };
+}
+
+function filterRenderableRects(rects: Array<CoordinateRect | null | undefined>): CoordinateRect[] {
+  return rects
+    .map((rect) => rect ? clampRectToCard(rect) : null)
+    .filter(
+      (rect): rect is CoordinateRect =>
+        Boolean(rect && Number.isFinite(rect.x) && Number.isFinite(rect.y) && rect.width >= 1 && rect.height >= 1),
+    );
+}
+
+function clampRectToCard(rect: CoordinateRect): CoordinateRect | null {
+  const left = clamp(rect.x, 0, CARD_COORDINATES.width);
+  const top = clamp(rect.y, 0, CARD_COORDINATES.height);
+  const right = clamp(rect.x + rect.width, 0, CARD_COORDINATES.width);
+  const bottom = clamp(rect.y + rect.height, 0, CARD_COORDINATES.height);
+
+  if (right <= left || bottom <= top) {
+    return null;
+  }
+
+  return { x: left, y: top, width: right - left, height: bottom - top, radius: rect.radius };
+}
+
+function subtractRects(baseRect: CoordinateRect, cutterRects: CoordinateRect[]): CoordinateRect[] {
+  const base = clampRectToCard(baseRect);
+
+  if (!base) {
+    return [];
+  }
+
+  return cutterRects.reduce(
+    (pieces, cutter) => pieces.flatMap((piece) => subtractRect(piece, cutter)),
+    [base],
+  );
+}
+
+function subtractRect(baseRect: CoordinateRect, cutterRect: CoordinateRect): CoordinateRect[] {
+  const intersection = intersectRects(baseRect, cutterRect);
+
+  if (!intersection) {
+    return [baseRect];
+  }
+
+  const baseRight = baseRect.x + baseRect.width;
+  const baseBottom = baseRect.y + baseRect.height;
+  const intersectionRight = intersection.x + intersection.width;
+  const intersectionBottom = intersection.y + intersection.height;
+
+  return filterRenderableRects([
+    rectFromEdges(baseRect.x, baseRect.y, baseRight, intersection.y),
+    rectFromEdges(baseRect.x, intersectionBottom, baseRight, baseBottom),
+    rectFromEdges(baseRect.x, intersection.y, intersection.x, intersectionBottom),
+    rectFromEdges(intersectionRight, intersection.y, baseRight, intersectionBottom),
+  ]);
+}
+
+function intersectRects(firstRect: CoordinateRect, secondRect: CoordinateRect): CoordinateRect | null {
+  const left = Math.max(firstRect.x, secondRect.x);
+  const top = Math.max(firstRect.y, secondRect.y);
+  const right = Math.min(firstRect.x + firstRect.width, secondRect.x + secondRect.width);
+  const bottom = Math.min(firstRect.y + firstRect.height, secondRect.y + secondRect.height);
+
+  return rectFromEdges(left, top, right, bottom);
+}
+
+function rectFromEdges(left: number, top: number, right: number, bottom: number): CoordinateRect | null {
+  if (right <= left || bottom <= top) {
+    return null;
+  }
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
 function getTransformedCoverImageRect(rect: CoordinateRect, transform: ArtTransform): CoordinateRect {
@@ -9915,6 +10233,51 @@ export function getVisibleArtRectForCard(card: CardDraft): {
   return getArtRect(typeFrame, treatment, showcaseSpec);
 }
 
+export function getSubjectMaskSectionRectsForCard(card: CardDraft): SubjectMaskSectionRect[] {
+  const selectedTypeFrame = card.typeFrame ?? "standard";
+  const isBattleBackFace = selectedTypeFrame === "battle" && isDfcBackFace(card);
+  const isBattleFrontFace = selectedTypeFrame === "battle" && !isBattleBackFace;
+  const isDfcBack = selectedTypeFrame === "dfc" && isDfcBackFace(card);
+  const treatment = isDfcBack ? card.backFrameTreatment ?? "standard" : card.frameTreatment ?? "standard";
+  const typeFrame =
+    isBattleBackFace || isDfcBack || (selectedTypeFrame === "dfc" && shouldRenderDfcFrontWithStandardTreatmentGeometry(treatment))
+      ? "standard"
+      : selectedTypeFrame;
+  const showcaseFrame = isDfcBack
+    ? card.backShowcaseFrame ?? DEFAULT_SHOWCASE_FRAME
+    : card.showcaseFrame ?? DEFAULT_SHOWCASE_FRAME;
+  const showcaseSpec =
+    typeFrame === "standard" && treatment === "showcase"
+      ? getShowcaseFrameSpec(showcaseFrame)
+      : null;
+  const artRect = isBattleFrontFace ? BATTLE_COORDINATES.art : getArtRect(typeFrame, treatment, showcaseSpec);
+  const baseTreatmentLayout = typeFrame === "standard" ? FRAME_TREATMENT_LAYOUTS[treatment] : null;
+  const treatmentLayout =
+    typeFrame === "standard" && showcaseSpec?.id === "futureshifted"
+      ? FUTURESHIFTED_TREATMENT_LAYOUT
+      : typeFrame === "standard" && showcaseSpec?.id === "stellarSights"
+        ? STELLAR_SIGHTS_TREATMENT_LAYOUT
+        : baseTreatmentLayout;
+  const showDfcColorIndicator = shouldShowDfcColorIndicator(typeFrame, card);
+  const typeLineRect =
+    typeFrame === "token"
+      ? getTokenTypeLineRect(getTokenFrameVariant(card.rulesText, card.flavorText))
+      : getTypeLineRect(typeFrame, showDfcColorIndicator);
+  const setSymbolRect =
+    typeFrame === "token"
+      ? getTokenSetSymbolRect(getTokenFrameVariant(card.rulesText, card.flavorText))
+      : getSetSymbolRect(typeFrame);
+
+  return getSubjectMaskSectionRects({
+    artRect,
+    titleRect: treatmentLayout?.name ?? getNameRect(typeFrame, card),
+    manaRect: treatmentLayout?.manaCost ?? CARD_COORDINATES.manaCost,
+    typeLineRect: treatmentLayout?.typeLine ?? typeLineRect,
+    setSymbolRect: treatmentLayout?.setSymbol ?? setSymbolRect,
+    textBoxFrameRect: getTextBoxFrameRect(typeFrame, treatmentLayout),
+  });
+}
+
 export function getVisibleArtAspectRatioForCard(card: CardDraft) {
   const rect = getVisibleArtRectForCard(card);
 
@@ -9997,6 +10360,13 @@ function getMutedInk(ink: string): string {
 
 function getTextAreaRect(typeFrame: TypeFrame): CoordinateRect {
   return TYPE_FRAME_SECTION_RECTS[typeFrame]?.textArea ?? CARD_COORDINATES.textArea;
+}
+
+function getTextBoxFrameRect(
+  typeFrame: TypeFrame,
+  treatmentLayout?: FrameTreatmentLayout | null,
+): CoordinateRect {
+  return treatmentLayout?.textBoxFrame ?? getTextAreaRect(typeFrame);
 }
 
 function getWatermarkRect(typeFrame: TypeFrame, rulesLayout: RulesFlavorLayout): CoordinateRect {
@@ -11486,3 +11856,19 @@ function clamp(value: number, min: number, max: number): number {
 function percent(value: number): `${number}%` {
   return `${value * 100}%`;
 }
+
+// Memoized frame-bitmap leaf layers. These are pure functions of their (source,
+// scalar, cacheKey) props and never read the mutating `card` object, so wrapping
+// them in React.memo lets them bail out of re-render when only card *text*
+// changes — the editor's most frequent update. Declarations above are hoisted,
+// so referencing them here is safe; call sites resolve to these memoized values.
+const StableFrameImage = memo(StableFrameImageImpl);
+const DirectFrameImage = memo(DirectFrameImageImpl);
+const MseFrameImage = memo(MseFrameImageImpl);
+const MseSplitFrameImage = memo(MseSplitFrameImageImpl);
+const ShowcaseFrameImage = memo(ShowcaseFrameImageImpl);
+const ShowcaseFrameBlendImage = memo(ShowcaseFrameBlendImageImpl);
+const MseTextureLayer = memo(MseTextureLayerImpl);
+const FutureFrameBlendTextureLayer = memo(FutureFrameBlendTextureLayerImpl);
+const FutureFrameMulticolorUnderlay = memo(FutureFrameMulticolorUnderlayImpl);
+const TextlessBottomBarLayer = memo(TextlessBottomBarLayerImpl);

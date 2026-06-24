@@ -1,12 +1,12 @@
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
-import { Image as ExpoImage } from "expo-image";
-import { LinearGradient } from "expo-linear-gradient";
-import { useFonts } from "expo-font";
-import { StatusBar } from "expo-status-bar";
-import { ArrowDown, ArrowUp, BookOpen, Bug, Check, ChevronDown, ChevronUp, Database, Download, Eye, Heart, Layers, ListPlus, MessageCircle, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Search, Share2, Shuffle, SlidersHorizontal, Sparkles, Tags, Trash2, Undo2, Upload, UserPlus, Users, X } from "lucide-react-native";
-import { Component, memo, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import {Image as ExpoImage} from "expo-image";
+import {LinearGradient} from "expo-linear-gradient";
+import {useFonts} from "expo-font";
+import {StatusBar} from "expo-status-bar";
+import {ArrowDown, ArrowUp, BookOpen, Check, Database, Download, Layers, ListPlus, Minus, Palette, Pencil, Plus, RefreshCw, RotateCw, Save, Share2, Shuffle, Sparkles, Trash2, Undo2, Upload, UserPlus, Users, X} from "lucide-react-native";
+import {Component, memo, type ErrorInfo, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useReducer, useRef, useState} from "react";
+import {createPortal} from "react-dom";
 import {
   ActivityIndicator,
   Alert,
@@ -30,10 +30,10 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
-import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
-import Svg, { Path } from "react-native-svg";
-import { captureRef as nativeViewShotCaptureRef } from "react-native-view-shot";
+import type {AuthChangeEvent, Session, User as SupabaseUser} from "@supabase/supabase-js";
+import {Gesture, GestureDetector, GestureHandlerRootView} from "react-native-gesture-handler";
+import Svg, {Path} from "react-native-svg";
+import {captureRef as nativeViewShotCaptureRef} from "react-native-view-shot";
 import Animated, {
   Easing,
   runOnJS,
@@ -43,18 +43,21 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { AccountModal } from "@/components/account-modal";
-import { CardBackPicker } from "@/components/card-back-picker";
-import { CardBackPreview } from "@/components/card-back-preview";
-import { CardTransformSurface } from "@/components/card-transform-surface";
+import {AccountModal} from "@/components/account-modal";
+import {CardBackPicker} from "@/components/card-back-picker";
+import {CardBackPreview} from "@/components/card-back-preview";
+import {CardTransformSurface} from "@/components/card-transform-surface";
+import {ArtGeneratorModal, ArtSourceModal, CardBackGeneratorModal, SetSymbolGeneratorModal} from "@/components/art-generator-modals";
+import {CommunityPanel} from "@/components/community-panel";
 import {
   CardPreview,
+  getSubjectMaskSectionRectsForCard,
   getVisibleArtAspectRatioForCard,
   getVisibleArtRectForCard,
 } from "@/components/card-preview";
-import { loadHtmlImage, waitForFlattenedFrameComposites } from "@/lib/export-flatten";
-import { EditorField } from "@/components/editor-field";
-import { HybridSymbolStyleProvider } from "@/components/hybrid-symbol-style-context";
+import {loadHtmlImage, waitForFlattenedFrameComposites} from "@/lib/export-flatten";
+import {EditorField} from "@/components/editor-field";
+import {HybridSymbolStyleProvider} from "@/components/hybrid-symbol-style-context";
 import {
   AchievementCompletionPopups,
   AchievementsModal,
@@ -65,13 +68,12 @@ import {
   type LevelUpToastItem,
   type XpFloatingNumber,
 } from "@/components/progression-hud";
-import { EarlyAccessCodeModal } from "@/components/early-access-code-modal";
-import { GenerationButtonLabel } from "@/components/generation-button-label";
-import { PatchNotesModal } from "@/components/patch-notes-modal";
-import { KeywordLibraryPanel, SectionEditorModal, type GeneratedSetSymbolEntry } from "@/components/section-editor-modal";
-import { SET_SYMBOL_PRESETS, SetSymbolMark } from "@/components/set-symbol";
-import { DEFAULT_CARD_BACK_ID, getCardBackOption, type CustomCardBackEntry } from "@/data/card-backs";
-import { FULL_MAGIC_PACK, getTypeFrameSpec } from "@/data/full-magic-pack";
+import {EarlyAccessCodeModal} from "@/components/early-access-code-modal";
+import {PatchNotesModal} from "@/components/patch-notes-modal";
+import {KeywordLibraryPanel, SectionEditorModal, type GeneratedSetSymbolEntry} from "@/components/section-editor-modal";
+import {SET_SYMBOL_PRESETS, SetSymbolMark} from "@/components/set-symbol";
+import {DEFAULT_CARD_BACK_ID, getCardBackOption, type CustomCardBackEntry} from "@/data/card-backs";
+import {FULL_MAGIC_PACK, getTypeFrameSpec} from "@/data/full-magic-pack";
 import {
   getMseM15FrameTreatmentSource,
   getMseM15MainframeSource,
@@ -83,9 +85,8 @@ import {
   SHOWCASE_FRAMES,
   VISIBLE_SHOWCASE_FRAME_ORDER,
 } from "@/data/showcase-frames";
-import { INITIAL_CARD } from "@/data/sample-card";
+import {INITIAL_CARD} from "@/data/sample-card";
 import {
-  ART_GENERATOR_STYLE_OPTIONS,
   type ArtGeneratorStyleId,
   buildArtGeneratorPrompt,
   buildCardBackGeneratorPrompt,
@@ -107,7 +108,7 @@ import {
   resolveWebMediaUri,
   setWebStorageItem,
 } from "@/lib/web-media-store";
-import { isCardMagicRemoteMediaReference, materializeRemoteCardDraftMedia } from "@/lib/account-media";
+import {isCardMagicRemoteMediaReference, materializeRemoteCardDraftMedia} from "@/lib/account-media";
 import {
   fetchAccountProfile,
   type AccountProfile,
@@ -116,13 +117,7 @@ import {
   addCollaborationSetCard,
   attachCollaborationSetCardImage,
   createCollaborationSetInviteLink,
-  fetchCommunityCards,
-  fetchCommunityCardComments,
-  fetchCommunityFeaturedCard,
   fetchCommunityNotifications,
-  fetchCommunityPolls,
-  fetchCommunitySetCards,
-  fetchCommunitySets,
   fetchCollaborationSetCardDraftForEditing,
   fetchCollaborationSetCards,
   fetchCollaborationSetMembers,
@@ -135,44 +130,32 @@ import {
   findExistingCommunityCardImages,
   fetchRemoteCustomSetSymbols,
   fetchRemoteCardSets,
+  fetchRemoteDeletionTombstones,
   getCommunitySetCardImageStoragePath,
-  markCommunityCardsSeen,
   markCommunityNotificationsRead,
-  createCommunityPoll,
   inviteCollaborationSetMember,
   previewCollaborationSetInviteCode,
   publishCommunityCard,
   redeemCollaborationSetInviteCode,
   removeCollaborationSetCard,
+  removeRemoteDeletedCardTombstone,
+  removeRemoteDeletedSetTombstone,
   replaceRemoteCustomSetSymbols,
   replaceRemoteCardSets,
-  saveCommunityCardComment,
   searchCollaborationInviteProfiles,
-  setCommunityPollStatus,
-  submitCommunityFeedback,
-  submitCommunityPollVote,
-  toggleCommunityCardLike,
-  toggleCommunitySetFollow,
   updateCommunityDisplayName,
   updateRemoteCardRenderedImage,
+  upsertRemoteDeletionTombstones,
   uploadCommunityCardImage,
   uploadCommunityCardImageToPath,
-  uploadCommunityFeedbackScreenshot,
   type AccountCardSetPayload,
   type AccountCustomSetSymbolPayload,
-  type CommunityCardFeedSort,
-  type CommunityCardPagePayload,
-  type CommunityCardCommentPayload,
-  type CommunityCardPayload,
+  type AccountDeletionTombstonesPayload,
   type CommunityNotificationPayload,
-  type CollaborationSetPayload,
-  type CommunityFeedbackType,
-  type CommunityPollPayload,
-  type CommunityPollSelectionType,
   type CommunitySetCardPayload,
-  type CommunitySetPayload,
   type CollaborationInviteProfileSuggestion,
   type CollaborationPendingInvitePayload,
+  type CollaborationSetInviteLinkRole,
   type CollaborationSetInvitePreviewPayload,
   type CollaborationSetMemberPayload,
 } from "@/lib/account-sets";
@@ -189,6 +172,53 @@ import {
   type SubjectMatteDiagnostics,
 } from "@/lib/ai-edge";
 import {
+  getImageDataUriParts,
+  getImageManipulatorExtension,
+  getImageManipulatorMimeType,
+  getImageUriExtension,
+  getImageUriLogDescriptor,
+  readBlobAsDataUri,
+} from "@/lib/image-codec";
+import {
+  createRoughSelectionBrushPath,
+  getMaskEditSourcePoint,
+  getPaddedSubjectMaskCropRegion,
+  getPrimarySubjectComponentMask,
+  getSelectionConstrainedSubjectComponentMask,
+  groupRoughSelectionBrushSamples,
+  scaleSubjectMaskBoxPromptForRequest,
+  scaleSubjectMaskPointPromptsForRequest,
+  SUBJECT_MASK_GEOMETRY_REQUEST_MAX_DIMENSION,
+  SUBJECT_MASK_PAINTED_CROP_MAX_DIMENSION,
+  SUBJECT_MASK_REQUEST_MAX_DIMENSION,
+  type MaskEditDisplayLayout,
+  type RoughSelectionBrushSample,
+  type SubjectMaskCropRegion,
+  type SubjectMaskCropRequest,
+  type SubjectMaskSelectionSample,
+} from "@/lib/subject-mask";
+import {
+  DEFAULT_SUBJECT_MASK_FIT_MODE,
+  normalizeSubjectMaskFitMode,
+  normalizeSubjectMaskSections,
+  resolveSubjectMaskSections,
+} from "@/lib/subject-mask-sections";
+import {CARDMAGIC_APP_VERSION} from "@/lib/app-version";
+import {formatCompactCommentDate} from "@/lib/format-comment-date";
+import type {ArtImageQuality} from "@/lib/art-image-quality";
+import type {ArtLibraryEntry, ArtLibrarySource, CardBackGeneratorMode, SubjectMaskTraceEntry} from "@/types/art";
+import {isReleaseVersionNewer} from "@/lib/semver";
+import {createUuid} from "@/lib/uuid";
+import {getPreviewTypeFrame} from "@/lib/preview-type-frame";
+import type {
+  CardSet,
+  MainScrollBoundaryHandler,
+  MainScrollWindow,
+  PreviewTypeFrame,
+  SetCardSnapshot,
+} from "@/types/app-domain";
+import {
+  createPendingStripeCheckoutPopup,
   createStripeCheckoutUrl,
   fetchRemoteUserProgress,
   hasRedeemedPromotionalCreditCode,
@@ -197,7 +227,7 @@ import {
   type CheckoutProductId,
   type CreditTransactionType,
 } from "@/lib/commerce";
-import { getResizedCommunityImageUrl } from "@/lib/community-image";
+import {getResizedCommunityImageUrl} from "@/lib/community-image";
 import {
   CARDMAGIC_RELEASE_BRANCH,
   CARDMAGIC_VISIBLE_PATCH_NOTES,
@@ -211,20 +241,22 @@ import {
   normalizeManaInput,
 } from "@/lib/card-style";
 import {
-  getDefaultDfcBackPatch,
   getNextDfcFacePatch,
   getEditableCardFace,
   isDfcBackFace,
   isTransformingTypeFrame,
   toDfcFacePatch,
 } from "@/lib/dfc";
-import { createRandomCard } from "@/lib/random-card";
-import { DEFAULT_CARD_COPYRIGHT_LINE } from "@/lib/printing";
+import {
+  DEFAULT_ART_TRANSFORM,
+  cardEditorReducer,
+  createStarterCard,
+  withDefaultCardCredit,
+} from "@/lib/card-editor-reducer";
 import {
   applyProgressEvent,
   canSpendCredits,
   createDefaultUserProgress,
-  CREDIT_SPEND_COSTS,
   getXpLevelState,
   grantPromotionalCredits,
   normalizeUserProgressProfile,
@@ -236,9 +268,9 @@ import {
   type ProgressEventType,
   type UserProgressProfile,
 } from "@/lib/progression";
-import { fetchCardMagicReleaseDeployment, type CardMagicReleaseDeployment } from "@/lib/release-metadata";
-import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { getSplitHalf, getSplitLayout, isSplitTypeFrame, toSplitHalfCard } from "@/lib/split-card";
+import {fetchCardMagicReleaseDeployment, type CardMagicReleaseDeployment} from "@/lib/release-metadata";
+import {isSupabaseConfigured, supabase} from "@/lib/supabase";
+import {getSplitHalf, getSplitLayout, isSplitTypeFrame, toSplitHalfCard} from "@/lib/split-card";
 import {
   ArtTransform,
   CardBackId,
@@ -259,12 +291,11 @@ import {
   SplitCardHalf,
   SplitCardLayout,
   SubjectMaskComponent,
+  SubjectMaskSection,
   TypeFrame,
 } from "@/types/card";
 
 const BORDERLESS_TREATMENT_PREVIEW_SOURCE = require("./assets/card-assets/basic-m15/mse-renderer/treatments/borderless/mask-frame.png");
-const PACKAGE_METADATA = require("./package.json") as { version: string };
-const CARDMAGIC_APP_VERSION = PACKAGE_METADATA.version;
 const CARDMAGIC_SINGLE_EXPORT_PREVIEW_ID = "cardmagic-single-export-preview";
 const CARDMAGIC_BATCH_EXPORT_PREVIEW_ID = "cardmagic-batch-export-preview";
 const PREFETCHED_SET_THUMBNAIL_URLS = new Set<string>();
@@ -304,39 +335,6 @@ function isPublicRenderedCardImageUrl(imageUrl: string | undefined) {
 
 function getSavedSetCardThumbnailUploadId(snapshotId: string) {
   return `set-card-${snapshotId}-thumbnail`;
-}
-
-function parseSemanticVersion(version: string) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
-
-  if (!match) {
-    return null;
-  }
-
-  return [Number(match[1]), Number(match[2]), Number(match[3])] as const;
-}
-
-function compareSemanticVersions(left: string, right: string) {
-  const leftParts = parseSemanticVersion(left);
-  const rightParts = parseSemanticVersion(right);
-
-  if (!leftParts || !rightParts) {
-    return left.localeCompare(right);
-  }
-
-  for (let index = 0; index < leftParts.length; index += 1) {
-    const delta = leftParts[index] - rightParts[index];
-
-    if (delta !== 0) {
-      return delta;
-    }
-  }
-
-  return 0;
-}
-
-function isReleaseVersionNewer(latestVersion: string | undefined, currentVersion: string) {
-  return typeof latestVersion === "string" && compareSemanticVersions(latestVersion, currentVersion) > 0;
 }
 
 function rememberPrefetchedSetThumbnailUrl(imageUrl: string) {
@@ -405,39 +403,6 @@ function mergeSetCardRenderedImageUrl(
   return {
     ...preferredSnapshot,
     renderedImageUrl,
-  };
-}
-
-function getDefaultCardCreditLine(ownerName: string) {
-  const normalizedOwnerName = ownerName.trim();
-
-  if (!normalizedOwnerName || normalizedOwnerName === "CardMagic Creator") {
-    return null;
-  }
-
-  return `${normalizedOwnerName} & ${new Date().getFullYear()} CardMagic`;
-}
-
-function shouldAutofillCardCredit(copyrightLine: string | undefined) {
-  const normalizedCopyrightLine = copyrightLine?.trim();
-
-  return !normalizedCopyrightLine || normalizedCopyrightLine === DEFAULT_CARD_COPYRIGHT_LINE;
-}
-
-function withDefaultCardCredit(card: CardDraft, ownerName: string) {
-  if (!shouldAutofillCardCredit(card.copyrightLine)) {
-    return card;
-  }
-
-  const defaultCreditLine = getDefaultCardCreditLine(ownerName);
-
-  if (!defaultCreditLine) {
-    return card;
-  }
-
-  return {
-    ...card,
-    copyrightLine: defaultCreditLine,
   };
 }
 
@@ -524,21 +489,6 @@ async function copyTextToClipboardOrShare(text: string) {
 
 type InspectorTab = "edit" | "keywords" | "sets" | "community";
 type VisibleInspectorTab = Exclude<InspectorTab, "keywords">;
-type MainScrollBoundaryHandler = (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
-type MainScrollWindow = {
-  offsetY: number;
-  viewportHeight: number;
-};
-
-type SetCardSnapshot = {
-  id: string;
-  savedAt: string;
-  renderedImageUrl?: string;
-  remoteCardId?: string;
-  remoteImageOwnerUserId?: string;
-  authorName?: string;
-  card: CardDraft;
-};
 
 type SetCardImageRenderPhase =
   | "checking-remote"
@@ -572,6 +522,14 @@ function isSetCardImageRenderFailure(status: SetCardImageRenderStatus | undefine
 
 function isSetCardImageRenderProgress(status: SetCardImageRenderStatus | undefined) {
   return Boolean(status && status.phase !== "failed" && status.phase !== "ready-remote");
+}
+
+function isAnonymousSupabaseUser(user: SupabaseUser | null | undefined) {
+  return Boolean(user && "is_anonymous" in user && user.is_anonymous);
+}
+
+function getVisibleAccountUser(user: SupabaseUser | null | undefined) {
+  return isAnonymousSupabaseUser(user) ? null : user ?? null;
 }
 
 type SavedSetCardImageRequest = {
@@ -616,21 +574,6 @@ type CardRecoverySnapshot = {
   card: CardDraft;
 };
 
-type CardSet = {
-  id: string;
-  name: string;
-  code: string;
-  ownerUserId?: string;
-  ownerName?: string;
-  collaborationRole?: CollaborationSetPayload["role"];
-  cardBackId?: CardBackId;
-  setSymbolPreset?: string;
-  setSymbolId?: string;
-  setSymbolUri?: string;
-  setSymbolUsesRarityTreatment?: boolean;
-  cards: SetCardSnapshot[];
-};
-
 type StoredCollaborationSetCache = {
   schemaVersion: 1;
   userId: string;
@@ -646,15 +589,9 @@ type StoredEditorSessionState = {
   inspectorTab: VisibleInspectorTab;
 };
 
-type ArtLibrarySource = "generated" | "added";
-
-type ArtLibraryEntry = {
-  id: string;
-  uri: string;
-  source: ArtLibrarySource;
-  colorIdentity: string;
-  label: string;
-  createdAt: string;
+type LatestSavedSetCardReference = {
+  setId: string;
+  snapshot: SetCardSnapshot;
 };
 
 type AchievementPopup = AchievementDefinition & {
@@ -688,8 +625,6 @@ type CoordinateBounds = {
   width: number;
   height: number;
 };
-
-type PreviewTypeFrame = NonNullable<CardDraft["typeFrame"]> | "standard";
 
 type BatchExportProgress = {
   phase: "rendering" | "packaging";
@@ -849,6 +784,8 @@ const CARD_BACK_MAX_DIMENSION = 1536;
 const AUXILIARY_IMAGE_MAX_DIMENSION = 512;
 const CARD_SET_STORAGE_KEY = "cardmagic.savedSets.v1";
 const COLLABORATION_SET_CACHE_STORAGE_KEY_PREFIX = "cardmagic.collaborationSetsCache.v1";
+const COLLABORATION_SET_SIGN_OUT_PRUNE_DELAY_MS = 2500;
+const COLLABORATION_ROSTER_STALE_MS = 120000;
 const PENDING_COLLABORATION_INVITE_STORAGE_KEY = "cardmagic.pendingCollaborationInvite.v1";
 const COLLABORATION_INVITE_QUERY_PARAM = "setInvite";
 const COLLABORATION_INVITE_QUERY_PARAMS = [
@@ -867,6 +804,7 @@ const CUSTOM_CARD_BACK_STORAGE_KEY = "cardmagic.customCardBacks.v1";
 const DEFAULT_CARD_BACK_RESKIN_ID = "custom:card-back-default-reskin" as CardBackId;
 const GENERATED_SET_SYMBOL_STORAGE_KEY = "cardmagic.generatedSetSymbols.v1";
 const USER_PROGRESS_STORAGE_KEY = "cardmagic.userProgress.v1";
+const CREATOR_TOOLS_VISIBILITY_STORAGE_KEY = "cardmagic.creatorToolsVisible.v1";
 const EARLY_ACCESS_CODE_PROMPT_STORAGE_KEY = "cardmagic.earlyAccessCodePrompt.v1";
 const EARLY_ACCESS_CREDIT_CODE = "EARLYACCESS100";
 const REDEEMED_CREDIT_CODES_STORAGE_KEY = "cardmagic.redeemedCreditCodes.v1";
@@ -909,7 +847,6 @@ const PREVIEW_FLOATING_TOOLBAR_Z_INDEX = 12;
 const PREVIEW_FLOATING_TOOLBAR_MENU_Z_INDEX = 24;
 const EDIT_TAB_VERTICAL_CHROME_HEIGHT = 98;
 const BOTTOM_TAB_BAR_HEIGHT = 62;
-const DEFAULT_ART_TRANSFORM: ArtTransform = { offsetX: 0, offsetY: 0, scale: 1 };
 // Shared stable no-op for read-only CardPreview renders (thumbnails, exports).
 // A module-level reference lets the memoized CardPreview skip re-rendering when
 // its host re-renders, instead of receiving a fresh `() => undefined` each time.
@@ -919,7 +856,6 @@ const ART_ADJUSTMENT_CROP_RADIUS = 6;
 const ART_LIBRARY_MAX_ENTRIES = 96;
 const CUSTOM_CARD_BACK_MAX_ENTRIES = 48;
 const GENERATED_SET_SYMBOL_MAX_ENTRIES = 48;
-const ART_LIBRARY_VISIBLE_THUMBNAIL_LIMIT = 32;
 const SET_GRID_INITIAL_CARD_LIMIT = 12;
 const SET_GRID_PAGE_SIZE = 12;
 const SET_GRID_COMPACT_INITIAL_CARD_LIMIT = 4;
@@ -928,60 +864,15 @@ const SET_GRID_VIRTUAL_OVERSCAN_PX = 900;
 const SET_GRID_COMPACT_VIRTUAL_OVERSCAN_PX = 120;
 const SET_GRID_INITIAL_MOUNT_ROWS = 3;
 const SET_GRID_COMPACT_INITIAL_MOUNT_ROWS = 1;
+const SET_LIST_INITIAL_LIMIT = 80;
+const SET_LIST_PAGE_SIZE = 80;
+const SET_LIST_COMPACT_INITIAL_LIMIT = 24;
+const SET_LIST_COMPACT_PAGE_SIZE = 24;
 const MAIN_SCROLL_WINDOW_UPDATE_THRESHOLD = 96;
 const SET_CARD_THUMBNAIL_RADIUS = 5;
 const COLOR_IDENTITY_SORT_ORDER: ManaColor[] = ["W", "U", "B", "R", "G"];
-const ART_IMAGE_QUALITY_OPTIONS = [
-  {
-    value: "medium",
-    label: "Medium",
-    detail: `${CREDIT_SPEND_COSTS.artImage} credits`,
-    spendCategory: "artImage",
-  },
-  {
-    value: "high",
-    label: "High",
-    detail: `${CREDIT_SPEND_COSTS.artImageHigh} credits`,
-    spendCategory: "artImageHigh",
-  },
-] as const;
-
-type ArtImageQuality = (typeof ART_IMAGE_QUALITY_OPTIONS)[number]["value"];
-type CardBackGeneratorMode = "reskin" | "custom";
-
 type PickedImageAsset = Pick<ImagePicker.ImagePickerAsset, "uri" | "width" | "height">;
 type ArtAdjustmentInitialMode = "crop" | "mask";
-
-type MaskEditDisplayLayout = {
-  cropWidth: number;
-  cropHeight: number;
-  imageLeft: number;
-  imageTop: number;
-  imageWidth: number;
-  imageHeight: number;
-  offsetX: number;
-  offsetY: number;
-  scale: number;
-  coordinateScale: number;
-};
-
-type RoughSelectionBrushSample = {
-  x: number;
-  y: number;
-  strokeId: number;
-};
-
-type SubjectMaskSelectionSample = {
-  x: number;
-  y: number;
-  strokeId?: number;
-};
-
-type SubjectMaskTraceEntry = {
-  id: string;
-  message: string;
-  tone: "info" | "success" | "error";
-};
 
 function createSetGridCardStub(card: CommunitySetCardPayload): CardDraft {
   return normalizeStoredCardDraft({
@@ -1026,6 +917,19 @@ function shouldUseEditorReadySetCardDraft(card: CardDraft) {
 type StoredActiveCardDraft = {
   schemaVersion: 1;
   card: CardDraft;
+  dirty?: boolean;
+  selectedSetId?: string | null;
+  activeSetCardId?: string | null;
+  activeSetCardSetId?: string | null;
+  updatedAt?: string;
+};
+
+type HydratedActiveCardDraft = {
+  card: CardDraft;
+  dirty: boolean;
+  selectedSetId: string | null;
+  activeSetCardId: string | null;
+  activeSetCardSetId: string | null;
 };
 
 type StoredCardRecoverySnapshots = {
@@ -1043,45 +947,6 @@ function hasNativeModule(...moduleNames: string[]) {
 
 function hasAllNativeModules(...moduleNames: string[]) {
   return moduleNames.every((moduleName) => Boolean(NativeModules[moduleName]));
-}
-
-function getImageDataUriParts(uri: string): { extension: string; base64: string } | null {
-  const match = uri.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i);
-
-  if (!match) {
-    return null;
-  }
-
-  const rawExtension = match[1].toLowerCase();
-
-  return {
-    extension: rawExtension === "jpeg" ? "jpg" : rawExtension,
-    base64: match[2],
-  };
-}
-
-function getImageManipulatorMimeType(format: ImageManipulator.SaveFormat) {
-  return String(format).toLowerCase().includes("png") ? "image/png" : "image/jpeg";
-}
-
-function getImageManipulatorExtension(format: ImageManipulator.SaveFormat) {
-  return String(format).toLowerCase().includes("png") ? "png" : "jpg";
-}
-
-function readBlobAsDataUri(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      typeof reader.result === "string"
-        ? resolve(reader.result)
-        : reject(new Error("Image blob could not be converted to a data URI."));
-    };
-    reader.onerror = () => {
-      reject(reader.error ?? new Error("Image blob could not be read."));
-    };
-    reader.readAsDataURL(blob);
-  });
 }
 
 async function readWebImageUriAsDataUri(uri: string, fallbackMimeType: string) {
@@ -1123,17 +988,6 @@ async function materializeBase64ImageUri(base64: string, extension: string, pref
     console.warn("Unable to materialize generated image; keeping data URI fallback.", error);
     return `data:image/${extension === "jpg" ? "jpeg" : extension};base64,${base64}`;
   }
-}
-
-function getImageUriExtension(uri: string, fallback = "png") {
-  const path = uri.split("?")[0]?.split("#")[0] ?? uri;
-  const extension = path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
-
-  if (!extension) {
-    return fallback;
-  }
-
-  return extension === "jpeg" ? "jpg" : extension;
 }
 
 async function materializeExternalImageUri(uri: string, prefix: string) {
@@ -1185,32 +1039,6 @@ async function materializeImageUri(uri: string, prefix: string) {
   }
 
   return materializeExternalImageUri(uri, prefix);
-}
-
-function getImageUriLogDescriptor(uri: string) {
-  if (uri.startsWith("data:")) {
-    return { kind: "data-uri", length: uri.length };
-  }
-
-  if (uri.startsWith("blob:")) {
-    return { kind: "blob-uri", length: uri.length };
-  }
-
-  if (/^https?:\/\//i.test(uri)) {
-    try {
-      const url = new URL(uri);
-
-      return { kind: "remote-uri", origin: url.origin, length: uri.length };
-    } catch {
-      return { kind: "remote-uri", length: uri.length };
-    }
-  }
-
-  if (uri.startsWith("file:")) {
-    return { kind: "file-uri", length: uri.length };
-  }
-
-  return { kind: "uri", length: uri.length };
 }
 
 async function materializeCardDraftImageDataUris(card: CardDraft, prefix: string): Promise<CardDraft> {
@@ -1272,6 +1100,119 @@ async function materializeCardDraftImageDataUris(card: CardDraft, prefix: string
           uri: getImageUriLogDescriptor(component.cutoutUrl),
           error,
         });
+      }
+
+      if (cutoutUrl !== component.cutoutUrl) {
+        changed = true;
+      }
+
+      nextComponents.push({
+        ...component,
+        cutoutUrl,
+      });
+    }
+
+    if (changed) {
+      nextCard = {
+        ...nextCard,
+        [key]: nextComponents,
+      };
+    }
+  };
+
+  await materializeSubjectMaskComponents("artSubjectMaskComponents");
+  await materializeSubjectMaskComponents("backArtSubjectMaskComponents");
+
+  return nextCard;
+}
+
+function cardDraftHasWebMediaReferences(card: CardDraft) {
+  for (const key of COLLABORATION_CACHE_CARD_MEDIA_KEYS) {
+    const uri = card[key];
+
+    if (typeof uri === "string" && isWebMediaReference(uri)) {
+      return true;
+    }
+  }
+
+  for (const key of COLLABORATION_CACHE_SUBJECT_MASK_COMPONENT_KEYS) {
+    const components = card[key];
+
+    if (!Array.isArray(components)) {
+      continue;
+    }
+
+    if (components.some((component) =>
+      typeof component?.cutoutUrl === "string" && isWebMediaReference(component.cutoutUrl)
+    )) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function materializeCardDraftWebMediaReferences(card: CardDraft, prefix: string): Promise<CardDraft> {
+  if (Platform.OS !== "web" || !cardDraftHasWebMediaReferences(card)) {
+    return card;
+  }
+
+  let nextCard = card;
+
+  for (const key of COLLABORATION_CACHE_CARD_MEDIA_KEYS) {
+    const uri = nextCard[key];
+
+    if (typeof uri !== "string" || !isWebMediaReference(uri)) {
+      continue;
+    }
+
+    try {
+      const materializedUri = await resolveWebMediaUri(uri, `image/${getImageUriExtension(uri)}`);
+
+      if (materializedUri !== uri) {
+        nextCard = {
+          ...nextCard,
+          [key]: materializedUri,
+        };
+      }
+    } catch (error) {
+      logStorageWarning("Unable to materialize saved card web-media reference; preserving original URI.", {
+        prefix,
+        field: key,
+        uri: getImageUriLogDescriptor(uri),
+        error,
+      });
+    }
+  }
+
+  const materializeSubjectMaskComponents = async (
+    key: "artSubjectMaskComponents" | "backArtSubjectMaskComponents",
+  ) => {
+    const components = nextCard[key];
+
+    if (!components?.length) {
+      return;
+    }
+
+    let changed = false;
+    const nextComponents: SubjectMaskComponent[] = [];
+
+    for (let index = 0; index < components.length; index += 1) {
+      const component = components[index];
+      let cutoutUrl = component.cutoutUrl;
+
+      if (isWebMediaReference(cutoutUrl)) {
+        try {
+          cutoutUrl = await resolveWebMediaUri(cutoutUrl, `image/${getImageUriExtension(cutoutUrl)}`);
+        } catch (error) {
+          logStorageWarning("Unable to materialize subject-mask web-media reference; preserving original URI.", {
+            prefix,
+            field: key,
+            concept: component.concept,
+            uri: getImageUriLogDescriptor(component.cutoutUrl),
+            error,
+          });
+        }
       }
 
       if (cutoutUrl !== component.cutoutUrl) {
@@ -1517,6 +1458,54 @@ async function persistImageUri(uri: string, prefix: string) {
   return materializeImageUri(uri, prefix);
 }
 
+function shouldPersistWebMediaUri(uri: string | undefined) {
+  if (!uri || isWebMediaReference(uri) || isCardMagicRemoteMediaReference(uri)) {
+    return false;
+  }
+
+  return (
+    uri.startsWith("data:") ||
+    uri.startsWith("blob:") ||
+    uri.startsWith("file:") ||
+    uri.startsWith("content:") ||
+    /^https?:\/\//i.test(uri)
+  );
+}
+
+function cardDraftNeedsWebMediaPersistence(card: CardDraft) {
+  for (const key of COLLABORATION_CACHE_CARD_MEDIA_KEYS) {
+    const uri = card[key];
+
+    if (typeof uri === "string" && shouldPersistWebMediaUri(uri)) {
+      return true;
+    }
+  }
+
+  for (const key of COLLABORATION_CACHE_SUBJECT_MASK_COMPONENT_KEYS) {
+    const components = card[key];
+
+    if (!Array.isArray(components)) {
+      continue;
+    }
+
+    if (components.some((component) =>
+      typeof component?.cutoutUrl === "string" && shouldPersistWebMediaUri(component.cutoutUrl)
+    )) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function cardSetNeedsWebMediaPersistence(set: CardSet) {
+  if (shouldPersistWebMediaUri(set.setSymbolUri)) {
+    return true;
+  }
+
+  return set.cards.some((snapshot) => cardDraftNeedsWebMediaPersistence(snapshot.card));
+}
+
 async function persistCardDraftImageUris(card: CardDraft, prefix: string): Promise<CardDraft> {
   const imageKeys = ["artUri", "artSubjectMaskUri", "backArtUri", "backArtSubjectMaskUri", "setSymbolUri", "watermarkUri"] as const;
   let nextCard = card;
@@ -1603,6 +1592,10 @@ async function persistCardDraftImageUris(card: CardDraft, prefix: string): Promi
 }
 
 async function persistCardSetImageUris(set: CardSet): Promise<CardSet> {
+  if (Platform.OS === "web" && !cardSetNeedsWebMediaPersistence(set)) {
+    return set;
+  }
+
   let changed = false;
   let setSymbolUri = set.setSymbolUri;
   const cards: SetCardSnapshot[] = [];
@@ -1760,79 +1753,6 @@ async function normalizePickedImage(
   }
 }
 
-function createPendingStripeCheckoutPopup() {
-  if (Platform.OS !== "web" || typeof window === "undefined") {
-    return null;
-  }
-
-  const popup = window.open("", "_blank", "popup,width=520,height=760");
-
-  if (!popup) {
-    return null;
-  }
-
-  popup.opener = null;
-  popup.document.title = "Opening Stripe Checkout";
-  popup.document.body.style.margin = "0";
-  popup.document.body.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
-  popup.document.body.style.background = "#f7f8fb";
-
-  const document = popup.document;
-  const main = document.createElement("main");
-  const section = document.createElement("section");
-  const badge = document.createElement("div");
-  const heading = document.createElement("h1");
-  const copy = document.createElement("p");
-
-  Object.assign(main.style, {
-    minHeight: "100vh",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "24px",
-    color: "#111820",
-  });
-  Object.assign(section.style, {
-    maxWidth: "320px",
-    textAlign: "center",
-  });
-  Object.assign(badge.style, {
-    width: "42px",
-    height: "42px",
-    borderRadius: "21px",
-    background: "#111820",
-    color: "#ffffff",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: "900",
-    marginBottom: "14px",
-  });
-  Object.assign(heading.style, {
-    fontSize: "20px",
-    lineHeight: "1.2",
-    margin: "0 0 8px",
-    fontWeight: "900",
-  });
-  Object.assign(copy.style, {
-    fontSize: "14px",
-    lineHeight: "1.45",
-    margin: "0",
-    color: "#5f6570",
-    fontWeight: "700",
-  });
-
-  badge.textContent = "CM";
-  heading.textContent = "Opening Stripe Checkout";
-  copy.textContent = "CardMagic is creating a secure checkout session.";
-  section.append(badge, heading, copy);
-  main.append(section);
-  popup.document.body.replaceChildren(main);
-  popup.focus();
-
-  return popup;
-}
-
 async function openStripeCheckoutUrl(checkoutUrl: string, popup?: Window | null) {
   if (Platform.OS === "web" && typeof window !== "undefined") {
     const checkoutWindow = popup && !popup.closed ? popup : window.open(checkoutUrl, "_blank", "popup,width=520,height=760");
@@ -1861,26 +1781,6 @@ async function openStripeCheckoutUrl(checkoutUrl: string, popup?: Window | null)
 // request body, which keeps concurrent (parallel) fal uploads under the
 // HTTP/2 limit and speeds up inference. Aspect ratio is preserved (width-only
 // resize), so per-axis upscaling during normalization realigns it.
-const SUBJECT_MASK_REQUEST_MAX_DIMENSION = 640;
-const SUBJECT_MASK_GEOMETRY_REQUEST_MAX_DIMENSION = 448;
-const SUBJECT_MASK_PAINTED_CROP_MAX_DIMENSION = 512;
-
-type SubjectMaskCropRegion = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  sourceWidth: number;
-  sourceHeight: number;
-};
-
-type SubjectMaskCropRequest = {
-  uri: string;
-  cropRegion: SubjectMaskCropRegion;
-  width: number;
-  height: number;
-};
-
 type SubjectMatteNormalizeOptions = {
   keepAllComponents?: boolean;
   selectionBoxPrompt?: SubjectMaskBoxPrompt;
@@ -1905,39 +1805,6 @@ function getImageDimensions(uri: string): Promise<{ width: number; height: numbe
   });
 }
 
-function scaleSubjectMaskBoxPromptForRequest(
-  boxPrompt: SubjectMaskBoxPrompt,
-  sourceDimensions: { width: number; height: number },
-  requestMaxDimension = SUBJECT_MASK_REQUEST_MAX_DIMENSION,
-): SubjectMaskBoxPrompt {
-  const scale = requestMaxDimension / sourceDimensions.width;
-
-  return {
-    x_min: Math.max(0, Math.round(boxPrompt.x_min * scale)),
-    y_min: Math.max(0, Math.round(boxPrompt.y_min * scale)),
-    x_max: Math.max(0, Math.round(boxPrompt.x_max * scale)),
-    y_max: Math.max(0, Math.round(boxPrompt.y_max * scale)),
-  };
-}
-
-function scaleSubjectMaskPointPromptsForRequest(
-  pointPrompts: SubjectMaskPointPrompt[] | undefined,
-  sourceDimensions: { width: number; height: number },
-  requestMaxDimension = SUBJECT_MASK_REQUEST_MAX_DIMENSION,
-): SubjectMaskPointPrompt[] | undefined {
-  if (!pointPrompts?.length) {
-    return undefined;
-  }
-
-  const scale = requestMaxDimension / sourceDimensions.width;
-
-  return pointPrompts.map((pointPrompt) => ({
-    ...pointPrompt,
-    x: Math.max(0, Math.round(pointPrompt.x * scale)),
-    y: Math.max(0, Math.round(pointPrompt.y * scale)),
-  }));
-}
-
 async function downscaleImageForMaskRequest(uri: string, requestMaxDimension = SUBJECT_MASK_REQUEST_MAX_DIMENSION) {
   try {
     const result = await ImageManipulator.manipulateAsync(
@@ -1955,31 +1822,6 @@ async function downscaleImageForMaskRequest(uri: string, requestMaxDimension = S
     console.warn("Unable to downscale image for mask request; using full-size art.", error);
     return uri;
   }
-}
-
-function getPaddedSubjectMaskCropRegion(
-  boxPrompt: SubjectMaskBoxPrompt,
-  sourceDimensions: { width: number; height: number },
-): SubjectMaskCropRegion {
-  const boxWidth = Math.max(1, boxPrompt.x_max - boxPrompt.x_min);
-  const boxHeight = Math.max(1, boxPrompt.y_max - boxPrompt.y_min);
-  const paddingX = Math.max(18, Math.min(boxWidth * 0.16, sourceDimensions.width * 0.08));
-  const paddingY = Math.max(18, Math.min(boxHeight * 0.16, sourceDimensions.height * 0.08));
-  const cropWidth = Math.min(sourceDimensions.width, Math.ceil(boxWidth + paddingX * 2));
-  const cropHeight = Math.min(sourceDimensions.height, Math.ceil(boxHeight + paddingY * 2));
-  const centerX = boxPrompt.x_min + boxWidth / 2;
-  const centerY = boxPrompt.y_min + boxHeight / 2;
-  const x = Math.round(clamp(centerX - cropWidth / 2, 0, Math.max(0, sourceDimensions.width - cropWidth)));
-  const y = Math.round(clamp(centerY - cropHeight / 2, 0, Math.max(0, sourceDimensions.height - cropHeight)));
-
-  return {
-    x,
-    y,
-    width: Math.round(cropWidth),
-    height: Math.round(cropHeight),
-    sourceWidth: sourceDimensions.width,
-    sourceHeight: sourceDimensions.height,
-  };
 }
 
 async function createPaintedSelectionCropRequest(
@@ -2347,620 +2189,6 @@ async function createWebSubjectAlphaMask(uri: string, sourceImageUri?: string, o
   return canvas.toDataURL("image/png");
 }
 
-function getPrimarySubjectComponentMask(alpha: Uint8ClampedArray, width: number, height: number) {
-  const pixelCount = width * height;
-  const componentLabels = new Int32Array(pixelCount);
-  componentLabels.fill(-1);
-
-  const seedThreshold = 84;
-  const softThreshold = 28;
-  const stack = new Int32Array(pixelCount);
-  const componentStats: Array<{
-    count: number;
-    alphaSum: number;
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
-  }> = [];
-  let bestLabel = -1;
-  let bestScore = 0;
-  let currentLabel = 0;
-
-  for (let start = 0; start < pixelCount; start += 1) {
-    if (alpha[start] < seedThreshold || componentLabels[start] !== -1) {
-      continue;
-    }
-
-    let stackLength = 0;
-    let count = 0;
-    let alphaSum = 0;
-    let minX = width;
-    let minY = height;
-    let maxX = 0;
-    let maxY = 0;
-
-    stack[stackLength] = start;
-    stackLength += 1;
-    componentLabels[start] = currentLabel;
-
-    while (stackLength > 0) {
-      stackLength -= 1;
-      const pixelIndex = stack[stackLength];
-      const x = pixelIndex % width;
-      const y = Math.floor(pixelIndex / width);
-      count += 1;
-      alphaSum += alpha[pixelIndex];
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-
-      for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
-        for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
-          if (xOffset === 0 && yOffset === 0) {
-            continue;
-          }
-
-          const nextX = x + xOffset;
-          const nextY = y + yOffset;
-
-          if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) {
-            continue;
-          }
-
-          const nextIndex = nextY * width + nextX;
-
-          if (componentLabels[nextIndex] === -1 && alpha[nextIndex] >= seedThreshold) {
-            componentLabels[nextIndex] = currentLabel;
-            stack[stackLength] = nextIndex;
-            stackLength += 1;
-          }
-        }
-      }
-    }
-
-    const componentArea = Math.max(1, (maxX - minX + 1) * (maxY - minY + 1));
-    const fillRatio = count / componentArea;
-    const averageAlpha = alphaSum / Math.max(1, count);
-    const minUsefulPixels = Math.max(96, pixelCount * 0.004);
-    const score = count >= minUsefulPixels ? count * (0.75 + fillRatio) * (averageAlpha / 255) : 0;
-    componentStats[currentLabel] = { count, alphaSum, minX, minY, maxX, maxY };
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestLabel = currentLabel;
-    }
-
-    currentLabel += 1;
-  }
-
-  const keepMask = new Uint8Array(pixelCount);
-
-  if (bestLabel < 0) {
-    for (let index = 0; index < pixelCount; index += 1) {
-      keepMask[index] = alpha[index] >= seedThreshold ? 1 : 0;
-    }
-
-    return keepMask;
-  }
-
-  const primary = componentStats[bestLabel];
-  const accessoryDistance = Math.max(16, Math.round(Math.min(width, height) * 0.13));
-  const primaryAccessoryBounds = {
-    minX: Math.max(0, primary.minX - accessoryDistance),
-    minY: Math.max(0, primary.minY - accessoryDistance * 1.45),
-    maxX: Math.min(width - 1, primary.maxX + accessoryDistance),
-    maxY: Math.min(height - 1, primary.maxY + accessoryDistance * 0.48),
-  };
-  const keptLabels = new Set<number>([bestLabel]);
-
-  componentStats.forEach((stats, label) => {
-    if (label === bestLabel || !stats) {
-      return;
-    }
-
-    const countRatio = stats.count / Math.max(1, primary.count);
-    const averageAlpha = stats.alphaSum / Math.max(1, stats.count);
-    const overlapsAccessoryBounds =
-      stats.maxX >= primaryAccessoryBounds.minX &&
-      stats.minX <= primaryAccessoryBounds.maxX &&
-      stats.maxY >= primaryAccessoryBounds.minY &&
-      stats.minY <= primaryAccessoryBounds.maxY;
-    const closeEnough =
-      getRectDistance(stats, primary) <= accessoryDistance ||
-      overlapsAccessoryBounds;
-    const likelyAccessory =
-      stats.count >= Math.max(24, pixelCount * 0.00018) &&
-      countRatio <= 0.42 &&
-      averageAlpha >= 72 &&
-      closeEnough;
-
-    if (likelyAccessory) {
-      keptLabels.add(label);
-    }
-  });
-
-  for (let index = 0; index < pixelCount; index += 1) {
-    if (keptLabels.has(componentLabels[index])) {
-      keepMask[index] = 1;
-    }
-  }
-
-  const featherMask = new Uint8Array(pixelCount);
-
-  for (let index = 0; index < pixelCount; index += 1) {
-    if (alpha[index] < softThreshold) {
-      continue;
-    }
-
-    const x = index % width;
-    const y = Math.floor(index / width);
-    let nearPrimarySubject = false;
-
-    for (let yOffset = -2; yOffset <= 2 && !nearPrimarySubject; yOffset += 1) {
-      for (let xOffset = -2; xOffset <= 2; xOffset += 1) {
-        const nextX = x + xOffset;
-        const nextY = y + yOffset;
-
-        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) {
-          continue;
-        }
-
-        if (keepMask[nextY * width + nextX]) {
-          nearPrimarySubject = true;
-          break;
-        }
-      }
-    }
-
-    featherMask[index] = nearPrimarySubject ? 1 : 0;
-  }
-
-  return featherMask;
-}
-
-function getSelectionConstrainedSubjectComponentMask(
-  alpha: Uint8ClampedArray,
-  width: number,
-  height: number,
-  selection: {
-    boxPrompt?: SubjectMaskBoxPrompt;
-    pointPrompts?: SubjectMaskPointPrompt[];
-    brushSamples?: SubjectMaskSelectionSample[];
-    brushRadius?: number;
-  },
-) {
-  const pixelCount = width * height;
-  const foregroundPoints = (selection.pointPrompts ?? [])
-    .filter((pointPrompt) => pointPrompt.label === 1)
-    .map((pointPrompt) => ({
-      x: Math.round(clamp(pointPrompt.x, 0, width - 1)),
-      y: Math.round(clamp(pointPrompt.y, 0, height - 1)),
-    }));
-  const backgroundPoints = (selection.pointPrompts ?? [])
-    .filter((pointPrompt) => pointPrompt.label === 0)
-    .map((pointPrompt) => ({
-      x: Math.round(clamp(pointPrompt.x, 0, width - 1)),
-      y: Math.round(clamp(pointPrompt.y, 0, height - 1)),
-    }));
-  const brushSamples = (selection.brushSamples ?? [])
-    .map((sample) => ({
-      x: Math.round(clamp(sample.x, 0, width - 1)),
-      y: Math.round(clamp(sample.y, 0, height - 1)),
-      strokeId: sample.strokeId,
-    }));
-  const positiveSamples = brushSamples.length > 0 ? brushSamples : foregroundPoints;
-
-  let pointBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-
-  if (positiveSamples.length > 0) {
-    pointBox = {
-      minX: Math.min(...positiveSamples.map((point) => point.x)),
-      minY: Math.min(...positiveSamples.map((point) => point.y)),
-      maxX: Math.max(...positiveSamples.map((point) => point.x)),
-      maxY: Math.max(...positiveSamples.map((point) => point.y)),
-    };
-  }
-
-  const promptBox = selection.boxPrompt
-    ? {
-      minX: Math.round(clamp(selection.boxPrompt.x_min, 0, width - 1)),
-      minY: Math.round(clamp(selection.boxPrompt.y_min, 0, height - 1)),
-      maxX: Math.round(clamp(selection.boxPrompt.x_max, 0, width - 1)),
-      maxY: Math.round(clamp(selection.boxPrompt.y_max, 0, height - 1)),
-    }
-    : null;
-  const sourceBox = promptBox && pointBox
-    ? {
-      minX: Math.min(promptBox.minX, pointBox.minX),
-      minY: Math.min(promptBox.minY, pointBox.minY),
-      maxX: Math.max(promptBox.maxX, pointBox.maxX),
-      maxY: Math.max(promptBox.maxY, pointBox.maxY),
-    }
-    : promptBox ?? pointBox;
-
-  if (!sourceBox) {
-    return null;
-  }
-
-  const boxWidth = Math.max(1, sourceBox.maxX - sourceBox.minX);
-  const boxHeight = Math.max(1, sourceBox.maxY - sourceBox.minY);
-  const normalizedBrushRadius = selection.brushRadius && selection.brushRadius > 0
-    ? Math.round(clamp(selection.brushRadius, 8, Math.min(116, Math.min(width, height) * 0.16)))
-    : null;
-  const seedRadius = normalizedBrushRadius
-    ? Math.round(clamp(normalizedBrushRadius * 0.38, 7, Math.min(32, Math.min(width, height) * 0.045)))
-    : Math.round(clamp(Math.min(boxWidth, boxHeight) * 0.1, 10, Math.min(46, Math.min(width, height) * 0.055)));
-  const corridorRadius = positiveSamples.length > 0
-    ? Math.round(clamp(Math.min(Math.max(8, Math.min(boxWidth, boxHeight) * 0.045), seedRadius), 8, Math.min(28, Math.min(width, height) * 0.035)))
-    : seedRadius;
-  const expansionRadiusMax = normalizedBrushRadius
-    ? Math.min(132, Math.max(normalizedBrushRadius + 8, Math.min(width, height) * 0.18))
-    : Math.min(104, Math.max(corridorRadius + 8, Math.min(width, height) * 0.12));
-  const expansionRadius = positiveSamples.length > 1
-    ? normalizedBrushRadius
-      ? Math.round(clamp(normalizedBrushRadius * 1.16, normalizedBrushRadius, expansionRadiusMax))
-      : Math.round(clamp(Math.max(corridorRadius * 3.25, Math.min(boxWidth, boxHeight) * 0.38), corridorRadius + 8, expansionRadiusMax))
-    : corridorRadius;
-  const paddingX = Math.max(12, Math.min(expansionRadius * 0.72, Math.max(20, boxWidth * 0.09), width * 0.05));
-  const paddingY = Math.max(12, Math.min(expansionRadius * 0.72, Math.max(20, boxHeight * 0.09), height * 0.05));
-  const clipBounds = {
-    minX: Math.round(clamp(sourceBox.minX - paddingX, 0, width - 1)),
-    minY: Math.round(clamp(sourceBox.minY - paddingY, 0, height - 1)),
-    maxX: Math.round(clamp(sourceBox.maxX + paddingX, 0, width - 1)),
-    maxY: Math.round(clamp(sourceBox.maxY + paddingY, 0, height - 1)),
-  };
-  const seedThreshold = 84;
-  const softThreshold = 28;
-  const seedMask = new Uint8Array(pixelCount);
-  const expansionMask = positiveSamples.length > 1 ? new Uint8Array(pixelCount) : null;
-  const exclusionMask = backgroundPoints.length > 0 ? new Uint8Array(pixelCount) : null;
-  const seedPoints = positiveSamples.length > 0
-    ? positiveSamples
-    : [{ x: Math.round((sourceBox.minX + sourceBox.maxX) / 2), y: Math.round((sourceBox.minY + sourceBox.maxY) / 2) }];
-
-  for (const point of seedPoints) {
-    paintPointRadiusMask(seedMask, width, height, point, corridorRadius);
-
-    if (expansionMask) {
-      paintPointRadiusMask(expansionMask, width, height, point, expansionRadius);
-    }
-  }
-
-  if (brushSamples.length > 1) {
-    const strokes = groupSubjectMaskSelectionSamples(brushSamples);
-
-    for (const [, samples] of strokes) {
-      for (let index = 1; index < samples.length; index += 1) {
-        paintStrokeCorridorMask(seedMask, width, height, samples[index - 1], samples[index], corridorRadius);
-
-        if (expansionMask) {
-          paintStrokeCorridorMask(expansionMask, width, height, samples[index - 1], samples[index], expansionRadius);
-        }
-      }
-    }
-  } else if (positiveSamples.length > 1) {
-    for (let index = 1; index < positiveSamples.length; index += 1) {
-      paintStrokeCorridorMask(seedMask, width, height, positiveSamples[index - 1], positiveSamples[index], corridorRadius);
-
-      if (expansionMask) {
-        paintStrokeCorridorMask(expansionMask, width, height, positiveSamples[index - 1], positiveSamples[index], expansionRadius);
-      }
-    }
-  }
-
-  if (exclusionMask) {
-    const exclusionRadius = Math.round(clamp((normalizedBrushRadius ?? expansionRadius) * 0.82, 14, Math.min(72, Math.min(width, height) * 0.1)));
-
-    for (const point of backgroundPoints) {
-      paintPointRadiusMask(exclusionMask, width, height, point, exclusionRadius);
-    }
-  }
-
-  const componentLabels = new Int32Array(pixelCount);
-  componentLabels.fill(-1);
-  const stack = new Int32Array(pixelCount);
-  const componentStats: Array<{
-    count: number;
-    seedOverlap: number;
-    exclusionOverlap: number;
-    alphaSum: number;
-  }> = [];
-  let currentLabel = 0;
-  let bestLabel = -1;
-  let bestScore = 0;
-
-  for (let start = 0; start < pixelCount; start += 1) {
-    if (alpha[start] < seedThreshold || componentLabels[start] !== -1) {
-      continue;
-    }
-
-    let stackLength = 0;
-    let count = 0;
-    let seedOverlap = 0;
-    let exclusionOverlap = 0;
-    let alphaSum = 0;
-
-    stack[stackLength] = start;
-    stackLength += 1;
-    componentLabels[start] = currentLabel;
-
-    while (stackLength > 0) {
-      stackLength -= 1;
-      const pixelIndex = stack[stackLength];
-      const x = pixelIndex % width;
-      const y = Math.floor(pixelIndex / width);
-      count += 1;
-      alphaSum += alpha[pixelIndex];
-
-      if (seedMask[pixelIndex]) {
-        seedOverlap += 1;
-      }
-
-      if (exclusionMask?.[pixelIndex]) {
-        exclusionOverlap += 1;
-      }
-
-      for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
-        for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
-          if (xOffset === 0 && yOffset === 0) {
-            continue;
-          }
-
-          const nextX = x + xOffset;
-          const nextY = y + yOffset;
-
-          if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) {
-            continue;
-          }
-
-          const nextIndex = nextY * width + nextX;
-
-          if (componentLabels[nextIndex] === -1 && alpha[nextIndex] >= seedThreshold) {
-            componentLabels[nextIndex] = currentLabel;
-            stack[stackLength] = nextIndex;
-            stackLength += 1;
-          }
-        }
-      }
-    }
-
-    const averageAlpha = alphaSum / Math.max(1, count);
-    const exclusionPenalty = 1 + exclusionOverlap * 0.85;
-    const score = seedOverlap > 0 ? (seedOverlap * averageAlpha) / (Math.sqrt(Math.max(1, count)) * exclusionPenalty) : 0;
-    componentStats[currentLabel] = { count, seedOverlap, exclusionOverlap, alphaSum };
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestLabel = currentLabel;
-    }
-
-    currentLabel += 1;
-  }
-
-  const keepMask = new Uint8Array(pixelCount);
-
-  if (bestLabel < 0) {
-    for (let y = clipBounds.minY; y <= clipBounds.maxY; y += 1) {
-      for (let x = clipBounds.minX; x <= clipBounds.maxX; x += 1) {
-        const pixelIndex = y * width + x;
-        const insideSelectionEnvelope = expansionMask ? expansionMask[pixelIndex] : seedMask[pixelIndex];
-        keepMask[pixelIndex] = alpha[pixelIndex] >= seedThreshold && insideSelectionEnvelope ? 1 : 0;
-      }
-    }
-
-    return keepMask;
-  }
-
-  const bestSeedOverlap = Math.max(1, componentStats[bestLabel]?.seedOverlap ?? 1);
-  const keptLabels = new Set<number>([bestLabel]);
-
-  componentStats.forEach((stats, label) => {
-    if (label === bestLabel || !stats) {
-      return;
-    }
-
-    const seedOverlapEnough = stats.seedOverlap >= Math.max(4, bestSeedOverlap * 0.32);
-    const exclusionRatio = stats.exclusionOverlap / Math.max(1, stats.seedOverlap);
-
-    if (seedOverlapEnough && exclusionRatio < 0.42) {
-      keptLabels.add(label);
-    }
-  });
-
-  for (let y = clipBounds.minY; y <= clipBounds.maxY; y += 1) {
-    for (let x = clipBounds.minX; x <= clipBounds.maxX; x += 1) {
-      const pixelIndex = y * width + x;
-      const insideSelectionEnvelope = !expansionMask || expansionMask[pixelIndex];
-
-      if (insideSelectionEnvelope && !exclusionMask?.[pixelIndex] && keptLabels.has(componentLabels[pixelIndex])) {
-        keepMask[pixelIndex] = 1;
-      }
-    }
-  }
-
-  const featherMask = new Uint8Array(pixelCount);
-
-  for (let y = clipBounds.minY; y <= clipBounds.maxY; y += 1) {
-    for (let x = clipBounds.minX; x <= clipBounds.maxX; x += 1) {
-      const pixelIndex = y * width + x;
-
-      if (alpha[pixelIndex] < softThreshold) {
-        continue;
-      }
-
-      if (exclusionMask?.[pixelIndex]) {
-        continue;
-      }
-
-      let nearSelectedSubject = false;
-
-      for (let yOffset = -2; yOffset <= 2 && !nearSelectedSubject; yOffset += 1) {
-        for (let xOffset = -2; xOffset <= 2; xOffset += 1) {
-          const nextX = x + xOffset;
-          const nextY = y + yOffset;
-
-          if (nextX < clipBounds.minX || nextX > clipBounds.maxX || nextY < clipBounds.minY || nextY > clipBounds.maxY) {
-            continue;
-          }
-
-          if (keepMask[nextY * width + nextX]) {
-            nearSelectedSubject = true;
-            break;
-          }
-        }
-      }
-
-      featherMask[pixelIndex] = nearSelectedSubject ? 1 : 0;
-    }
-  }
-
-  return featherMask;
-}
-
-function groupSubjectMaskSelectionSamples(
-  samples: SubjectMaskSelectionSample[],
-): Array<[number, SubjectMaskSelectionSample[]]> {
-  const strokes = new Map<number, SubjectMaskSelectionSample[]>();
-
-  samples.forEach((sample, index) => {
-    const strokeId = sample.strokeId ?? index;
-    const stroke = strokes.get(strokeId) ?? [];
-    stroke.push(sample);
-    strokes.set(strokeId, stroke);
-  });
-
-  return Array.from(strokes.entries());
-}
-
-function paintPointRadiusMask(
-  mask: Uint8Array,
-  width: number,
-  height: number,
-  point: { x: number; y: number },
-  radius: number,
-) {
-  const radiusSquared = radius * radius;
-  const minX = Math.max(0, Math.floor(point.x - radius));
-  const maxX = Math.min(width - 1, Math.ceil(point.x + radius));
-  const minY = Math.max(0, Math.floor(point.y - radius));
-  const maxY = Math.min(height - 1, Math.ceil(point.y + radius));
-
-  for (let y = minY; y <= maxY; y += 1) {
-    for (let x = minX; x <= maxX; x += 1) {
-      const distanceSquared = (x - point.x) ** 2 + (y - point.y) ** 2;
-
-      if (distanceSquared <= radiusSquared) {
-        mask[y * width + x] = 1;
-      }
-    }
-  }
-}
-
-function paintStrokeCorridorMask(
-  mask: Uint8Array,
-  width: number,
-  height: number,
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-  radius: number,
-) {
-  const radiusSquared = radius * radius;
-  const minX = Math.max(0, Math.floor(Math.min(start.x, end.x) - radius));
-  const maxX = Math.min(width - 1, Math.ceil(Math.max(start.x, end.x) + radius));
-  const minY = Math.max(0, Math.floor(Math.min(start.y, end.y) - radius));
-  const maxY = Math.min(height - 1, Math.ceil(Math.max(start.y, end.y) + radius));
-  const deltaX = end.x - start.x;
-  const deltaY = end.y - start.y;
-  const lengthSquared = deltaX * deltaX + deltaY * deltaY;
-
-  for (let y = minY; y <= maxY; y += 1) {
-    for (let x = minX; x <= maxX; x += 1) {
-      const projection = lengthSquared > 0
-        ? clamp(((x - start.x) * deltaX + (y - start.y) * deltaY) / lengthSquared, 0, 1)
-        : 0;
-      const closestX = start.x + deltaX * projection;
-      const closestY = start.y + deltaY * projection;
-      const distanceSquared = (x - closestX) ** 2 + (y - closestY) ** 2;
-
-      if (distanceSquared <= radiusSquared) {
-        mask[y * width + x] = 1;
-      }
-    }
-  }
-}
-
-function getRectDistance(
-  first: { minX: number; minY: number; maxX: number; maxY: number },
-  second: { minX: number; minY: number; maxX: number; maxY: number },
-) {
-  const xGap = first.maxX < second.minX
-    ? second.minX - first.maxX
-    : second.maxX < first.minX
-      ? first.minX - second.maxX
-      : 0;
-  const yGap = first.maxY < second.minY
-    ? second.minY - first.maxY
-    : second.maxY < first.minY
-      ? first.minY - second.maxY
-      : 0;
-
-  return Math.hypot(xGap, yGap);
-}
-
-function getMaskEditSourcePoint(
-  point: { x: number; y: number },
-  layout: MaskEditDisplayLayout,
-  sourceWidth: number,
-  sourceHeight: number,
-) {
-  const imageCenterX = layout.imageLeft + layout.imageWidth / 2 + layout.offsetX * layout.coordinateScale;
-  const imageCenterY = layout.imageTop + layout.imageHeight / 2 + layout.offsetY * layout.coordinateScale;
-  const localX = (point.x - imageCenterX) / layout.scale + layout.imageWidth / 2;
-  const localY = (point.y - imageCenterY) / layout.scale + layout.imageHeight / 2;
-
-  if (localX < 0 || localX > layout.imageWidth || localY < 0 || localY > layout.imageHeight) {
-    return null;
-  }
-
-  return {
-    x: Math.round((localX / layout.imageWidth) * sourceWidth),
-    y: Math.round((localY / layout.imageHeight) * sourceHeight),
-  };
-}
-
-function groupRoughSelectionBrushSamples(
-  samples: RoughSelectionBrushSample[],
-): Array<[number, RoughSelectionBrushSample[]]> {
-  const strokes = new Map<number, RoughSelectionBrushSample[]>();
-
-  for (const sample of samples) {
-    const stroke = strokes.get(sample.strokeId) ?? [];
-    stroke.push(sample);
-    strokes.set(sample.strokeId, stroke);
-  }
-
-  return Array.from(strokes.entries());
-}
-
-function createRoughSelectionBrushPath(samples: RoughSelectionBrushSample[]) {
-  if (samples.length === 0) {
-    return "";
-  }
-
-  if (samples.length === 1) {
-    const sample = samples[0];
-    return `M ${sample.x.toFixed(1)} ${sample.y.toFixed(1)} h 0.1`;
-  }
-
-  const [firstSample, ...nextSamples] = samples;
-  return [
-    `M ${firstSample.x.toFixed(1)} ${firstSample.y.toFixed(1)}`,
-    ...nextSamples.map((sample) => `L ${sample.x.toFixed(1)} ${sample.y.toFixed(1)}`),
-  ].join(" ");
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -3027,12 +2255,6 @@ function getArtPickerAspect(card: CardDraft): [number, number] {
   return [Math.max(1, Math.round(aspectRatio * denominator)), denominator];
 }
 
-function getPreviewTypeFrame(card: CardDraft): PreviewTypeFrame {
-  return isDfcBackFace(card) && (card.typeFrame === "battle" || card.typeFrame === "dfc")
-    ? "standard"
-    : card.typeFrame ?? "standard";
-}
-
 function getActiveFrameTreatment(card: CardDraft): FrameTreatment {
   return isDfcBackFace(card)
     ? card.backFrameTreatment ?? "standard"
@@ -3091,20 +2313,6 @@ function createDefaultCardSet(name: string, id = createUuid()): CardSet {
     setSymbolPreset: SET_SYMBOL_PRESETS[0].id,
     cards: [],
   };
-}
-
-function createUuid(): string {
-  const randomUuid = globalThis.crypto?.randomUUID?.();
-
-  if (randomUuid) {
-    return randomUuid;
-  }
-
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
-    const value = Math.floor(Math.random() * 16);
-    const nibble = character === "x" ? value : (value & 0x3) | 0x8;
-    return nibble.toString(16);
-  });
 }
 
 function isUuid(value: unknown): value is string {
@@ -3664,6 +2872,28 @@ function mergeAccountCardSets(localSets: CardSet[], remoteSets: CardSet[]): Card
   return normalizeCardSets(mergedSets.length > 0 ? mergedSets : createDefaultCardSets());
 }
 
+function getLatestSavedSetCardReference(sets: CardSet[]): LatestSavedSetCardReference | null {
+  let latestReference: LatestSavedSetCardReference | null = null;
+  let latestSavedAt = Number.NEGATIVE_INFINITY;
+
+  for (const set of normalizeCardSets(sets)) {
+    for (const snapshot of set.cards) {
+      const savedAt = new Date(snapshot.savedAt).getTime();
+
+      if (!Number.isFinite(savedAt)) {
+        continue;
+      }
+
+      if (!latestReference || savedAt > latestSavedAt) {
+        latestReference = { setId: set.id, snapshot };
+        latestSavedAt = savedAt;
+      }
+    }
+  }
+
+  return latestReference;
+}
+
 function isOwnedAccountCardSet(set: CardSet, accountUserId: string) {
   return !set.ownerUserId || set.ownerUserId === accountUserId;
 }
@@ -3698,6 +2928,20 @@ function getSharedAccountCardSets(sets: CardSet[], accountUserId: string): CardS
 
 function getLocalPersistableCardSets(sets: CardSet[]): CardSet[] {
   return normalizeCardSets(sets).filter((set) => !set.ownerUserId);
+}
+
+function isEmptyBootstrapMainSet(set: CardSet) {
+  return set.id === DEFAULT_MAIN_SET_ID && set.cards.length === 0;
+}
+
+function getStoredLocalCardSets(sets: CardSet[]): CardSet[] {
+  return getLocalPersistableCardSets(sets).filter((set) => !isEmptyBootstrapMainSet(set));
+}
+
+function getRemotePersistableAccountCardSets(sets: CardSet[], accountUserId?: string): CardSet[] {
+  const accountSets = accountUserId ? getOwnedAccountCardSets(sets, accountUserId) : normalizeCardSets(sets);
+
+  return accountSets.filter((set) => !isEmptyBootstrapMainSet(set));
 }
 
 async function fetchSharedAccountCardSets(
@@ -3823,6 +3067,51 @@ function normalizeDeletionTombstones(value: unknown): DeletionTombstones {
   return { sets, cards };
 }
 
+function mergeDeletionTombstones(
+  first: DeletionTombstones,
+  second: AccountDeletionTombstonesPayload,
+): DeletionTombstones {
+  const setsById = new Map<string, DeletedSetTombstone>();
+  const cardsByKey = new Map<string, DeletedCardTombstone>();
+
+  const chooseNewerDeletedAt = <T extends { deletedAt: string }>(current: T | undefined, candidate: T) => {
+    if (!current) {
+      return candidate;
+    }
+
+    return new Date(candidate.deletedAt).getTime() >= new Date(current.deletedAt).getTime()
+      ? candidate
+      : current;
+  };
+
+  for (const entry of normalizeDeletionTombstones(first).sets) {
+    setsById.set(entry.id, chooseNewerDeletedAt(setsById.get(entry.id), entry));
+  }
+
+  for (const entry of normalizeDeletionTombstones(second).sets) {
+    setsById.set(entry.id, chooseNewerDeletedAt(setsById.get(entry.id), entry));
+  }
+
+  for (const entry of normalizeDeletionTombstones(first).cards) {
+    const key = `${entry.setId}:${entry.cardId}`;
+    cardsByKey.set(key, chooseNewerDeletedAt(cardsByKey.get(key), entry));
+  }
+
+  for (const entry of normalizeDeletionTombstones(second).cards) {
+    const key = `${entry.setId}:${entry.cardId}`;
+    cardsByKey.set(key, chooseNewerDeletedAt(cardsByKey.get(key), entry));
+  }
+
+  return normalizeDeletionTombstones({
+    sets: Array.from(setsById.values()),
+    cards: Array.from(cardsByKey.values()),
+  });
+}
+
+function deletionTombstonesEqual(first: DeletionTombstones, second: DeletionTombstones) {
+  return JSON.stringify(normalizeDeletionTombstones(first)) === JSON.stringify(normalizeDeletionTombstones(second));
+}
+
 function applyDeletionTombstonesToSets(sets: CardSet[], tombstones: DeletionTombstones): CardSet[] {
   const deletedSetIds = new Set(tombstones.sets.map((entry) => entry.id));
   const deletedCardIdsBySetId = new Map<string, Set<string>>();
@@ -3934,7 +3223,7 @@ function userProgressProfilesEqual(first: UserProgressProfile, second: UserProgr
 }
 
 function toAccountCardSetPayloads(sets: CardSet[], accountUserId?: string): AccountCardSetPayload[] {
-  const accountSets = accountUserId ? getOwnedAccountCardSets(sets, accountUserId) : normalizeCardSets(sets);
+  const accountSets = getRemotePersistableAccountCardSets(sets, accountUserId);
 
   return accountSets.map((set) => ({
     id: set.id,
@@ -3947,6 +3236,50 @@ function toAccountCardSetPayloads(sets: CardSet[], accountUserId?: string): Acco
     setSymbolUsesRarityTreatment: set.setSymbolUsesRarityTreatment,
     cards: set.cards,
   }));
+}
+
+async function toRemotePersistableAccountCardSetPayloads(
+  sets: CardSet[],
+  accountUserId?: string,
+): Promise<AccountCardSetPayload[]> {
+  const payloads = toAccountCardSetPayloads(sets, accountUserId);
+  const remotePayloads: AccountCardSetPayload[] = [];
+
+  for (const set of payloads) {
+    let setSymbolUri = set.setSymbolUri;
+
+    if (setSymbolUri && isWebMediaReference(setSymbolUri)) {
+      try {
+        setSymbolUri = await resolveWebMediaUri(setSymbolUri, `image/${getImageUriExtension(setSymbolUri)}`);
+      } catch (error) {
+        logStorageWarning("Unable to materialize set symbol web-media reference before Supabase sync.", {
+          setId: set.id,
+          uri: getImageUriLogDescriptor(setSymbolUri),
+          error,
+        });
+      }
+    }
+
+    const cards: AccountCardSetPayload["cards"] = [];
+
+    for (const snapshot of set.cards) {
+      cards.push({
+        ...snapshot,
+        card: await materializeCardDraftWebMediaReferences(
+          snapshot.card,
+          `remote-set-${set.id}-${snapshot.id}`,
+        ),
+      });
+    }
+
+    remotePayloads.push({
+      ...set,
+      setSymbolUri,
+      cards,
+    });
+  }
+
+  return remotePayloads;
 }
 
 function toAccountCustomSetSymbolPayloads(symbols: GeneratedSetSymbolEntry[]): AccountCustomSetSymbolPayload[] {
@@ -4049,50 +3382,13 @@ function withResolvedCardBack(card: CardDraft, set?: CardSet): CardDraft {
   };
 }
 
-function hasOwnPatchKey<T extends object>(patch: Partial<T>, key: keyof T) {
-  return Object.prototype.hasOwnProperty.call(patch, key);
-}
-
-function getFrameGeometryArtResetPatch(current: CardDraft, patch: Partial<CardDraft>): Partial<CardDraft> {
-  const nextTypeFrame = hasOwnPatchKey(patch, "typeFrame") ? patch.typeFrame : current.typeFrame;
-  const nextFrameTreatment = hasOwnPatchKey(patch, "frameTreatment")
-    ? patch.frameTreatment
-    : current.frameTreatment;
-  const nextBackFrameTreatment = hasOwnPatchKey(patch, "backFrameTreatment")
-    ? patch.backFrameTreatment
-    : current.backFrameTreatment;
-  const nextShowcaseFrame = hasOwnPatchKey(patch, "showcaseFrame")
-    ? patch.showcaseFrame
-    : current.showcaseFrame;
-  const nextBackShowcaseFrame = hasOwnPatchKey(patch, "backShowcaseFrame")
-    ? patch.backShowcaseFrame
-    : current.backShowcaseFrame;
-  const typeFrameChanged = (current.typeFrame ?? "standard") !== (nextTypeFrame ?? "standard");
-  const treatmentChanged = (current.frameTreatment ?? "standard") !== (nextFrameTreatment ?? "standard");
-  const backTreatmentChanged =
-    (current.backFrameTreatment ?? "standard") !== (nextBackFrameTreatment ?? "standard");
-  const showcaseChanged =
-    (current.showcaseFrame ?? DEFAULT_SHOWCASE_FRAME) !== (nextShowcaseFrame ?? DEFAULT_SHOWCASE_FRAME);
-  const backShowcaseChanged =
-    (current.backShowcaseFrame ?? DEFAULT_SHOWCASE_FRAME) !==
-    (nextBackShowcaseFrame ?? DEFAULT_SHOWCASE_FRAME);
-
-  if (!typeFrameChanged && !treatmentChanged && !backTreatmentChanged && !showcaseChanged && !backShowcaseChanged) {
-    return {};
-  }
-
-  const resetFrontArt = typeFrameChanged || treatmentChanged || showcaseChanged;
-  const resetBackArt = typeFrameChanged || backTreatmentChanged || backShowcaseChanged;
-
-  return {
-    ...(resetFrontArt && current.artUri ? { artTransform: DEFAULT_ART_TRANSFORM } : {}),
-    ...(resetBackArt && current.backArtUri ? { backArtTransform: DEFAULT_ART_TRANSFORM } : {}),
-  };
-}
-
 type StoredCardRecord = Record<string, any>;
 
 function logStorageInfo(message: string, detail?: unknown) {
+  if (!__DEV__) {
+    return;
+  }
+
   if (detail === undefined) {
     console.info(`${STORAGE_LOG_PREFIX} ${message}`);
     return;
@@ -4460,6 +3756,10 @@ function normalizeStoredCardDraft(value: unknown): CardDraft {
   normalized.backArtSubjectMaskDisabled = getOptionalBooleanField(source, "backArtSubjectMaskDisabled");
   normalized.artSubjectMaskComponents = normalizeSubjectMaskComponentsField(source.artSubjectMaskComponents);
   normalized.backArtSubjectMaskComponents = normalizeSubjectMaskComponentsField(source.backArtSubjectMaskComponents);
+  normalized.artSubjectMaskSections = normalizeSubjectMaskSections(source.artSubjectMaskSections);
+  normalized.backArtSubjectMaskSections = normalizeSubjectMaskSections(source.backArtSubjectMaskSections);
+  normalized.artSubjectMaskFitMode = normalizeSubjectMaskFitMode(source.artSubjectMaskFitMode);
+  normalized.backArtSubjectMaskFitMode = normalizeSubjectMaskFitMode(source.backArtSubjectMaskFitMode);
   normalized.setSymbolUsesRarityTreatment = getOptionalBooleanField(source, "setSymbolUsesRarityTreatment");
   normalized.watermarkOpacity = getOptionalNumberField(source, "watermarkOpacity");
   normalized.watermarkScale = getOptionalNumberField(source, "watermarkScale");
@@ -4882,6 +4182,11 @@ async function loadStoredCardSets(): Promise<CardSet[] | null> {
       });
     }
 
+    if (Platform.OS === "web") {
+      logStorageInfo("Deferred saved set media materialization for web startup.", getCardSetStorageSummary(repairedPayload.sets));
+      return repairedPayload.sets;
+    }
+
     const materializedSets = await materializeCardSetsImageDataUris(repairedPayload.sets);
 
     logStorageInfo("Materialized saved set image URIs.", getCardSetStorageSummary(materializedSets));
@@ -4911,7 +4216,7 @@ async function loadStoredDeletionTombstones(): Promise<DeletionTombstones> {
   }
 }
 
-async function loadStoredActiveCardDraft(): Promise<CardDraft | null> {
+async function loadStoredActiveCardDraft(): Promise<HydratedActiveCardDraft | null> {
   try {
     const rawCard =
       Platform.OS === "web" && typeof window !== "undefined"
@@ -4923,11 +4228,15 @@ async function loadStoredActiveCardDraft(): Promise<CardDraft | null> {
     }
 
     const parsed = JSON.parse(rawCard) as unknown;
-    const candidate =
+    const storedPayload =
       Boolean(parsed) &&
       typeof parsed === "object" &&
       (parsed as StoredActiveCardDraft).schemaVersion === 1
-        ? (parsed as StoredActiveCardDraft).card
+        ? (parsed as StoredActiveCardDraft)
+        : null;
+    const candidate =
+      storedPayload
+        ? storedPayload.card
         : parsed;
 
     if (!isCardDraft(candidate)) {
@@ -4945,7 +4254,16 @@ async function loadStoredActiveCardDraft(): Promise<CardDraft | null> {
       return null;
     }
 
-    return await materializeCardDraftImageDataUris(normalizedCard, "active-card");
+    const materializedCard = await materializeCardDraftImageDataUris(normalizedCard, "active-card");
+
+    return {
+      card: materializedCard,
+      dirty: storedPayload && typeof storedPayload.dirty === "boolean" ? storedPayload.dirty : true,
+      selectedSetId: typeof storedPayload?.selectedSetId === "string" ? storedPayload.selectedSetId : null,
+      activeSetCardId: typeof storedPayload?.activeSetCardId === "string" ? storedPayload.activeSetCardId : null,
+      activeSetCardSetId:
+        typeof storedPayload?.activeSetCardSetId === "string" ? storedPayload.activeSetCardSetId : null,
+    };
   } catch (error) {
     console.warn("Unable to load active CardMagic draft.", error);
     return null;
@@ -5172,6 +4490,20 @@ async function loadStoredUserProgress(): Promise<UserProgressProfile> {
   }
 }
 
+async function loadStoredCreatorToolsVisible(): Promise<boolean> {
+  try {
+    const rawValue =
+      Platform.OS === "web" && typeof window !== "undefined"
+        ? window.localStorage.getItem(CREATOR_TOOLS_VISIBILITY_STORAGE_KEY)
+        : await (await getNativeStorageAdapter())?.getItem(CREATOR_TOOLS_VISIBILITY_STORAGE_KEY);
+
+    return rawValue === "true";
+  } catch (error) {
+    console.warn("Unable to load CardMagic creator-tools visibility.", error);
+    return false;
+  }
+}
+
 async function loadEarlyAccessCodePromptShown(userId?: string | null): Promise<boolean> {
   try {
     const rawValue =
@@ -5335,7 +4667,7 @@ async function storeRedeemedCreditCodes(codes: Set<string>) {
 
 async function storeCardSets(sets: CardSet[]) {
   try {
-    const persistedSets = await persistCardSetsImageUris(getLocalPersistableCardSets(sets));
+    const persistedSets = await persistCardSetsImageUris(getStoredLocalCardSets(sets));
     const serializedSets = JSON.stringify(persistedSets);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -5483,12 +4815,25 @@ async function storeDeletionTombstones(tombstones: DeletionTombstones) {
   }
 }
 
-async function storeActiveCardDraft(card: CardDraft) {
+async function storeActiveCardDraft(
+  card: CardDraft,
+  metadata?: {
+    dirty?: boolean;
+    selectedSetId?: string | null;
+    activeSetCardId?: string | null;
+    activeSetCardSetId?: string | null;
+  },
+) {
   try {
     const persistedCard = await persistCardDraftImageUris(cloneCardDraft(card), "active-card");
     const serializedCard = JSON.stringify({
       schemaVersion: 1,
       card: persistedCard,
+      dirty: metadata?.dirty ?? true,
+      selectedSetId: metadata?.selectedSetId ?? null,
+      activeSetCardId: metadata?.activeSetCardId ?? null,
+      activeSetCardSetId: metadata?.activeSetCardSetId ?? null,
+      updatedAt: new Date().toISOString(),
     } satisfies StoredActiveCardDraft);
 
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -5499,6 +4844,19 @@ async function storeActiveCardDraft(card: CardDraft) {
     await (await getNativeStorageAdapter())?.setItem(ACTIVE_CARD_STORAGE_KEY, serializedCard);
   } catch (error) {
     console.warn("Unable to persist active CardMagic draft.", error);
+  }
+}
+
+async function clearStoredActiveCardDraft() {
+  try {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      await setWebStorageItem(ACTIVE_CARD_STORAGE_KEY, "");
+      return;
+    }
+
+    await (await getNativeStorageAdapter())?.setItem(ACTIVE_CARD_STORAGE_KEY, "");
+  } catch (error) {
+    console.warn("Unable to clear active CardMagic draft.", error);
   }
 }
 
@@ -5616,6 +4974,21 @@ async function storeUserProgress(profile: UserProgressProfile) {
     await (await getNativeStorageAdapter())?.setItem(USER_PROGRESS_STORAGE_KEY, serializedProfile);
   } catch (error) {
     console.warn("Unable to persist CardMagic user progression.", error);
+  }
+}
+
+async function storeCreatorToolsVisible(visible: boolean) {
+  try {
+    const serializedVisibility = visible ? "true" : "false";
+
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      window.localStorage.setItem(CREATOR_TOOLS_VISIBILITY_STORAGE_KEY, serializedVisibility);
+      return;
+    }
+
+    await (await getNativeStorageAdapter())?.setItem(CREATOR_TOOLS_VISIBILITY_STORAGE_KEY, serializedVisibility);
+  } catch (error) {
+    console.warn("Unable to persist CardMagic creator-tools visibility.", error);
   }
 }
 
@@ -7395,35 +6768,6 @@ async function exportCardMagicPng(fileName: string, target: View | null) {
   }
 }
 
-function createNextBlankCard(previous: CardDraft): CardDraft {
-  return {
-    ...INITIAL_CARD,
-    artist: previous.artist,
-    setCode: previous.setCode,
-    collectorNumber: getNextCollectorNumber(previous.collectorNumber),
-    setSymbolPreset: previous.setSymbolPreset,
-    setSymbolUri: previous.setSymbolUri,
-    cardBackId: previous.cardBackId,
-  };
-}
-
-function createStarterCard(): CardDraft {
-  return createRandomCard(INITIAL_CARD);
-}
-
-function getNextCollectorNumber(value: string): string {
-  const match = value.trim().match(/^(\D*)(\d+)(\D*)$/);
-
-  if (!match) {
-    return value.trim() ? value : "2";
-  }
-
-  const [, prefix, numberText, suffix] = match;
-  const nextNumber = String(Number(numberText) + 1).padStart(numberText.length, "0");
-
-  return `${prefix}${nextNumber}${suffix}`;
-}
-
 function FrameChangeMenu({
   open,
   menuWidth,
@@ -7553,7 +6897,7 @@ export default function App() {
   useMobileWebInputZoomGuard();
   useWebTextSelectionGuard();
 
-  const [card, setCard] = useState<CardDraft>(() => createStarterCard());
+  const [card, dispatchCard] = useReducer(cardEditorReducer, null, createStarterCard);
   const [activeSection, setActiveSection] = useState<CardSection | null>(null);
   const [sheetSection, setSheetSection] = useState<CardSection | null>(null);
   const previewBoundsRef = useRef<CoordinateBounds | null>(null);
@@ -7584,6 +6928,8 @@ export default function App() {
   const generatedSetSymbolsRef = useRef<GeneratedSetSymbolEntry[]>(generatedSetSymbols);
   const [userProgress, setUserProgress] = useState<UserProgressProfile>(() => createDefaultUserProgress());
   const userProgressRef = useRef(userProgress);
+  const [creatorToolsVisible, setCreatorToolsVisible] = useState(false);
+  const [creatorToolsVisibilityHydrated, setCreatorToolsVisibilityHydrated] = useState(false);
   const [previewToolbarPosition, setPreviewToolbarPosition] = useState<PreviewToolbarPosition | null>(null);
   const previewToolbarPositionRef = useRef<PreviewToolbarPosition | null>(null);
   const previewToolbarDragStartRef = useRef<PreviewToolbarPosition | null>(null);
@@ -7597,12 +6943,17 @@ export default function App() {
   const activeSetCardIdRef = useRef(activeSetCardId);
   const [activeSetCardSetId, setActiveSetCardSetId] = useState<string | null>(null);
   const activeSetCardSetIdRef = useRef(activeSetCardSetId);
+  const storedSessionCardRestoreAttemptedRef = useRef(false);
   const [cardHasUnsavedEdits, setCardHasUnsavedEdits] = useState(false);
   const cardHasUnsavedEditsRef = useRef(cardHasUnsavedEdits);
-  const [newSetName, setNewSetName] = useState("");
   const [previewRotated, setPreviewRotated] = useState(false);
   const previewRotateIconDegrees = useSharedValue(0);
   const previewToolbarTransition = useSharedValue(1);
+  // Live drag translation for the floating toolbar, driven entirely on the UI
+  // thread. Dragging updates this shared value (no React state, no App re-render
+  // per frame); the final docked position is committed to React state only on
+  // release. See commitPreviewToolbarDrag.
+  const previewToolbarDragOffset = useSharedValue({ x: 0, y: 0 });
   const [suppressPreviewFlipTransition, setSuppressPreviewFlipTransition] = useState(false);
   const [cardActionMenuOpen, setCardActionMenuOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
@@ -7625,8 +6976,10 @@ export default function App() {
   const [artGeneratorOpen, setArtGeneratorOpen] = useState(false);
   const [creditStoreOpen, setCreditStoreOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [accountPasswordRecoveryMode, setAccountPasswordRecoveryMode] = useState(false);
   const [earlyAccessCodeOpen, setEarlyAccessCodeOpen] = useState(false);
   const [accountUser, setAccountUser] = useState<SupabaseUser | null>(null);
+  const [accountAuthHydrated, setAccountAuthHydrated] = useState(!isSupabaseConfigured);
   const [accountProfile, setAccountProfile] = useState<AccountProfile | null>(null);
   const [communityNotifications, setCommunityNotifications] = useState<CommunityNotificationPayload[]>([]);
   const [communityNotificationsLoading, setCommunityNotificationsLoading] = useState(false);
@@ -7666,8 +7019,7 @@ export default function App() {
   const [subjectMaskBusy, setSubjectMaskBusy] = useState(false);
   const [subjectMaskStatus, setSubjectMaskStatus] = useState<string | null>(null);
   const [subjectMaskError, setSubjectMaskError] = useState<string | null>(null);
-  const [subjectMaskDiagnostics, setSubjectMaskDiagnostics] = useState<SubjectMatteDiagnostics | null>(null);
-  const [subjectMaskTrace, setSubjectMaskTrace] = useState<SubjectMaskTraceEntry[]>([]);
+  const [, setSubjectMaskTrace] = useState<SubjectMaskTraceEntry[]>([]);
   // Per-subject cutouts from the last prompted segmentation, each toggleable on/off.
   const [subjectMaskComponents, setSubjectMaskComponents] = useState<SubjectMaskComponent[]>([]);
   const subjectMaskSourceUriRef = useRef<string | null>(null);
@@ -7696,6 +7048,9 @@ export default function App() {
   const [generatedSetSymbolsHydrated, setGeneratedSetSymbolsHydrated] = useState(false);
   const [editorSessionHydrated, setEditorSessionHydrated] = useState(false);
   const [userProgressHydrated, setUserProgressHydrated] = useState(false);
+  const activeDraftHadStoredPayloadRef = useRef(false);
+  const localCardSetsHadStoredPayloadRef = useRef(false);
+  const localEditorSessionHadStoredPayloadRef = useRef(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [showReturnToTop, setShowReturnToTop] = useState(false);
   const [mainScrollWindow, setMainScrollWindow] = useState<MainScrollWindow | null>(null);
@@ -7786,15 +7141,7 @@ export default function App() {
       return;
     }
 
-    setCard((current) => {
-      const creditedCard = withDefaultCardCredit(current, accountFooterOwnerName);
-
-      if (creditedCard === current) {
-        return current;
-      }
-
-      return creditedCard;
-    });
+    dispatchCard({ type: "applyDefaultCredit", ownerName: accountFooterOwnerName });
   }, [accountFooterOwnerName, accountUser]);
   const isSplitFrame = isSplitTypeFrame(card);
   const splitFrameSummary = useMemo(() => {
@@ -8160,72 +7507,49 @@ export default function App() {
     [previewToolbarViewportHeight, width],
   );
 
-  const updatePreviewToolbarDrag = useCallback(
+  // Resolves the final docked toolbar position from the drag's total
+  // translation and commits it to React state once, on release. During the drag
+  // itself the toolbar is moved purely via `previewToolbarDragOffset` (UI
+  // thread), so App() no longer re-renders on every pointer frame. Orientation
+  // docking and edge clamping resolve here, on release.
+  const commitPreviewToolbarDrag = useCallback(
     (translationX: number, translationY: number) => {
-      const dragStart = previewToolbarDragStartRef.current ?? resolvedPreviewToolbarPosition;
+      if (!previewToolbarDragStartRef.current) {
+        return;
+      }
+
+      const dragStart = previewToolbarDragStartRef.current;
       const fallbackGrabberOffset = getGrabberOffsetForOrientation(previewToolbarOrientation);
       const dragStartAnchor = previewToolbarDragStartGrabberAnchorRef.current ?? {
         x: dragStart.x + fallbackGrabberOffset.x,
         y: dragStart.y + fallbackGrabberOffset.y,
       };
-      const nextAnchor = {
+      const finalAnchor = {
         x: dragStartAnchor.x + translationX,
         y: dragStartAnchor.y + translationY,
       };
-      const nextOrientation = getDockOrientationForToolbarPosition(nextAnchor);
+      const nextOrientation = getDockOrientationForToolbarPosition(finalAnchor);
       const nextSize = getToolbarSizeForOrientation(nextOrientation);
-      const nextPosition = getPositionForToolbarAnchor(nextAnchor, nextOrientation, nextSize);
+      const nextPosition = getPositionForToolbarAnchor(finalAnchor, nextOrientation, nextSize);
 
-      if (nextOrientation !== previewToolbarOrientation) {
-        setPreviewToolbarOrientationOverride(nextOrientation);
-      }
-
+      previewToolbarDragStartRef.current = null;
+      previewToolbarDragStartGrabberAnchorRef.current = null;
+      previewToolbarDragOffset.value = { x: 0, y: 0 };
+      setPreviewToolbarOrientationOverride(nextOrientation);
       previewToolbarPositionRef.current = nextPosition;
       setPreviewToolbarPosition(nextPosition);
+      void storePreviewToolbarOrientation(nextOrientation);
+      void storePreviewToolbarPosition(nextPosition);
     },
     [
       getDockOrientationForToolbarPosition,
       getGrabberOffsetForOrientation,
       getPositionForToolbarAnchor,
       getToolbarSizeForOrientation,
+      previewToolbarDragOffset,
       previewToolbarOrientation,
-      resolvedPreviewToolbarPosition,
     ],
   );
-
-  const commitPreviewToolbarDrag = useCallback(() => {
-    if (!previewToolbarDragStartRef.current) {
-      return;
-    }
-
-    const currentPosition = previewToolbarPositionRef.current ?? resolvedPreviewToolbarPosition;
-    const currentGrabberOffset = getGrabberOffsetForOrientation(previewToolbarOrientation);
-    const currentAnchor = {
-      x: currentPosition.x + currentGrabberOffset.x,
-      y: currentPosition.y + currentGrabberOffset.y,
-    };
-    const nextOrientation = getDockOrientationForToolbarPosition(currentAnchor);
-    const nextSize = getToolbarSizeForOrientation(nextOrientation);
-    const nextPosition =
-      nextOrientation === previewToolbarOrientation
-        ? currentPosition
-        : getPositionForToolbarAnchor(currentAnchor, nextOrientation, nextSize);
-
-    previewToolbarDragStartRef.current = null;
-    previewToolbarDragStartGrabberAnchorRef.current = null;
-    setPreviewToolbarOrientationOverride(nextOrientation);
-    previewToolbarPositionRef.current = nextPosition;
-    setPreviewToolbarPosition(nextPosition);
-    void storePreviewToolbarOrientation(nextOrientation);
-    void storePreviewToolbarPosition(nextPosition);
-  }, [
-    getDockOrientationForToolbarPosition,
-    getGrabberOffsetForOrientation,
-    getPositionForToolbarAnchor,
-    getToolbarSizeForOrientation,
-    previewToolbarOrientation,
-    resolvedPreviewToolbarPosition,
-  ]);
 
   const togglePreviewToolbarCollapsed = useCallback(() => {
     setPreviewToolbarCollapsed((current) => {
@@ -8244,6 +7568,8 @@ export default function App() {
   const previewToolbarAnimatedStyle = useAnimatedStyle(() => ({
     opacity: 0.82 + previewToolbarTransition.value * 0.18,
     transform: [
+      { translateX: previewToolbarDragOffset.value.x },
+      { translateY: previewToolbarDragOffset.value.y },
       { scale: 0.96 + previewToolbarTransition.value * 0.04 },
     ],
   }));
@@ -8268,24 +7594,25 @@ export default function App() {
     const dragGesture = Gesture.Pan()
         .minDistance(8)
         .onStart(() => {
+          previewToolbarDragOffset.value = { x: 0, y: 0 };
           runOnJS(beginPreviewToolbarDrag)();
         })
         .onUpdate((event) => {
-          runOnJS(updatePreviewToolbarDrag)(event.translationX, event.translationY);
+          previewToolbarDragOffset.value = { x: event.translationX, y: event.translationY };
         })
-        .onEnd(() => {
-          runOnJS(commitPreviewToolbarDrag)();
+        .onEnd((event) => {
+          runOnJS(commitPreviewToolbarDrag)(event.translationX, event.translationY);
         })
-        .onFinalize(() => {
-          runOnJS(commitPreviewToolbarDrag)();
+        .onFinalize((event) => {
+          runOnJS(commitPreviewToolbarDrag)(event.translationX, event.translationY);
         });
 
     return Gesture.Exclusive(doubleTapGesture, dragGesture);
   }, [
     beginPreviewToolbarDrag,
     commitPreviewToolbarDrag,
+    previewToolbarDragOffset,
     togglePreviewToolbarCollapsed,
-    updatePreviewToolbarDrag,
   ]);
 
   useEffect(() => {
@@ -8358,13 +7685,23 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
-    loadStoredActiveCardDraft().then((storedCard) => {
+    loadStoredActiveCardDraft().then((storedDraft) => {
       if (cancelled) {
         return;
       }
 
-      if (storedCard) {
-        setCard(storedCard);
+      activeDraftHadStoredPayloadRef.current = Boolean(storedDraft);
+
+      if (storedDraft) {
+        dispatchCard({ type: "replace", card: storedDraft.card });
+        setCardHasUnsavedEdits(storedDraft.dirty);
+
+        if (storedDraft.selectedSetId) {
+          setSelectedSetId(storedDraft.selectedSetId);
+        }
+
+        setActiveSetCardId(storedDraft.activeSetCardId);
+        setActiveSetCardSetId(storedDraft.activeSetCardSetId);
       }
 
       setActiveDraftHydrated(true);
@@ -8385,6 +7722,9 @@ export default function App() {
 
       if (storedSets?.length) {
         const normalizedSets = normalizeCardSets(storedSets);
+        const storedPersistableSets = getStoredLocalCardSets(normalizedSets);
+
+        localCardSetsHadStoredPayloadRef.current = storedPersistableSets.length > 0;
 
         logStorageInfo("Applying hydrated saved sets to editor state.", getCardSetStorageSummary(normalizedSets));
         setCardSets(normalizedSets);
@@ -8392,6 +7732,7 @@ export default function App() {
           normalizedSets.some((set) => set.id === current) ? current : normalizedSets[0].id,
         );
       } else {
+        localCardSetsHadStoredPayloadRef.current = false;
         logStorageInfo("Using default in-memory saved sets after hydration.");
       }
 
@@ -8414,6 +7755,8 @@ export default function App() {
       if (cancelled) {
         return;
       }
+
+      localEditorSessionHadStoredPayloadRef.current = Boolean(storedSession);
 
       if (storedSession) {
         setSelectedSetId(storedSession.selectedSetId);
@@ -8527,6 +7870,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    loadStoredCreatorToolsVisible().then((storedVisible) => {
+      if (cancelled) {
+        return;
+      }
+
+      setCreatorToolsVisible(storedVisible);
+      setCreatorToolsVisibilityHydrated(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!creatorToolsVisibilityHydrated) {
+      return;
+    }
+
+    void storeCreatorToolsVisible(creatorToolsVisible);
+  }, [creatorToolsVisible, creatorToolsVisibilityHydrated]);
+
+  useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
       return;
     }
@@ -8592,13 +7960,29 @@ export default function App() {
     }
 
     const persistActiveDraft = setTimeout(() => {
-      void storeActiveCardDraft(card);
+      if (cardHasUnsavedEdits || (activeSetCardId && activeSetCardSetId)) {
+        void storeActiveCardDraft(card, {
+          dirty: cardHasUnsavedEdits,
+          selectedSetId,
+          activeSetCardId,
+          activeSetCardSetId,
+        });
+      } else {
+        void clearStoredActiveCardDraft();
+      }
     }, 450);
 
     return () => {
       clearTimeout(persistActiveDraft);
     };
-  }, [activeDraftHydrated, card]);
+  }, [
+    activeDraftHydrated,
+    activeSetCardId,
+    activeSetCardSetId,
+    card,
+    cardHasUnsavedEdits,
+    selectedSetId,
+  ]);
 
   useEffect(() => {
     if (!setsHydrated || !generatedSetSymbolsHydrated) {
@@ -8632,6 +8016,89 @@ export default function App() {
     editorSessionHydrated,
     inspectorTab,
     selectedSetId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeDraftHydrated ||
+      !setsHydrated ||
+      !editorSessionHydrated ||
+      storedSessionCardRestoreAttemptedRef.current
+    ) {
+      return;
+    }
+
+    storedSessionCardRestoreAttemptedRef.current = true;
+
+    if (activeDraftHadStoredPayloadRef.current || cardHasUnsavedEditsRef.current) {
+      logStorageInfo("Skipped saved session card restore because an active editor card is available.", {
+        activeEditorCardStored: activeDraftHadStoredPayloadRef.current,
+        dirty: cardHasUnsavedEditsRef.current,
+      });
+      return;
+    }
+
+    if (!activeSetCardSetId || !activeSetCardId) {
+      logStorageInfo("No saved session card reference to restore.", {
+        activeSetCardSetId,
+        activeSetCardId,
+      });
+      return;
+    }
+
+    const sessionSet = cardSets.find((set) => set.id === activeSetCardSetId);
+    const sessionSnapshot = sessionSet?.cards.find((snapshot) => snapshot.id === activeSetCardId) ?? null;
+
+    if (!sessionSet || !sessionSnapshot) {
+      logStorageWarning("Saved editor session referenced a missing set card.", {
+        activeSetCardSetId,
+        activeSetCardId,
+        setFound: Boolean(sessionSet),
+      });
+      return;
+    }
+
+    setSelectedSetId(sessionSet.id);
+    dispatchCard({ type: "replace", card: cloneCardDraft(sessionSnapshot.card) });
+    setCardHasUnsavedEdits(false);
+    setActiveSection(null);
+    setSheetSection(null);
+    setPreviewRotated(false);
+    setPhysicalBackVisible(false);
+
+    void materializeSetCardSnapshotCard(sessionSnapshot, sessionSet.id)
+      .then((materializedCard) => {
+        const currentSet = cardSetsRef.current.find((set) => set.id === sessionSet.id);
+        const currentSnapshot = currentSet?.cards.find((setCard) =>
+          setCard.id === sessionSnapshot.id &&
+          setCard.savedAt === sessionSnapshot.savedAt
+        );
+
+        if (!currentSnapshot) {
+          return;
+        }
+
+        if (
+          activeSetCardSetIdRef.current !== sessionSet.id ||
+          activeSetCardIdRef.current !== sessionSnapshot.id ||
+          cardHasUnsavedEditsRef.current
+        ) {
+          return;
+        }
+
+        dispatchCard({ type: "replace", card: materializedCard });
+        setCardHasUnsavedEdits(false);
+      })
+      .catch((error) => {
+        console.warn("Unable to materialize saved editor session card art.", error);
+      });
+  }, [
+    activeDraftHydrated,
+    activeSetCardId,
+    activeSetCardSetId,
+    cardSets,
+    editorSessionHydrated,
+    setsHydrated,
   ]);
 
   useEffect(() => {
@@ -8670,15 +8137,88 @@ export default function App() {
     generatedSetSymbolsRef.current = generatedSetSymbols;
   }, [generatedSetSymbols]);
 
+  function getInitialAccountMergeOwnedSets(accountUserId: string): CardSet[] {
+    return localCardSetsHadStoredPayloadRef.current
+      ? getOwnedAccountCardSets(cardSetsRef.current, accountUserId)
+      : [];
+  }
+
+  function restoreLatestAccountSavedCardIfFreshSession(sets: CardSet[]) {
+    if (
+      localEditorSessionHadStoredPayloadRef.current ||
+      activeDraftHadStoredPayloadRef.current ||
+      activeSetCardIdRef.current ||
+      cardHasUnsavedEditsRef.current
+    ) {
+      return;
+    }
+
+    const latestReference = getLatestSavedSetCardReference(sets);
+
+    if (!latestReference) {
+      return;
+    }
+
+    const { setId, snapshot } = latestReference;
+
+    setSelectedSetId(setId);
+    dispatchCard({ type: "replace", card: cloneCardDraft(snapshot.card) });
+    setActiveSetCardId(snapshot.id);
+    setActiveSetCardSetId(setId);
+    setCardHasUnsavedEdits(false);
+    setActiveSection(null);
+    setSheetSection(null);
+    setPreviewRotated(false);
+    setPhysicalBackVisible(false);
+    setInspectorTab("edit");
+
+    void materializeSetCardSnapshotCard(snapshot, setId)
+      .then((materializedCard) => {
+        const currentSet = cardSetsRef.current.find((set) => set.id === setId);
+        const currentSnapshot = currentSet?.cards.find((setCard) =>
+          setCard.id === snapshot.id &&
+          setCard.savedAt === snapshot.savedAt
+        );
+
+        if (!currentSnapshot) {
+          return;
+        }
+
+        if (
+          activeSetCardSetIdRef.current !== setId ||
+          activeSetCardIdRef.current !== snapshot.id ||
+          cardHasUnsavedEditsRef.current
+        ) {
+          return;
+        }
+
+        dispatchCard({ type: "replace", card: materializedCard });
+        setCardHasUnsavedEdits(false);
+      })
+      .catch((error) => {
+        console.warn("Unable to materialize account session card art for editing.", error);
+      });
+  }
+
   useEffect(() => {
     if (!accountUser) {
-      setAccountSetsHydrated(false);
-      setCardSets((current) => {
-        const localSets = getLocalPersistableCardSets(current);
+      if (!accountAuthHydrated) {
+        return;
+      }
 
-        return cardSetsEqual(current, localSets) ? current : localSets;
-      });
-      return;
+      setAccountSetsHydrated(false);
+
+      const signOutPruneTimer = setTimeout(() => {
+        setCardSets((current) => {
+          const localSets = getLocalPersistableCardSets(current);
+
+          return cardSetsEqual(current, localSets) ? current : localSets;
+        });
+      }, COLLABORATION_SET_SIGN_OUT_PRUNE_DELAY_MS);
+
+      return () => {
+        clearTimeout(signOutPruneTimer);
+      };
     }
 
     if (!setsHydrated || !deletionTombstonesHydrated) {
@@ -8692,13 +8232,15 @@ export default function App() {
       setAccountSetsHydrated(false);
 
       try {
+        const localOwnedSetsForMerge = getInitialAccountMergeOwnedSets(accountUser.id);
         const remoteSymbolsPromise = fetchRemoteCustomSetSymbols(accountUser.id);
         const remoteSetsPromise = fetchRemoteCardSets(accountUser.id);
+        const remoteTombstonesPromise = fetchRemoteDeletionTombstones(accountUser.id);
         const cachedSharedSets = await loadCachedCollaborationSets(accountUser.id);
 
         if (active && cachedSharedSets?.length) {
           const cachedMergedSets = normalizeCardSets([
-            ...getOwnedAccountCardSets(cardSetsRef.current, accountUser.id),
+            ...localOwnedSetsForMerge,
             ...cachedSharedSets,
           ]);
 
@@ -8712,9 +8254,10 @@ export default function App() {
         }
 
         const sharedSetFallback = getSharedAccountCardSets(cardSetsRef.current, accountUser.id);
-        const [remoteSymbols, remoteSets, sharedSets] = await Promise.all([
+        const [remoteSymbols, remoteSets, remoteTombstones, sharedSets] = await Promise.all([
           remoteSymbolsPromise,
           remoteSetsPromise,
+          remoteTombstonesPromise,
           fetchSharedAccountCardSets(accountUser.id, sharedSetFallback),
         ]);
 
@@ -8729,10 +8272,18 @@ export default function App() {
           setGeneratedSetSymbols(mergedSymbols);
         }
 
+        const mergedTombstones = mergeDeletionTombstones(deletionTombstonesRef.current, remoteTombstones);
+
+        if (!deletionTombstonesEqual(deletionTombstonesRef.current, mergedTombstones)) {
+          deletionTombstonesRef.current = mergedTombstones;
+          setDeletionTombstones(mergedTombstones);
+          void storeDeletionTombstones(mergedTombstones);
+        }
+
         const repairedRemoteSets = normalizeStoredCardSetsPayload(remoteSets);
         const validRemoteSets = applyDeletionTombstonesToSets(
           resolveSetSymbolReferences(repairedRemoteSets?.sets ?? [], mergedSymbols),
-          deletionTombstonesRef.current,
+          mergedTombstones,
         );
 
         if (repairedRemoteSets?.repaired || repairedRemoteSets?.rejectedItems) {
@@ -8747,10 +8298,10 @@ export default function App() {
 
         const mergedOwnedSets = applyDeletionTombstonesToSets(
           resolveSetSymbolReferences(
-            mergeAccountCardSets(getOwnedAccountCardSets(cardSetsRef.current, accountUser.id), validRemoteSets),
+            mergeAccountCardSets(localOwnedSetsForMerge, validRemoteSets),
             mergedSymbols,
           ),
-          deletionTombstonesRef.current,
+          mergedTombstones,
         );
         const resolvedSharedSets = resolveSetSymbolReferences(sharedSets, mergedSymbols);
         const mergedSets = normalizeCardSets([
@@ -8766,9 +8317,15 @@ export default function App() {
           );
         }
 
+        restoreLatestAccountSavedCardIfFreshSession(mergedSets);
+
         void storeCachedCollaborationSets(accountUser.id, resolvedSharedSets);
+        await upsertRemoteDeletionTombstones(accountUser.id, mergedTombstones);
         await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
-        await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedOwnedSets, accountUser.id));
+        await replaceRemoteCardSets(
+          accountUser.id,
+          await toRemotePersistableAccountCardSetPayloads(mergedOwnedSets, accountUser.id),
+        );
       } catch (error) {
         console.warn("Unable to sync Supabase account sets.", error);
       } finally {
@@ -8784,7 +8341,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [accountUser, deletionTombstonesHydrated, generatedSetSymbolsHydrated, setsHydrated]);
+  }, [accountAuthHydrated, accountUser, deletionTombstonesHydrated, generatedSetSymbolsHydrated, setsHydrated]);
 
   useEffect(() => {
     if (!accountUser || !setsHydrated || !generatedSetSymbolsHydrated || !deletionTombstonesHydrated || !accountSetsHydrated) {
@@ -8792,8 +8349,12 @@ export default function App() {
     }
 
     const persistRemoteSets = setTimeout(() => {
-      void replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current))
-        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(cardSetsRef.current, accountUser.id)))
+      void upsertRemoteDeletionTombstones(accountUser.id, deletionTombstonesRef.current)
+        .then(() => replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current)))
+        .then(async () => replaceRemoteCardSets(
+          accountUser.id,
+          await toRemotePersistableAccountCardSetPayloads(cardSetsRef.current, accountUser.id),
+        ))
         .catch((error) => {
           console.warn("Unable to persist Supabase account sets.", error);
         });
@@ -8914,19 +8475,47 @@ export default function App() {
         return;
       }
 
-      setAccountUser(data.session?.user ?? null);
+      setAccountUser(getVisibleAccountUser(data.session?.user));
+      setAccountAuthHydrated(true);
     };
 
     void hydrateSession();
 
-    const { data: subscription } = supabaseClient.auth.onAuthStateChange((_event, session: Session | null) => {
-      setAccountUser(session?.user ?? null);
+    const { data: subscription } = supabaseClient.auth.onAuthStateChange((event: AuthChangeEvent, session: Session | null) => {
+      setAccountUser(getVisibleAccountUser(session?.user));
+      setAccountAuthHydrated(true);
+
+      if (event === "PASSWORD_RECOVERY") {
+        setAccountPasswordRecoveryMode(true);
+        setAccountOpen(true);
+      }
+
+      if (event === "SIGNED_OUT") {
+        setAccountPasswordRecoveryMode(false);
+      }
     });
 
     return () => {
       active = false;
       subscription.subscription.unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash);
+    const hasRecoveryRedirect =
+      params.get("account") === "password-recovery" ||
+      hashParams.get("type") === "recovery";
+
+    if (hasRecoveryRedirect) {
+      setAccountPasswordRecoveryMode(true);
+      setAccountOpen(true);
+    }
   }, []);
 
   const loadAccountNotifications = useCallback(async () => {
@@ -9207,8 +8796,12 @@ export default function App() {
         return;
       }
 
-      void replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current))
-        .then(() => replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(normalizedSets, accountUser.id)))
+      void upsertRemoteDeletionTombstones(accountUser.id, deletionTombstonesRef.current)
+        .then(() => replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(generatedSetSymbolsRef.current)))
+        .then(async () => replaceRemoteCardSets(
+          accountUser.id,
+          await toRemotePersistableAccountCardSetPayloads(normalizedSets, accountUser.id),
+        ))
         .catch((error) => {
           console.warn("Unable to persist Supabase account sets immediately after local edit.", error);
         });
@@ -9216,12 +8809,23 @@ export default function App() {
     [accountSetsHydrated, accountUser],
   );
 
-  const persistDeletionTombstonesNow = useCallback((nextTombstones: DeletionTombstones) => {
-    const normalizedTombstones = normalizeDeletionTombstones(nextTombstones);
+  const persistDeletionTombstonesNow = useCallback(
+    (nextTombstones: DeletionTombstones) => {
+      const normalizedTombstones = normalizeDeletionTombstones(nextTombstones);
 
-    deletionTombstonesRef.current = normalizedTombstones;
-    void storeDeletionTombstones(normalizedTombstones);
-  }, []);
+      deletionTombstonesRef.current = normalizedTombstones;
+      void storeDeletionTombstones(normalizedTombstones);
+
+      if (!accountUser || !accountSetsHydrated) {
+        return;
+      }
+
+      void upsertRemoteDeletionTombstones(accountUser.id, normalizedTombstones).catch((error) => {
+        console.warn("Unable to persist Supabase deletion tombstones immediately after local edit.", error);
+      });
+    },
+    [accountSetsHydrated, accountUser],
+  );
 
   function attachRemoteSetCardSnapshot(
     setId: string,
@@ -9311,6 +8915,7 @@ export default function App() {
   }
 
   const showLoginSuccessToast = useCallback(() => {
+    setAccountPasswordRecoveryMode(false);
     setAccountOpen(false);
     setAuthToast({
       id: `auth-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -9334,6 +8939,11 @@ export default function App() {
   const closeEarlyAccessCodePrompt = useCallback(() => {
     setEarlyAccessCodeOpen(false);
     void storeEarlyAccessCodePromptShown();
+  }, []);
+
+  const closeAccountModal = useCallback(() => {
+    setAccountOpen(false);
+    setAccountPasswordRecoveryMode(false);
   }, []);
 
   const dismissAuthToast = useCallback((id: string) => {
@@ -9489,10 +9099,11 @@ export default function App() {
 
       try {
         const sharedSetFallback = getSharedAccountCardSets(cardSetsRef.current, accountUser.id);
-        const [remoteProgress, remoteSymbols, remoteSets, sharedSets] = await Promise.all([
+        const [remoteProgress, remoteSymbols, remoteSets, remoteTombstones, sharedSets] = await Promise.all([
           fetchRemoteUserProgress(accountUser.id),
           fetchRemoteCustomSetSymbols(accountUser.id),
           fetchRemoteCardSets(accountUser.id),
+          fetchRemoteDeletionTombstones(accountUser.id),
           fetchSharedAccountCardSets(accountUser.id, sharedSetFallback),
         ]);
 
@@ -9519,10 +9130,18 @@ export default function App() {
         generatedSetSymbolsRef.current = mergedSymbols;
         setGeneratedSetSymbols(mergedSymbols);
 
+        const mergedTombstones = mergeDeletionTombstones(deletionTombstonesRef.current, remoteTombstones);
+
+        if (!deletionTombstonesEqual(deletionTombstonesRef.current, mergedTombstones)) {
+          deletionTombstonesRef.current = mergedTombstones;
+          setDeletionTombstones(mergedTombstones);
+          void storeDeletionTombstones(mergedTombstones);
+        }
+
         const repairedRemoteSets = normalizeStoredCardSetsPayload(remoteSets);
         const validRemoteSets = applyDeletionTombstonesToSets(
           resolveSetSymbolReferences(repairedRemoteSets?.sets ?? [], mergedSymbols),
-          deletionTombstonesRef.current,
+          mergedTombstones,
         );
 
         if (repairedRemoteSets?.repaired || repairedRemoteSets?.rejectedItems) {
@@ -9540,7 +9159,7 @@ export default function App() {
             mergeAccountCardSets(getOwnedAccountCardSets(cardSetsRef.current, accountUser.id), validRemoteSets),
             mergedSymbols,
           ),
-          deletionTombstonesRef.current,
+          mergedTombstones,
         );
         const resolvedSharedSets = resolveSetSymbolReferences(sharedSets, mergedSymbols);
         const mergedSets = normalizeCardSets([
@@ -9554,8 +9173,12 @@ export default function App() {
           mergedSets.some((set) => set.id === current) ? current : mergedSets[0].id,
         );
         void storeCachedCollaborationSets(accountUser.id, resolvedSharedSets);
+        await upsertRemoteDeletionTombstones(accountUser.id, mergedTombstones);
         await replaceRemoteCustomSetSymbols(accountUser.id, toAccountCustomSetSymbolPayloads(mergedSymbols));
-        await replaceRemoteCardSets(accountUser.id, toAccountCardSetPayloads(mergedOwnedSets, accountUser.id));
+        await replaceRemoteCardSets(
+          accountUser.id,
+          await toRemotePersistableAccountCardSetPayloads(mergedOwnedSets, accountUser.id),
+        );
       } catch (error) {
         Alert.alert("Account sync failed", error instanceof Error ? error.message : "Unable to sync your account.");
       } finally {
@@ -9597,6 +9220,7 @@ export default function App() {
     }
 
     if (!accountUser) {
+      setAccountPasswordRecoveryMode(false);
       setAccountOpen(true);
       setAuthToast({
         id: createUuid(),
@@ -9615,15 +9239,21 @@ export default function App() {
       await clearPendingCollaborationInviteCode();
       setPendingCollaborationInviteCode(null);
       setPendingCollaborationInvitePreview(null);
-      await syncRemoteUserProgress();
-      setInspectorTab("sets");
-      setSelectedSetId(redemption.setId);
-      setAccountOpen(false);
+      if (redemption.role === "viewer") {
+        setInspectorTab("community");
+      } else {
+        await syncRemoteUserProgress();
+        setInspectorTab("sets");
+        setSelectedSetId(redemption.setId);
+      }
+      closeAccountModal();
       setAuthToast({
         id: createUuid(),
         message: redemption.role === "owner"
           ? `${redemption.setName} is already your set.`
-          : `Joined ${redemption.setName}.`,
+          : redemption.role === "viewer"
+            ? `Following ${redemption.setName}.`
+            : `Joined ${redemption.setName}.`,
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "CardMagic could not accept that set invite.";
@@ -9639,7 +9269,7 @@ export default function App() {
       collaborationInviteRedemptionBusyRef.current = false;
       setCollaborationInviteAccepting(false);
     }
-  }, [accountUser, pendingCollaborationInviteCode, syncRemoteUserProgress]);
+  }, [accountUser, closeAccountModal, pendingCollaborationInviteCode, syncRemoteUserProgress]);
 
   const openAccount = () => {
     setEditMenuOpen(false);
@@ -9651,6 +9281,7 @@ export default function App() {
     setSetSymbolGeneratorOpen(false);
     setAchievementsOpen(false);
     setCreditStoreOpen(false);
+    setAccountPasswordRecoveryMode(false);
     setAccountOpen(true);
   };
 
@@ -9688,6 +9319,7 @@ export default function App() {
 
     if (!accountUser) {
       setCreditStoreOpen(false);
+      setAccountPasswordRecoveryMode(false);
       setAccountOpen(true);
       return;
     }
@@ -9819,6 +9451,7 @@ export default function App() {
 
     if (!accountUser) {
       setError("Sign in before running AI prompts.");
+      setAccountPasswordRecoveryMode(false);
       setAccountOpen(true);
       return false;
     }
@@ -9897,11 +9530,7 @@ export default function App() {
   // CardPreview can skip re-rendering when unrelated state changes.
   const updateCard = useCallback((patch: Partial<CardDraft>) => {
     setCardHasUnsavedEdits(true);
-    setCard((current) => ({
-      ...current,
-      ...patch,
-      ...getFrameGeometryArtResetPatch(current, patch),
-    }));
+    dispatchCard({ type: "patch", patch });
   }, []);
 
   const updateCurrentFace = (patch: Partial<CardDraft>) => {
@@ -9955,6 +9584,8 @@ export default function App() {
         backArtUri: artUri,
         backArtSubjectMaskUri: undefined,
         backArtSubjectMaskComponents: undefined,
+        backArtSubjectMaskSections: undefined,
+        backArtSubjectMaskFitMode: undefined,
         backArtTransform: { offsetX: 0, offsetY: 0, scale: 1 },
       });
       return;
@@ -9965,18 +9596,21 @@ export default function App() {
       artUri,
       artSubjectMaskUri: undefined,
       artSubjectMaskComponents: undefined,
+      artSubjectMaskSections: undefined,
+      artSubjectMaskFitMode: undefined,
       artTransform: { offsetX: 0, offsetY: 0, scale: 1 },
     });
   };
 
-  const addArtLibraryEntry = (source: ArtLibrarySource, uri: string) => {
+  const addArtLibraryEntry = (source: ArtLibrarySource, uri: string, sourceCard: CardDraft = card) => {
     const now = new Date().toISOString();
-    const labelBase = faceCard.name.trim() || (source === "generated" ? "Generated art" : "Added art");
+    const sourceFaceCard = getEditableCardFace(sourceCard);
+    const labelBase = sourceFaceCard.name.trim() || (source === "generated" ? "Generated art" : "Added art");
     const entry: ArtLibraryEntry = {
       id: `art-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       uri,
       source,
-      colorIdentity: getCardArtLibraryColorIdentity(card),
+      colorIdentity: getCardArtLibraryColorIdentity(sourceCard),
       label: labelBase,
       createdAt: now,
     };
@@ -10132,7 +9766,7 @@ export default function App() {
   // Updates the on-screen subject-mask status and mirrors every in-progress
   // message to the browser console (not just the fal request step).
   const reportSubjectMaskStatus = (message: string | null) => {
-    if (message) {
+    if (__DEV__ && message) {
       console.log(`[CardMagic subject mask] ${message}`);
     }
     setSubjectMaskStatus(message);
@@ -10153,7 +9787,9 @@ export default function App() {
       tone,
     };
 
-    console.log(`[CardMagic subject mask trace] ${message}`);
+    if (__DEV__) {
+      console.log(`[CardMagic subject mask trace] ${message}`);
+    }
     setSubjectMaskTrace((current) => [...current, entry].slice(-8));
   };
 
@@ -10229,7 +9865,6 @@ export default function App() {
 
     setSubjectMaskBusy(true);
     setSubjectMaskError(null);
-    setSubjectMaskDiagnostics(null);
     setSubjectMaskComponents([]);
     setSubjectMaskTrace([]);
     pushSubjectMaskTrace(`Request mode: ${requestMode}.`, "info");
@@ -10274,7 +9909,6 @@ export default function App() {
         });
         maskUri = generatedMask.uri;
         generatedMaskProgress = generatedMask.progress;
-        setSubjectMaskDiagnostics(generatedMask.diagnostics ?? null);
         pushSubjectMaskDiagnosticsTrace(generatedMask.diagnostics ?? null);
         pushSubjectMaskTrace(
           generatedMask.components?.length
@@ -10313,7 +9947,6 @@ export default function App() {
     } catch (error) {
       console.warn("Unable to generate subject mask.", error);
       if (error instanceof SubjectMatteProviderError) {
-        setSubjectMaskDiagnostics(error.diagnostics ?? null);
         pushSubjectMaskDiagnosticsTrace(error.diagnostics ?? null);
       }
       pushSubjectMaskTrace(error instanceof Error ? `Stopped: ${error.message}` : "Stopped: subject mask generation failed.", "error");
@@ -10396,10 +10029,6 @@ export default function App() {
       const next = normalizeSubjectMaskComponentsField([...subjectMaskComponents, ...additions]) ?? [];
       setSubjectMaskComponents(next);
 
-      if (matte.diagnostics) {
-        setSubjectMaskDiagnostics(matte.diagnostics);
-      }
-
       stopMaskTimer.setPhase("Combining the masks…");
       const composed = await composeSubjectMaskFromComponents(next, sourceUri);
       updateCurrentFace({
@@ -10413,7 +10042,6 @@ export default function App() {
     } catch (error) {
       console.warn("Unable to add subject mask.", error);
       if (error instanceof SubjectMatteProviderError) {
-        setSubjectMaskDiagnostics(error.diagnostics ?? null);
         pushSubjectMaskDiagnosticsTrace(error.diagnostics ?? null);
       }
       pushSubjectMaskTrace(error instanceof Error ? `Stopped: ${error.message}` : "Stopped: add-subject masking failed.", "error");
@@ -10849,27 +10477,15 @@ export default function App() {
     }
   };
 
-  const saveCardToSet = (
-    targetSetId: string,
+  const commitSavedCardResult = (
+    result: NonNullable<ReturnType<typeof saveCardDraftIntoSet>>,
+    cardToSave: CardDraft,
     options?: {
       notify?: boolean;
       updateCurrentCard?: boolean;
       clearDirty?: boolean;
-      saveMode?: "auto" | "new" | "overwrite";
-      overwriteSnapshotId?: string | null;
     },
   ) => {
-    const activeSnapshotId = targetSetId === activeSetCardSetId ? activeSetCardId : null;
-    const cardToSave = withDefaultCardCredit(card, accountFooterOwnerName);
-    const result = saveCardDraftIntoSet(cardSets, targetSetId, cardToSave, activeSnapshotId, {
-      saveMode: options?.saveMode,
-      overwriteSnapshotId: options?.overwriteSnapshotId,
-    });
-
-    if (!result) {
-      return null;
-    }
-
     cardSetsRef.current = result.sets;
     setCardSets(result.sets);
     setSelectedSetId(result.setId);
@@ -10878,9 +10494,9 @@ export default function App() {
     setPhysicalBackVisible(false);
 
     if (options?.updateCurrentCard !== false) {
-      setCard(cloneCardDraft(result.snapshot.card));
+      dispatchCard({ type: "replace", card: cloneCardDraft(result.snapshot.card) });
     } else if (cardToSave !== card) {
-      setCard(cardToSave);
+      dispatchCard({ type: "replace", card: cardToSave });
     }
 
     if (options?.clearDirty !== false) {
@@ -10907,6 +10523,30 @@ export default function App() {
     if (options?.notify) {
       Alert.alert("Card saved", `${result.snapshot.card.name || "Untitled Card"} was saved to ${result.setName}.`);
     }
+  };
+
+  const saveCardToSet = (
+    targetSetId: string,
+    options?: {
+      notify?: boolean;
+      updateCurrentCard?: boolean;
+      clearDirty?: boolean;
+      saveMode?: "auto" | "new" | "overwrite";
+      overwriteSnapshotId?: string | null;
+    },
+  ) => {
+    const activeSnapshotId = targetSetId === activeSetCardSetId ? activeSetCardId : null;
+    const cardToSave = withDefaultCardCredit(card, accountFooterOwnerName);
+    const result = saveCardDraftIntoSet(cardSets, targetSetId, cardToSave, activeSnapshotId, {
+      saveMode: options?.saveMode,
+      overwriteSnapshotId: options?.overwriteSnapshotId,
+    });
+
+    if (!result) {
+      return null;
+    }
+
+    commitSavedCardResult(result, cardToSave, options);
 
     return result;
   };
@@ -10993,10 +10633,10 @@ export default function App() {
       autosaveCurrentCardIfEdited();
     }
 
-    setCard(createStarterCard());
+    dispatchCard({ type: "reset" });
     setActiveSetCardId(null);
     setActiveSetCardSetId(null);
-    setCardHasUnsavedEdits(true);
+    setCardHasUnsavedEdits(false);
     setActiveSection(null);
     setSheetSection(null);
     setPhysicalBackVisible(false);
@@ -11028,7 +10668,7 @@ export default function App() {
   };
 
   const performRandomizeCard = () => {
-    setCard((current) => createRandomCard(current));
+    dispatchCard({ type: "randomize" });
     setActiveSetCardId(null);
     setActiveSetCardSetId(null);
     setCardHasUnsavedEdits(false);
@@ -11054,14 +10694,6 @@ export default function App() {
     });
   };
 
-  const saveCurrentCardToSelectedSet = (options?: { notify?: boolean }) => {
-    setShareMenuOpen(false);
-
-    const targetSetId = activeSetCardSetId ?? selectedSetId;
-
-    return saveCurrentCardToSet(targetSetId, options);
-  };
-
   const saveCurrentCardToSet = (targetSetId: string, options?: { notify?: boolean }) => {
     setShareMenuOpen(false);
     setSaveDestinationPromptOpen(false);
@@ -11082,7 +10714,7 @@ export default function App() {
     const overwriteSnapshot = activeSnapshot ?? namedSnapshot;
 
     if (!overwriteSnapshot) {
-      const result = saveCardToSelectedSet({ notify: false, saveMode: "new" });
+      const result = saveCardToSet(targetSet.id, { notify: false, saveMode: "new" });
 
       if (result && options?.notify) {
         confirmSavedCard(result);
@@ -11100,6 +10732,40 @@ export default function App() {
           ? "Overwrite current card"
           : `Overwrite ${overwriteSnapshot.card.name || "matching card"}`,
     });
+  };
+
+  const saveCurrentCardToNewSet = (name: string, options?: { notify?: boolean }) => {
+    const trimmedName = name.trim();
+
+    if (!trimmedName) {
+      console.warn("Unable to save card to a new set because the set name is empty.");
+      return;
+    }
+
+    setShareMenuOpen(false);
+    setSaveDestinationPromptOpen(false);
+
+    const newSet = createDefaultCardSet(trimmedName, createUuid());
+    const nextSets = normalizeCardSets([...cardSetsRef.current, newSet]);
+    const cardToSave = withDefaultCardCredit(card, accountFooterOwnerName);
+    const result = saveCardDraftIntoSet(nextSets, newSet.id, cardToSave, null, {
+      saveMode: "new",
+    });
+
+    if (!result) {
+      console.warn("Unable to save card to a new set after creating the destination set.", {
+        setId: newSet.id,
+        setName: trimmedName,
+      });
+      return;
+    }
+
+    commitSavedCardResult(result, cardToSave, { notify: false });
+    recordProgressEvent("create-set");
+
+    if (options?.notify) {
+      confirmSavedCard(result);
+    }
   };
 
   const completeSaveCardChoice = (
@@ -11348,7 +11014,25 @@ export default function App() {
     }
 
     if (setId) {
-      if (!shouldUseEditorReadySetCardDraft(sourceCard)) {
+      let editorCard = sourceCard;
+
+      try {
+        editorCard = await materializeRemoteCardDraftMedia(editorCard, { mode: "signed-url" });
+      } catch (error) {
+        console.warn("Unable to materialize Supabase media references for set card editing.", {
+          setId,
+          snapshotId: snapshot.id,
+          remoteCardId: snapshot.remoteCardId,
+          error,
+        });
+      }
+
+      editorCard = await materializeCardDraftWebMediaReferences(
+        editorCard,
+        `set-card-editor-${setId}-${snapshot.id}`,
+      );
+
+      if (!shouldUseEditorReadySetCardDraft(editorCard)) {
         console.warn("Opening set card with unresolved private media references.", {
           setId,
           snapshotId: snapshot.id,
@@ -11356,10 +11040,28 @@ export default function App() {
         });
       }
 
-      return sourceCard;
+      return editorCard;
     }
 
     return materializeCardDraftForExport(sourceCard, `set-card-snapshot-${snapshot.id}`);
+  }
+
+  async function materializeCardSetForExport(set: CardSet): Promise<CardSet> {
+    const normalizedSet = normalizeCardSet(set);
+    const cards: SetCardSnapshot[] = [];
+
+    for (const snapshot of normalizedSet.cards) {
+      const card = await materializeSetCardSnapshotCard(snapshot);
+      cards.push({
+        ...snapshot,
+        card,
+      });
+    }
+
+    return normalizeCardSet({
+      ...normalizedSet,
+      cards,
+    });
   }
 
   function getSavedSetCardImageRenderKey(ownerKey: string, setId: string, snapshot: SetCardSnapshot) {
@@ -12312,7 +12014,9 @@ export default function App() {
       return;
     }
 
-    await exportCardMagicJson(getExportFileName(selectedSet.name, "set"), createSetExportPayload(selectedSet));
+    const exportSet = await materializeCardSetForExport(selectedSet);
+
+    await exportCardMagicJson(getExportFileName(exportSet.name, "set"), createSetExportPayload(exportSet));
     recordProgressEvent("export-set");
   };
 
@@ -12380,14 +12084,7 @@ export default function App() {
       return;
     }
 
-    const normalizedSelectedSet = normalizeCardSet(selectedSet);
-    const setSnapshot: CardSet = {
-      ...normalizedSelectedSet,
-      cards: normalizedSelectedSet.cards.map((snapshot) => ({
-        ...snapshot,
-        card: cloneCardDraft(snapshot.card),
-      })),
-    };
+    const setSnapshot = await materializeCardSetForExport(selectedSet);
 
     let streamingZip: WebStreamingZipWriter | null = null;
     let streamingZipClosed = false;
@@ -12536,7 +12233,7 @@ export default function App() {
       autosaveCurrentCardIfEdited();
     }
 
-    setCard((current) => createNextBlankCard(current));
+    dispatchCard({ type: "nextBlank" });
     setActiveSetCardId(null);
     setActiveSetCardSetId(null);
     setCardHasUnsavedEdits(false);
@@ -12559,23 +12256,7 @@ export default function App() {
     const nextDfcFace = options?.initialFace ?? (physicalBackVisible ? "back" : "front");
 
     setSuppressPreviewFlipTransition(true);
-    setCard((current) => {
-      const typeFrame: NonNullable<CardDraft["typeFrame"]> =
-        current.typeFrame === "battle" ? "battle" : "dfc";
-      const dfcMode = typeFrame === "dfc" ? (current.dfcMode ?? "transform") : current.dfcMode;
-      const nextCard: CardDraft = {
-        ...current,
-        typeFrame,
-        dfcMode,
-        dfcFace: "front" as const,
-      };
-
-      return {
-        ...nextCard,
-        ...getDefaultDfcBackPatch(nextCard),
-        dfcFace: nextDfcFace,
-      };
-    });
+    dispatchCard({ type: "convertToFlipSide", nextFace: nextDfcFace });
     setPhysicalBackVisible(false);
     setActiveSection("identity");
     setSheetSection(null);
@@ -12588,31 +12269,7 @@ export default function App() {
 
   const removeFlipSideFromCard = () => {
     setCardHasUnsavedEdits(true);
-    setCard((current) => {
-      const removesTransformFrame = current.typeFrame === "dfc" || current.typeFrame === "battle";
-
-      return {
-        ...current,
-        typeFrame: removesTransformFrame ? undefined : current.typeFrame,
-        dfcFace: undefined,
-        dfcMode: removesTransformFrame ? undefined : current.dfcMode,
-        backName: undefined,
-        backBaseCardName: undefined,
-        backManaCost: undefined,
-        backTypeLine: undefined,
-        backRulesText: undefined,
-        backFlavorText: undefined,
-        backKeywords: undefined,
-        backPower: undefined,
-        backToughness: undefined,
-        backArtUri: undefined,
-        backArtTransform: undefined,
-        backFrameSelection: undefined,
-        backFrameColors: undefined,
-        backFrameTreatment: undefined,
-        backShowcaseFrame: undefined,
-      };
-    });
+    dispatchCard({ type: "removeFlipSide" });
     setPreviewRotated(false);
     setPhysicalBackVisible(false);
     setActiveSection("frame");
@@ -12658,7 +12315,7 @@ export default function App() {
 
     const nextCard = { ...card, ...getNextDfcFacePatch(card) };
 
-    setCard(nextCard);
+    dispatchCard({ type: "replace", card: nextCard });
     setPreviewRotated(hasPreviewRotation(getPreviewTypeFrame(nextCard)));
     setActiveSection(null);
     setSheetSection(null);
@@ -12686,19 +12343,18 @@ export default function App() {
     setPhysicalBackMenuOpen(true);
   };
 
-  const createSet = () => {
-    const name = newSetName.trim();
+  const createSet = (name: string) => {
+    const trimmedName = name.trim();
 
-    if (!name) {
+    if (!trimmedName) {
       return;
     }
 
     const id = createUuid();
 
     autosaveCurrentCardIfEdited();
-    setCardSets((current) => normalizeCardSets([...current, createDefaultCardSet(name, id)]));
+    setCardSets((current) => normalizeCardSets([...current, createDefaultCardSet(trimmedName, id)]));
     setSelectedSetId(id);
-    setNewSetName("");
     recordProgressEvent("create-set");
   };
 
@@ -12801,7 +12457,7 @@ export default function App() {
         : snapshot;
 
     setSelectedSetId(setId);
-    setCard(cloneCardDraft(nextSnapshot.card));
+    dispatchCard({ type: "replace", card: cloneCardDraft(nextSnapshot.card) });
     setActiveSetCardId(nextSnapshot.id);
     setActiveSetCardSetId(setId);
     setCardHasUnsavedEdits(false);
@@ -12831,7 +12487,7 @@ export default function App() {
           return;
         }
 
-        setCard(materializedCard);
+        dispatchCard({ type: "replace", card: materializedCard });
         setCardHasUnsavedEdits(false);
       })
       .catch((error) => {
@@ -12941,10 +12597,7 @@ export default function App() {
     );
 
     if (setId === selectedSetId) {
-      setCard((current) => ({
-        ...current,
-        ...defaultPatch,
-      }));
+      dispatchCard({ type: "mergeDefaults", patch: defaultPatch });
     }
   };
 
@@ -12999,12 +12652,15 @@ export default function App() {
     await inviteCollaborationSetMember(setId, inviteIdentifier);
   }, [accountUser]);
 
-  const createSetInviteLink = useCallback(async (setId: string) => {
+  const createSetInviteLink = useCallback(async (
+    setId: string,
+    role: CollaborationSetInviteLinkRole = "editor",
+  ) => {
     if (!accountUser) {
       throw new Error("Sign in before creating collaboration invite links.");
     }
 
-    const inviteLink = await createCollaborationSetInviteLink(setId);
+    const inviteLink = await createCollaborationSetInviteLink(setId, role);
 
     return createCollaborationInviteUrl(inviteLink.inviteCode);
   }, [accountUser]);
@@ -13019,6 +12675,11 @@ export default function App() {
 
       persistDeletionTombstonesNow(nextTombstones);
       setDeletionTombstones(nextTombstones);
+      if (accountUser && accountSetsHydrated) {
+        void removeRemoteDeletedCardTombstone(accountUser.id, undoState.setId, undoState.snapshot.id).catch((error) => {
+          console.warn("Unable to remove Supabase card deletion tombstone during undo.", error);
+        });
+      }
       setCardSets((current) => {
         const nextSets = normalizeCardSets(
           current.map((set) => {
@@ -13045,6 +12706,11 @@ export default function App() {
 
     persistDeletionTombstonesNow(nextTombstones);
     setDeletionTombstones(nextTombstones);
+    if (accountUser && accountSetsHydrated) {
+      void removeRemoteDeletedSetTombstone(accountUser.id, undoState.set.id).catch((error) => {
+        console.warn("Unable to remove Supabase set deletion tombstone during undo.", error);
+      });
+    }
     setCardSets((current) => {
       if (current.some((set) => set.id === undoState.set.id)) {
         return current;
@@ -13059,7 +12725,7 @@ export default function App() {
     });
     setSelectedSetId(undoState.set.id);
     setDeleteUndo(null);
-  }, [persistAccountSetsNow, persistDeletionTombstonesNow]);
+  }, [accountSetsHydrated, accountUser, persistAccountSetsNow, persistDeletionTombstonesNow]);
 
   const repairSavedSets = useCallback(() => {
     setCardSets((current) => {
@@ -13263,18 +12929,20 @@ export default function App() {
                     </Pressable>
                   </View>
 
-                  <View style={{ width: "100%", maxWidth: cardWidth, position: "relative" }}>
-                    <ProgressionHud
-                      profile={userProgress}
-                      maxWidth={cardWidth}
-                      onOpenStore={openCreditStore}
-                      onOpenAchievements={openAchievements}
-                    />
-                    <XpFloatingNumbers
-                      numbers={xpFloatingNumbers}
-                      onComplete={dismissXpFloatingNumber}
-                    />
-                  </View>
+                  {creatorToolsVisible ? (
+                    <View style={{ width: "100%", maxWidth: cardWidth, position: "relative" }}>
+                      <ProgressionHud
+                        profile={userProgress}
+                        maxWidth={cardWidth}
+                        onOpenStore={openCreditStore}
+                        onOpenAchievements={openAchievements}
+                      />
+                      <XpFloatingNumbers
+                        numbers={xpFloatingNumbers}
+                        onComplete={dismissXpFloatingNumber}
+                      />
+                    </View>
+                  ) : null}
 
                   <View
                     ref={previewContainerRef}
@@ -13542,8 +13210,6 @@ export default function App() {
                     selectedSetId={selectedSetId}
                     accountUserId={accountUser?.id}
                     scrollWindow={mainScrollWindow}
-                    newSetName={newSetName}
-                    onChangeNewSetName={setNewSetName}
                     onSelectSet={selectSet}
                     onCreateSet={createSet}
                     onRenameSet={renameSet}
@@ -13582,7 +13248,7 @@ export default function App() {
                       updateSetSymbolDefaults(setId, patch);
                     }}
                     onPickSetSymbol={(setId) => void pickSetSymbol(setId)}
-                    onGenerateSetSymbol={(setId) => openSetSymbolGenerator(setId)}
+                    onGenerateSetSymbol={creatorToolsVisible ? (setId) => openSetSymbolGenerator(setId) : undefined}
                     customCardBacks={customCardBacks}
                     generatedSetSymbols={generatedSetSymbols}
                     canRefreshSets={Boolean(accountUser)}
@@ -13644,6 +13310,8 @@ export default function App() {
                     communityScrollBoundaryHandlerRef.current = handler;
                   }}
                   onExportCardImage={exportCommunityCardPng}
+                  getSafeSetCardPreviewCard={getSafeSetCardPreviewCard}
+                  normalizePickedImage={normalizePickedImage}
                 />
               ) : null}
             </TabContentErrorBoundary>
@@ -13688,6 +13356,7 @@ export default function App() {
             sets={cardSets}
             selectedSetId={activeSetCardSetId ?? selectedSetId}
             onSaveToSet={(setId) => saveCurrentCardToSet(setId, { notify: true })}
+            onCreateSetAndSave={(name) => saveCurrentCardToNewSet(name, { notify: true })}
             onClose={() => setSaveDestinationPromptOpen(false)}
           />
           <SaveCardChoiceModal
@@ -13724,15 +13393,19 @@ export default function App() {
           {batchExportProgress ? <BatchExportProgressOverlay progress={batchExportProgress} /> : null}
         </KeyboardAvoidingView>
 
-        <AchievementCompletionPopups
-          popups={achievementPopups}
-          onDismiss={dismissAchievementPopup}
-          onOpenAchievements={openAchievements}
-        />
-        <LevelUpToasts
-          toasts={levelUpToasts}
-          onDismiss={dismissLevelUpToast}
-        />
+        {creatorToolsVisible ? (
+          <>
+            <AchievementCompletionPopups
+              popups={achievementPopups}
+              onDismiss={dismissAchievementPopup}
+              onOpenAchievements={openAchievements}
+            />
+            <LevelUpToasts
+              toasts={levelUpToasts}
+              onDismiss={dismissLevelUpToast}
+            />
+          </>
+        ) : null}
 
         <SectionEditorModal
           card={previewCard}
@@ -13769,11 +13442,11 @@ export default function App() {
           onEditArt={editArtTransform}
           onPickArt={openArtSourceOptions}
           onPickSetSymbol={() => void pickSetSymbol(selectedSet?.id)}
-          onGenerateSetSymbol={() => openSetSymbolGenerator(selectedSet?.id)}
+          onGenerateSetSymbol={creatorToolsVisible ? () => openSetSymbolGenerator(selectedSet?.id) : undefined}
           onAddCardBack={
             canAddPhysicalCardBackFace ? () => addFlipSideToCard({ initialFace: "back" }) : undefined
           }
-          onGenerateCardBack={openCardBackGenerator}
+          onGenerateCardBack={creatorToolsVisible ? openCardBackGenerator : undefined}
           onPickCustomCardBack={pickCustomCardBack}
           onChangeSetDefaultCardBack={(cardBackId) => {
             if (selectedSet) {
@@ -13788,28 +13461,29 @@ export default function App() {
           }}
           onPickWatermark={pickWatermark}
           customKeywordDefinitions={customKeywordDefinitions}
-          rulesTextAiFixer={{
+          rulesTextAiFixer={creatorToolsVisible ? {
             busy: rulesTextFixerBusy,
             error: rulesTextFixerError,
             suggestion: rulesTextFixerSuggestion,
             onFixRulesText: fixRulesTextWithAi,
             onApplySuggestion: applyRulesTextFixerSuggestion,
             onDismissSuggestion: dismissRulesTextFixerSuggestion,
-          }}
+          } : undefined}
         />
         <ArtSourceModal
+          getArtLibraryColorLabel={getArtLibraryColorLabel}
+          sortArtLibraryEntries={sortArtLibraryEntries}
           visible={artSourceOpen}
           hasArt={Boolean(faceCard.artUri)}
           artLibraryEntries={artLibraryEntries}
           onPickPhoto={pickArt}
-          onGenerateArt={openArtGenerator}
+          onGenerateArt={creatorToolsVisible ? openArtGenerator : undefined}
           onGenerateSubjectMask={generateSubjectMask}
           onEditImage={editArtTransform}
           onSelectLibraryArt={selectArtLibraryEntry}
           subjectMaskBusy={subjectMaskBusy}
           subjectMaskStatus={subjectMaskStatus}
           subjectMaskError={subjectMaskError}
-          subjectMaskTrace={subjectMaskTrace}
           onClose={() => setArtSourceOpen(false)}
         />
         <ArtGeneratorModal
@@ -13870,7 +13544,6 @@ export default function App() {
           subjectMaskBusy={subjectMaskBusy}
           subjectMaskStatus={subjectMaskStatus}
           subjectMaskError={subjectMaskError}
-          subjectMaskTrace={subjectMaskTrace}
           subjectMaskComponents={subjectMaskComponents}
           subjectMaskToggleBusy={subjectMaskToggleBusy}
           onToggleSubjectMaskComponent={toggleSubjectMaskComponent}
@@ -13880,11 +13553,11 @@ export default function App() {
             setArtAdjustmentInitialMode("crop");
             void pickArt();
           }}
-          onGenerateArt={() => {
+          onGenerateArt={creatorToolsVisible ? () => {
             setArtAdjustOpen(false);
             setArtAdjustmentInitialMode("crop");
             openArtGenerator();
-          }}
+          } : undefined}
           onClose={() => {
             setArtAdjustOpen(false);
             setArtAdjustmentInitialMode("crop");
@@ -13920,20 +13593,24 @@ export default function App() {
           accepting={collaborationInviteAccepting}
           error={collaborationInviteError}
           onAccept={() => void acceptCollaborationInvite()}
-          onSignIn={() => setAccountOpen(true)}
+          onSignIn={openAccount}
           onClose={dismissCollaborationInvitePrompt}
         />
         <AccountModal
           visible={accountOpen}
           user={accountUser}
-          onClose={() => setAccountOpen(false)}
+          passwordRecoveryMode={accountPasswordRecoveryMode}
+          onClose={closeAccountModal}
           onAuthSuccess={showLoginSuccessToast}
+          onPasswordRecoveryComplete={() => setAccountPasswordRecoveryMode(false)}
           onProfileChange={setAccountProfile}
           notifications={communityNotifications}
           notificationsLoading={communityNotificationsLoading}
           notificationsError={communityNotificationsError}
           onRefreshNotifications={() => void loadAccountNotifications()}
           onMarkNotificationsRead={(notificationIds) => void markAccountNotificationsRead(notificationIds)}
+          showCreatorTools={creatorToolsVisible}
+          onChangeShowCreatorTools={setCreatorToolsVisible}
         />
         <AchievementsModal
           visible={achievementsOpen}
@@ -13985,9 +13662,18 @@ function CollaborationInviteModal({
     return null;
   }
 
-  const title = preview ? `Join ${preview.setName}?` : "Set invite";
+  const inviteRoleLabel = preview?.role === "viewer" ? "viewer" : "editor";
+  const inviteActionLabel = preview?.role === "viewer" ? "Follow set" : "Accept invite";
+  const inviteActionBusyLabel = preview?.role === "viewer" ? "Following" : "Joining";
+  const title = preview
+    ? preview.role === "viewer"
+      ? `View ${preview.setName}?`
+      : `Join ${preview.setName}?`
+    : "Set invite";
   const body = preview
-    ? `${preview.ownerName} invited you to collaborate as an editor.`
+    ? preview.role === "viewer"
+      ? `${preview.ownerName} shared this set with you as a viewer. Viewer access follows the set for community updates.`
+      : `${preview.ownerName} invited you to collaborate as an editor.`
     : error
       ? "CardMagic could not load this set invite."
       : "Loading this set invite.";
@@ -14094,7 +13780,7 @@ function CollaborationInviteModal({
                 Owner: {preview.ownerName}
               </Text>
               <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                Access: editor
+                Access: {inviteRoleLabel}
               </Text>
             </View>
           ) : null}
@@ -14142,7 +13828,7 @@ function CollaborationInviteModal({
               >
                 {accepting ? <ActivityIndicator color="#ffffff" size="small" /> : <Check size={16} color="#ffffff" strokeWidth={2.6} />}
                 <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-                  {accepting ? "Joining" : "Accept invite"}
+                  {accepting ? inviteActionBusyLabel : inviteActionLabel}
                 </Text>
               </Pressable>
             ) : (
@@ -14296,1048 +13982,6 @@ function VersionRefreshPromptModal({
   );
 }
 
-function ArtSourceModal({
-  visible,
-  hasArt,
-  artLibraryEntries,
-  onPickPhoto,
-  onGenerateArt,
-  onGenerateSubjectMask,
-  onEditImage,
-  onSelectLibraryArt,
-  subjectMaskBusy,
-  subjectMaskStatus,
-  subjectMaskError,
-  subjectMaskTrace,
-  onClose,
-}: {
-  visible: boolean;
-  hasArt: boolean;
-  artLibraryEntries: ArtLibraryEntry[];
-  onPickPhoto: () => void;
-  onGenerateArt: () => void;
-  onGenerateSubjectMask: (
-    targetPrompt?: string,
-    boxPrompt?: SubjectMaskBoxPrompt,
-    pointPrompts?: SubjectMaskPointPrompt[],
-    brushSamples?: SubjectMaskSelectionSample[],
-    brushRadius?: number,
-  ) => void;
-  onEditImage: () => void;
-  onSelectLibraryArt: (entry: ArtLibraryEntry) => void;
-  subjectMaskBusy: boolean;
-  subjectMaskStatus: string | null;
-  subjectMaskError: string | null;
-  subjectMaskTrace: SubjectMaskTraceEntry[];
-  onClose: () => void;
-}) {
-  const [activeLibrarySource, setActiveLibrarySource] = useState<ArtLibrarySource>("generated");
-  const visibleLibraryEntries = useMemo(
-    () => sortArtLibraryEntries(artLibraryEntries.filter((entry) => entry.source === activeLibrarySource)),
-    [activeLibrarySource, artLibraryEntries],
-  );
-  const renderedLibraryEntries = visibleLibraryEntries.slice(0, ART_LIBRARY_VISIBLE_THUMBNAIL_LIMIT);
-  const hiddenLibraryEntryCount = Math.max(0, visibleLibraryEntries.length - renderedLibraryEntries.length);
-
-  return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Close art source menu"
-        onPress={onClose}
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(15, 18, 24, 0.34)",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 24,
-        }}
-      >
-        <Pressable
-          accessibilityRole="menu"
-          onPress={(event) => event.stopPropagation()}
-          style={{
-            width: "100%",
-            maxWidth: 360,
-            borderRadius: 16,
-            borderCurve: "continuous",
-            backgroundColor: "#ffffff",
-            padding: 12,
-            gap: 8,
-            shadowColor: "#000000",
-            shadowOpacity: 0.22,
-            shadowRadius: 24,
-            shadowOffset: { width: 0, height: 14 },
-            elevation: 16,
-          }}
-        >
-          <View style={{ paddingHorizontal: 6, paddingVertical: 4, gap: 2 }}>
-            <Text selectable={false} style={{ color: "#151820", fontSize: 18, fontWeight: "900" }}>
-              Card Art
-            </Text>
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "700" }}>
-              Choose an image source for the current art aperture.
-            </Text>
-          </View>
-
-          {!hasArt ? (
-            <>
-              <ArtSourceMenuItem
-                label="Pick photo"
-                detail="Use an image from the photo library."
-                icon={<Upload size={20} color="#151820" strokeWidth={2.5} />}
-                onPress={onPickPhoto}
-              />
-              <ArtSourceMenuItem
-                label="Generate art"
-                detail="Use a locally composed prompt for OpenAI image generation."
-                icon={<Palette size={20} color="#151820" strokeWidth={2.5} />}
-                onPress={onGenerateArt}
-              />
-            </>
-          ) : null}
-          {hasArt ? (
-            <>
-              <ArtSourceMenuItem
-                label="Edit image crop"
-                detail="Adjust scale and focal point inside the visible art slot."
-                icon={<SlidersHorizontal size={20} color="#151820" strokeWidth={2.5} />}
-                onPress={onEditImage}
-              />
-              <ArtSourceMenuItem
-                label={subjectMaskBusy ? "Generating mask" : "Generate subject mask"}
-                detail={subjectMaskStatus ?? "Create an alpha matte for over-border borderless art."}
-                icon={
-                  subjectMaskBusy ? (
-                    <ActivityIndicator color="#151820" />
-                  ) : (
-                    <Layers size={20} color="#151820" strokeWidth={2.5} />
-                  )
-                }
-                onPress={() => onGenerateSubjectMask()}
-              />
-              {subjectMaskStatus ? (
-                <View
-                  style={{
-                    borderRadius: 12,
-                    backgroundColor: "#eef8fb",
-                    borderWidth: 1,
-                    borderColor: "#b7e7f1",
-                    paddingHorizontal: 10,
-                    paddingVertical: 8,
-                    gap: 3,
-                  }}
-                >
-                  <Text selectable={false} style={{ color: "#0b7180", fontSize: 11, fontWeight: "900" }}>
-                    Subject matte progress
-                  </Text>
-                  <Text selectable style={{ color: "#334155", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                    {subjectMaskStatus}
-                  </Text>
-                </View>
-              ) : null}
-              {subjectMaskTrace.length > 0 ? (
-                <View
-                  style={{
-                    borderRadius: 12,
-                    backgroundColor: "#f8fafc",
-                    borderWidth: 1,
-                    borderColor: "#cbd5e1",
-                    paddingHorizontal: 10,
-                    paddingVertical: 8,
-                    gap: 4,
-                  }}
-                >
-                  <Text selectable={false} style={{ color: "#334155", fontSize: 11, fontWeight: "900" }}>
-                    Mask debug trace
-                  </Text>
-                  {subjectMaskTrace.map((entry) => (
-                    <Text
-                      key={entry.id}
-                      selectable
-                      style={{
-                        color: entry.tone === "error" ? "#b42318" : entry.tone === "success" ? "#047857" : "#475569",
-                        fontSize: 11,
-                        lineHeight: 15,
-                        fontWeight: "800",
-                      }}
-                    >
-                      {entry.message}
-                    </Text>
-                  ))}
-                </View>
-              ) : null}
-            </>
-          ) : null}
-          {subjectMaskError ? (
-            <Text selectable style={{ color: "#b42318", fontSize: 12, lineHeight: 17, fontWeight: "800", paddingHorizontal: 6 }}>
-              {subjectMaskError}
-            </Text>
-          ) : null}
-          {artLibraryEntries.length > 0 ? (
-            <View style={{ gap: 8, paddingTop: 4 }}>
-              <View
-                style={{
-                  flexDirection: "row",
-                  borderRadius: 999,
-                  backgroundColor: "#eef1f5",
-                  padding: 3,
-                  gap: 3,
-                }}
-              >
-                {(["generated", "added"] as const).map((source) => {
-                  const selected = activeLibrarySource === source;
-
-                  return (
-                    <Pressable
-                      key={source}
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected }}
-                      onPress={() => setActiveLibrarySource(source)}
-                      style={{
-                        flex: 1,
-                        minHeight: 34,
-                        borderRadius: 999,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        backgroundColor: selected ? "#ffffff" : "transparent",
-                      }}
-                    >
-                      <Text
-                        selectable={false}
-                        style={{
-                          color: selected ? "#151820" : "#66707c",
-                          fontSize: 12,
-                          fontWeight: "900",
-                        }}
-                      >
-                        {source === "generated" ? "Generated" : "Added"}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 10, paddingVertical: 2 }}
-              >
-                {visibleLibraryEntries.length > 0 ? (
-                  <>
-                    {renderedLibraryEntries.map((entry) => (
-                      <ArtLibraryThumbnail
-                        key={entry.id}
-                        entry={entry}
-                        onPress={() => onSelectLibraryArt(entry)}
-                      />
-                    ))}
-                    {hiddenLibraryEntryCount > 0 ? (
-                      <View
-                        style={{
-                          width: 86,
-                          height: 64,
-                          borderRadius: 10,
-                          borderCurve: "continuous",
-                          borderWidth: 1,
-                          borderColor: "#d8dbe2",
-                          backgroundColor: "#f7f8fb",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          padding: 8,
-                        }}
-                      >
-                        <Text
-                          selectable={false}
-                          style={{
-                            color: "#66707c",
-                            fontSize: 11,
-                            lineHeight: 14,
-                            fontWeight: "900",
-                            textAlign: "center",
-                          }}
-                        >
-                          +{hiddenLibraryEntryCount} more
-                        </Text>
-                      </View>
-                    ) : null}
-                  </>
-                ) : (
-                  <View
-                    style={{
-                      minWidth: 180,
-                      minHeight: 84,
-                      borderRadius: 12,
-                      borderWidth: 1,
-                      borderColor: "#dde1e8",
-                      backgroundColor: "#f7f8fb",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 12,
-                    }}
-                  >
-                    <Text selectable={false} style={{ color: "#66707c", fontSize: 12, fontWeight: "800" }}>
-                      No {activeLibrarySource} art yet
-                    </Text>
-                  </View>
-                )}
-              </ScrollView>
-            </View>
-          ) : null}
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
-}
-
-function ArtLibraryThumbnail({
-  entry,
-  onPress,
-}: {
-  entry: ArtLibraryEntry;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Use ${entry.label} art`}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 86,
-        gap: 5,
-        opacity: pressed ? 0.72 : 1,
-      })}
-    >
-      <View
-        style={{
-          width: 86,
-          height: 64,
-          borderRadius: 10,
-          borderCurve: "continuous",
-          overflow: "hidden",
-          backgroundColor: "#101820",
-          borderWidth: 1,
-          borderColor: "#d8dbe2",
-        }}
-      >
-        <Image
-          accessibilityIgnoresInvertColors
-          source={{ uri: entry.uri }}
-          resizeMode="cover"
-          style={{ width: "100%", height: "100%" }}
-        />
-      </View>
-      <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 11, fontWeight: "900" }}>
-        {getArtLibraryColorLabel(entry.colorIdentity)}
-      </Text>
-      <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 10, fontWeight: "700" }}>
-        {entry.label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function ArtSourceMenuItem({
-  label,
-  detail,
-  icon,
-  onPress,
-}: {
-  label: string;
-  detail: string;
-  icon: ReactNode;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="menuitem"
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 66,
-        borderRadius: 12,
-        borderCurve: "continuous",
-        backgroundColor: pressed ? "#edf5ff" : "#f6f7f9",
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 12,
-      })}
-    >
-      <View
-        style={{
-          width: 38,
-          height: 38,
-          borderRadius: 19,
-          backgroundColor: "#ffffff",
-          borderWidth: 1,
-          borderColor: "#dde1e8",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {icon}
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 15, fontWeight: "900" }}>
-          {label}
-        </Text>
-        <Text selectable={false} numberOfLines={2} style={{ color: "#66707c", fontSize: 12, lineHeight: 17, fontWeight: "700" }}>
-          {detail}
-        </Text>
-      </View>
-    </Pressable>
-  );
-}
-
-function ArtGeneratorModal({
-  visible,
-  hasArt,
-  request,
-  quality,
-  styleId,
-  generatedPrompt,
-  busy,
-  error,
-  onChangeRequest,
-  onChangeQuality,
-  onChangeStyle,
-  onGenerate,
-  onClose,
-}: {
-  visible: boolean;
-  hasArt: boolean;
-  request: string;
-  quality: ArtImageQuality;
-  styleId: ArtGeneratorStyleId;
-  generatedPrompt: string;
-  busy: boolean;
-  error: string | null;
-  onChangeRequest: (request: string) => void;
-  onChangeQuality: (quality: ArtImageQuality) => void;
-  onChangeStyle: (styleId: ArtGeneratorStyleId) => void;
-  onGenerate: () => void;
-  onClose: () => void;
-}) {
-  const { height } = useWindowDimensions();
-  const [showComposedPrompt, setShowComposedPrompt] = useState(false);
-  const maxPromptHeight = Math.max(120, Math.min(260, height * 0.26));
-  const submitLabel = hasArt ? "Regenerate" : "Generate";
-  const submitAccessibilityLabel = hasArt ? "Regenerate card art" : "Generate card art";
-  const selectedStyleOption =
-    ART_GENERATOR_STYLE_OPTIONS.find((option) => option.id === styleId) ?? ART_GENERATOR_STYLE_OPTIONS[0];
-
-  return (
-    <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(15, 18, 24, 0.42)",
-          justifyContent: "flex-end",
-        }}
-      >
-        <Pressable style={{ flex: 1 }} onPress={onClose} />
-        <View
-          style={{
-            borderTopLeftRadius: 24,
-            borderTopRightRadius: 24,
-            backgroundColor: "#ffffff",
-            paddingHorizontal: 18,
-            paddingTop: 18,
-            paddingBottom: 18,
-            gap: 12,
-            shadowColor: "#000000",
-            shadowOpacity: 0.2,
-            shadowRadius: 22,
-            shadowOffset: { width: 0, height: -10 },
-            elevation: 16,
-          }}
-        >
-          <View style={{ gap: 3 }}>
-            <Text selectable={false} style={{ color: "#151820", fontSize: 22, fontWeight: "900" }}>
-              Generate Art
-            </Text>
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "700" }}>
-              The request is wrapped locally with card-art direction. Explicit styles, like anime or watercolor, override the default fantasy trading-card profile.
-            </Text>
-          </View>
-
-          <View style={{ gap: 7 }}>
-            <Text selectable={false} style={{ color: "#343a44", fontSize: 12, fontWeight: "900" }}>
-              Art Request
-            </Text>
-            <TextInput
-              accessibilityLabel="Art request"
-              value={request}
-              onChangeText={onChangeRequest}
-              multiline
-              placeholder="make a dog"
-              placeholderTextColor="#9aa1ad"
-              style={{
-                minHeight: 72,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                backgroundColor: "#f7f8fb",
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                color: "#151820",
-                fontSize: 14,
-                lineHeight: 19,
-                fontWeight: "700",
-                textAlignVertical: "top",
-              }}
-            />
-          </View>
-
-          <View style={{ gap: 7 }}>
-            <Text selectable={false} style={{ color: "#343a44", fontSize: 12, fontWeight: "900" }}>
-              Style
-            </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 2 }}>
-              {ART_GENERATOR_STYLE_OPTIONS.map((option) => {
-                const selected = styleId === option.id;
-
-                return (
-                  <Pressable
-                    key={option.id}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                    accessibilityLabel={`Use ${option.label.toLowerCase()} art style`}
-                    disabled={busy}
-                    onPress={() => onChangeStyle(option.id)}
-                    style={{
-                      minWidth: 82,
-                      minHeight: 40,
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: selected ? "#151820" : "#d8dbe2",
-                      backgroundColor: selected ? "#151820" : "#ffffff",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      paddingHorizontal: 14,
-                      opacity: busy ? 0.68 : 1,
-                    }}
-                  >
-                    <Text
-                      selectable={false}
-                      numberOfLines={1}
-                      style={{
-                        color: selected ? "#ffffff" : "#151820",
-                        fontSize: 13,
-                        fontWeight: "900",
-                      }}
-                    >
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <Text
-              selectable={false}
-              style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "700" }}
-            >
-              {selectedStyleOption.description}
-            </Text>
-          </View>
-
-          <View style={{ gap: 7 }}>
-            <Text selectable={false} style={{ color: "#343a44", fontSize: 12, fontWeight: "900" }}>
-              Image Quality
-            </Text>
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              {ART_IMAGE_QUALITY_OPTIONS.map((option) => {
-                const selected = quality === option.value;
-
-                return (
-                  <Pressable
-                    key={option.value}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                    accessibilityLabel={`Generate ${option.label.toLowerCase()} quality card art for ${option.detail}`}
-                    disabled={busy}
-                    onPress={() => onChangeQuality(option.value)}
-                    style={{
-                      flex: 1,
-                      minHeight: 48,
-                      borderRadius: 12,
-                      borderCurve: "continuous",
-                      borderWidth: 1,
-                      borderColor: selected ? "#151820" : "#d8dbe2",
-                      backgroundColor: selected ? "#151820" : "#ffffff",
-                      justifyContent: "center",
-                      paddingHorizontal: 12,
-                      opacity: busy ? 0.68 : 1,
-                    }}
-                  >
-                    <Text
-                      selectable={false}
-                      numberOfLines={1}
-                      style={{
-                        color: selected ? "#ffffff" : "#151820",
-                        fontSize: 14,
-                        fontWeight: "900",
-                      }}
-                    >
-                      {option.label}
-                    </Text>
-                    <Text
-                      selectable={false}
-                      numberOfLines={1}
-                      style={{
-                        color: selected ? "rgba(255,255,255,0.72)" : "#68707d",
-                        fontSize: 11,
-                        fontWeight: "800",
-                      }}
-                    >
-                      {option.detail}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-
-          <View style={{ gap: 7 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={showComposedPrompt ? "Hide composed prompt" : "Show composed prompt"}
-              onPress={() => setShowComposedPrompt((current) => !current)}
-              style={({ pressed }) => ({
-                alignSelf: "flex-start",
-                minHeight: 34,
-                borderRadius: 999,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                backgroundColor: pressed ? "#edf5ff" : "#ffffff",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 12,
-              })}
-            >
-              <Text selectable={false} style={{ color: "#343a44", fontSize: 12, fontWeight: "900" }}>
-                {showComposedPrompt ? "Hide composed prompt" : "Show composed prompt"}
-              </Text>
-            </Pressable>
-            {showComposedPrompt ? (
-              <ScrollView
-                style={{
-                  maxHeight: maxPromptHeight,
-                  borderRadius: 12,
-                  borderWidth: 1,
-                  borderColor: "#e0e3e9",
-                  backgroundColor: "#f7f8fb",
-                }}
-                contentContainerStyle={{ padding: 12 }}
-              >
-                <Text selectable style={{ color: "#333b47", fontSize: 12, lineHeight: 17, fontWeight: "700" }}>
-                  {generatedPrompt}
-                </Text>
-              </ScrollView>
-            ) : null}
-          </View>
-
-          {error ? (
-            <Text selectable style={{ color: "#b42318", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-              {error}
-            </Text>
-          ) : null}
-
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Cancel art generation"
-              disabled={busy}
-              onPress={onClose}
-              style={{
-                minHeight: 46,
-                borderRadius: 999,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 18,
-                opacity: busy ? 0.55 : 1,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#343a44", fontSize: 14, fontWeight: "900" }}>
-                Cancel
-              </Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={submitAccessibilityLabel}
-              disabled={busy}
-              onPress={onGenerate}
-              style={{
-                minHeight: 46,
-                borderRadius: 999,
-                backgroundColor: "#151820",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 20,
-                flexDirection: "row",
-                gap: 9,
-                opacity: busy ? 0.72 : 1,
-              }}
-            >
-              {busy ? <ActivityIndicator color="#ffffff" /> : <Palette size={18} color="#ffffff" strokeWidth={2.5} />}
-              <GenerationButtonLabel busy={busy} idleLabel={submitLabel} busyLabel="Generating, please wait" />
-            </Pressable>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
-function SetSymbolGeneratorModal({
-  visible,
-  request,
-  busy,
-  error,
-  onChangeRequest,
-  onGenerate,
-  onClose,
-}: {
-  visible: boolean;
-  request: string;
-  busy: boolean;
-  error: string | null;
-  onChangeRequest: (request: string) => void;
-  onGenerate: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(15, 18, 24, 0.42)",
-          justifyContent: "flex-end",
-        }}
-      >
-        <Pressable style={{ flex: 1 }} onPress={onClose} />
-        <View
-          style={{
-            borderTopLeftRadius: 24,
-            borderTopRightRadius: 24,
-            backgroundColor: "#ffffff",
-            paddingHorizontal: 18,
-            paddingTop: 18,
-            paddingBottom: 18,
-            gap: 12,
-            boxShadow: "0 -10px 28px rgba(0, 0, 0, 0.2)",
-          }}
-        >
-          <View style={{ gap: 3 }}>
-            <Text selectable={false} style={{ color: "#151820", fontSize: 22, fontWeight: "900" }}>
-              Generate Set Symbol
-            </Text>
-          </View>
-
-          <View style={{ gap: 7 }}>
-            <Text selectable={false} style={{ color: "#343a44", fontSize: 12, fontWeight: "900" }}>
-              Symbol Concept
-            </Text>
-            <TextInput
-              accessibilityLabel="Set symbol concept"
-              value={request}
-              onChangeText={onChangeRequest}
-              placeholder="heart"
-              placeholderTextColor="#9aa1ad"
-              autoCapitalize="none"
-              autoCorrect
-              style={{
-                minHeight: 46,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                backgroundColor: "#f7f8fb",
-                paddingHorizontal: 12,
-                color: "#151820",
-                fontSize: 15,
-                fontWeight: "800",
-              }}
-            />
-          </View>
-
-          {error ? (
-            <Text selectable style={{ color: "#b42318", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-              {error}
-            </Text>
-          ) : null}
-
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Cancel set symbol generation"
-              disabled={busy}
-              onPress={onClose}
-              style={{
-                minHeight: 46,
-                borderRadius: 999,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 18,
-                opacity: busy ? 0.55 : 1,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#343a44", fontSize: 14, fontWeight: "900" }}>
-                Cancel
-              </Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Generate set symbol"
-              disabled={busy}
-              onPress={onGenerate}
-              style={{
-                minHeight: 46,
-                borderRadius: 999,
-                backgroundColor: "#0b7180",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 20,
-                flexDirection: "row",
-                gap: 9,
-                opacity: busy ? 0.72 : 1,
-              }}
-            >
-              {busy ? <ActivityIndicator color="#ffffff" /> : <Sparkles size={18} color="#ffffff" strokeWidth={2.5} />}
-              <GenerationButtonLabel busy={busy} idleLabel="Generate" />
-            </Pressable>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
-function CardBackGeneratorModal({
-  visible,
-  request,
-  mode,
-  generatedPrompt,
-  busy,
-  error,
-  onChangeRequest,
-  onChangeMode,
-  onGenerate,
-  onClose,
-}: {
-  visible: boolean;
-  request: string;
-  mode: CardBackGeneratorMode;
-  generatedPrompt: string;
-  busy: boolean;
-  error: string | null;
-  onChangeRequest: (request: string) => void;
-  onChangeMode: (mode: CardBackGeneratorMode) => void;
-  onGenerate: () => void;
-  onClose: () => void;
-}) {
-  const { height } = useWindowDimensions();
-  const [showComposedPrompt, setShowComposedPrompt] = useState(false);
-  const maxPromptHeight = Math.max(110, Math.min(240, height * 0.24));
-
-  return (
-    <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(15, 18, 24, 0.42)",
-          justifyContent: "flex-end",
-        }}
-      >
-        <Pressable style={{ flex: 1 }} onPress={onClose} />
-        <View
-          style={{
-            borderTopLeftRadius: 24,
-            borderTopRightRadius: 24,
-            backgroundColor: "#ffffff",
-            paddingHorizontal: 18,
-            paddingTop: 18,
-            paddingBottom: 18,
-            gap: 12,
-            boxShadow: "0 -10px 28px rgba(0, 0, 0, 0.2)",
-          }}
-        >
-          <View style={{ gap: 3 }}>
-            <Text selectable={false} style={{ color: "#151820", fontSize: 22, fontWeight: "900" }}>
-              Generate Card Back
-            </Text>
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "700" }}>
-              Reskin edits the default CardMagic back in place. Custom creates a separate reusable back design.
-            </Text>
-          </View>
-
-          <View style={{ flexDirection: "row", gap: 8 }}>
-            {(["reskin", "custom"] as const).map((option) => {
-              const selected = mode === option;
-
-              return (
-                <Pressable
-                  key={option}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={`Use ${option} card back mode`}
-                  disabled={busy}
-                  onPress={() => onChangeMode(option)}
-                  style={{
-                    flex: 1,
-                    minHeight: 44,
-                    borderRadius: 10,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: selected ? "#151820" : "#d8dbe2",
-                    backgroundColor: selected ? "#151820" : "#ffffff",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    opacity: busy ? 0.68 : 1,
-                  }}
-                >
-                  <Text
-                    selectable={false}
-                    style={{
-                      color: selected ? "#ffffff" : "#151820",
-                      fontSize: 14,
-                      fontWeight: "900",
-                    }}
-                  >
-                    {option === "reskin" ? "Reskin" : "Custom"}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <View style={{ gap: 7 }}>
-            <Text selectable={false} style={{ color: "#343a44", fontSize: 12, fontWeight: "900" }}>
-              Back Concept
-            </Text>
-            <TextInput
-              accessibilityLabel="Card back concept"
-              value={request}
-              onChangeText={onChangeRequest}
-              multiline
-              placeholder={mode === "reskin" ? "black marble and gold ink" : "cosmic map with ivory frame"}
-              placeholderTextColor="#9aa1ad"
-              style={{
-                minHeight: 70,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                backgroundColor: "#f7f8fb",
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                color: "#151820",
-                fontSize: 14,
-                lineHeight: 19,
-                fontWeight: "700",
-                textAlignVertical: "top",
-              }}
-            />
-          </View>
-
-          <View style={{ gap: 7 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={showComposedPrompt ? "Hide card back prompt" : "Show card back prompt"}
-              onPress={() => setShowComposedPrompt((current) => !current)}
-              style={({ pressed }) => ({
-                alignSelf: "flex-start",
-                minHeight: 34,
-                borderRadius: 999,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                backgroundColor: pressed ? "#edf5ff" : "#ffffff",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 12,
-              })}
-            >
-              <Text selectable={false} style={{ color: "#343a44", fontSize: 12, fontWeight: "900" }}>
-                {showComposedPrompt ? "Hide prompt" : "Show prompt"}
-              </Text>
-            </Pressable>
-            {showComposedPrompt ? (
-              <ScrollView
-                style={{
-                  maxHeight: maxPromptHeight,
-                  borderRadius: 12,
-                  borderWidth: 1,
-                  borderColor: "#e0e3e9",
-                  backgroundColor: "#f7f8fb",
-                }}
-                contentContainerStyle={{ padding: 12 }}
-              >
-                <Text selectable style={{ color: "#333b47", fontSize: 12, lineHeight: 17, fontWeight: "700" }}>
-                  {generatedPrompt}
-                </Text>
-              </ScrollView>
-            ) : null}
-          </View>
-
-          {error ? (
-            <Text selectable style={{ color: "#b42318", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-              {error}
-            </Text>
-          ) : null}
-
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Cancel card back generation"
-              disabled={busy}
-              onPress={onClose}
-              style={{
-                minHeight: 46,
-                borderRadius: 999,
-                borderWidth: 1,
-                borderColor: "#d8dbe2",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 18,
-                opacity: busy ? 0.55 : 1,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#343a44", fontSize: 14, fontWeight: "900" }}>
-                Cancel
-              </Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Generate card back"
-              disabled={busy}
-              onPress={onGenerate}
-              style={{
-                minHeight: 46,
-                borderRadius: 999,
-                backgroundColor: "#151820",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 20,
-                flexDirection: "row",
-                gap: 9,
-                opacity: busy ? 0.72 : 1,
-              }}
-            >
-              {busy ? <ActivityIndicator color="#ffffff" /> : <Sparkles size={18} color="#ffffff" strokeWidth={2.5} />}
-              <GenerationButtonLabel busy={busy} idleLabel="Generate" />
-            </Pressable>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
 function ArtAdjustmentModal({
   visible,
   card,
@@ -15347,7 +13991,6 @@ function ArtAdjustmentModal({
   subjectMaskBusy,
   subjectMaskStatus,
   subjectMaskError,
-  subjectMaskTrace,
   subjectMaskComponents,
   subjectMaskToggleBusy,
   onToggleSubjectMaskComponent,
@@ -15370,13 +14013,12 @@ function ArtAdjustmentModal({
   subjectMaskBusy: boolean;
   subjectMaskStatus: string | null;
   subjectMaskError: string | null;
-  subjectMaskTrace: SubjectMaskTraceEntry[];
   subjectMaskComponents: SubjectMaskComponent[];
   subjectMaskToggleBusy: boolean;
   onToggleSubjectMaskComponent: (concept: string) => void;
   onAddSubjectMask: (concept: string) => void;
   onPickPhoto: () => void;
-  onGenerateArt: () => void;
+  onGenerateArt?: () => void;
   onClose: () => void;
 }) {
   const { width, height } = useWindowDimensions();
@@ -15436,6 +14078,70 @@ function ArtAdjustmentModal({
   const roughSelectionBrushSamplesRef = useRef(roughSelectionBrushSamples);
   const roughSelectionStrokeIdRef = useRef(0);
   const roughSelectionBrushRadius = Math.max(34, cropWidth * 0.12);
+  const showDesktopMaskZoomRail = Platform.OS === "web" && width >= 820 && adjustMode === "mask";
+  const modalContentWidth = cropWidth + (showDesktopMaskZoomRail ? 72 : 0);
+  const desktopMaskZoomMax = 2;
+  const subjectMaskSectionRects = getSubjectMaskSectionRectsForCard(card);
+  const activeSubjectMaskSections = resolveSubjectMaskSections(faceCard.artSubjectMaskSections);
+  const activeSubjectMaskSectionSet = new Set(activeSubjectMaskSections);
+  const subjectMaskFitMode = faceCard.artSubjectMaskFitMode ?? DEFAULT_SUBJECT_MASK_FIT_MODE;
+  const sectionGuideRenderOrder: SubjectMaskSection[] = ["frame", "title", "typeLine", "text"];
+  const sectionControlRenderOrder: SubjectMaskSection[] = ["title", "typeLine", "text", "frame"];
+  const orderedSubjectMaskSectionRects = sectionGuideRenderOrder.flatMap((sectionId) =>
+    subjectMaskSectionRects.filter((section) => section.id === sectionId),
+  );
+  const orderedSubjectMaskSectionControls = sectionControlRenderOrder.flatMap((sectionId) =>
+    subjectMaskSectionRects.filter((section) => section.id === sectionId),
+  );
+  const orderedSubjectMaskSectionGuideRects = orderedSubjectMaskSectionRects.flatMap((section) =>
+    section.guideRects.map((rect, rectIndex) => ({ section, rect, rectIndex })),
+  );
+  const subjectMaskGuideRects = [artRect, ...subjectMaskSectionRects.flatMap((section) => section.guideRects)];
+  const subjectMaskGuideTop = Math.min(...subjectMaskGuideRects.map((rect) => rect.y));
+  const subjectMaskGuideBottom = Math.max(...subjectMaskGuideRects.map((rect) => rect.y + rect.height));
+  const maskGuideTopOverflow = Math.max(0, (artRect.y - subjectMaskGuideTop) * coordinateScale);
+  const maskGuideBottomOverflow = Math.max(0, (subjectMaskGuideBottom - (artRect.y + artRect.height)) * coordinateScale);
+
+  const getMaskGuideDisplayRect = (rect: { x: number; y: number; width: number; height: number }) => ({
+    left: (rect.x - artRect.x) * coordinateScale,
+    top: (rect.y - artRect.y) * coordinateScale,
+    width: rect.width * coordinateScale,
+    height: rect.height * coordinateScale,
+  });
+
+  const toggleSubjectMaskSection = (sectionId: SubjectMaskSection) => {
+    const current = resolveSubjectMaskSections(faceCard.artSubjectMaskSections);
+    const next = current.includes(sectionId)
+      ? current.filter((currentSection) => currentSection !== sectionId)
+      : [...current, sectionId];
+
+    onChange(toDfcFacePatch(card, {
+      artSubjectMaskSections: next,
+    }));
+  };
+
+  const setSubjectMaskFitMode = (fitMode: "expanded" | "artOpening") => {
+    onChange(toDfcFacePatch(card, {
+      artSubjectMaskFitMode: fitMode,
+    }));
+  };
+
+  const updateMaskZoomScale = (nextScale: number) => {
+    const normalizedTransform = normalizeArtTransformForVisibleRect(
+      {
+        ...artTransformRef.current,
+        scale: nextScale,
+      },
+      artRectRef.current,
+      imageAspectRatioRef.current,
+    );
+
+    artTransformRef.current = normalizedTransform;
+    onChange(toDfcFacePatch(cardRef.current, {
+      artSubjectMaskFitMode: "artOpening",
+      artTransform: normalizedTransform,
+    }));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -15509,6 +14215,15 @@ function ArtAdjustmentModal({
       setMaskPreviewUri(faceCard.artSubjectMaskUri ?? null);
     }
   }, [faceCard.artSubjectMaskUri, visible]);
+
+  useEffect(() => {
+    if (visible && showDesktopMaskZoomRail && subjectMaskFitMode !== "artOpening") {
+      setSubjectMaskFitMode("artOpening");
+    }
+    if (visible && showDesktopMaskZoomRail && artTransform.scale > desktopMaskZoomMax) {
+      updateMaskZoomScale(desktopMaskZoomMax);
+    }
+  }, [artTransform.scale, desktopMaskZoomMax, showDesktopMaskZoomRail, subjectMaskFitMode, visible]);
 
   const updateArtTransform = useCallback((nextTransform: ArtTransform) => {
     const normalizedTransform = normalizeArtTransformForVisibleRect(
@@ -15734,6 +14449,7 @@ function ArtAdjustmentModal({
     [roughSelectionBrushSamples],
   );
   const brushSelectionCapturesTouch = adjustMode === "mask" && roughSelectionActive && !subjectMaskBusy;
+  const maskArtDragEnabled = adjustMode === "mask" && !roughSelectionActive;
 
   const artGesture = useMemo(() => {
     const panGesture = Gesture.Pan()
@@ -15816,11 +14532,23 @@ function ArtAdjustmentModal({
             }}
             keyboardShouldPersistTaps="always"
           >
-            <View style={{ width: cropWidth, gap: 12 }}>
+            <View style={{ width: modalContentWidth, maxWidth: width - 48, gap: 12, alignItems: "center" }}>
+            <View
+              style={{
+                width: modalContentWidth,
+                maxWidth: width - 48,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: showDesktopMaskZoomRail ? 14 : 0,
+              }}
+            >
             <View
               style={{
                 width: cropWidth,
                 height: cropHeight,
+                marginTop: adjustMode === "mask" ? maskGuideTopOverflow : 0,
+                marginBottom: adjustMode === "mask" ? maskGuideBottomOverflow : 0,
                 overflow: "visible",
               }}
             >
@@ -15889,7 +14617,127 @@ function ArtAdjustmentModal({
                   </View>
                 ) : null}
               </View>
-              {adjustMode === "crop" ? (
+              {adjustMode === "mask" && maskOverlayVisible && maskPreviewUri ? (
+                <>
+                  {orderedSubjectMaskSectionGuideRects
+                    .filter(({ section }) => activeSubjectMaskSectionSet.has(section.id))
+                    .map(({ section, rect, rectIndex }) => {
+                      const displayRect = getMaskGuideDisplayRect(rect);
+                      const displayRadius = Math.max(2, (rect.radius ?? 4) * coordinateScale);
+
+                      return (
+                        <View
+                          key={`mask-preview-section-${section.id}-${rectIndex}`}
+                          pointerEvents="none"
+                          style={{
+                            position: "absolute",
+                            ...displayRect,
+                            overflow: "hidden",
+                            borderRadius: displayRadius,
+                            borderCurve: "continuous",
+                          }}
+                        >
+                          <View
+                            style={{
+                              ...transformedImageLayerStyle,
+                              left: fittedImageLayout.left - displayRect.left,
+                              top: fittedImageLayout.top - displayRect.top,
+                              opacity: 0.5,
+                            }}
+                          >
+                            <Image
+                              accessibilityIgnoresInvertColors
+                              source={{ uri: maskPreviewUri }}
+                              resizeMode={fittedImageLayout.resizeMode}
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                tintColor: "#55dff5",
+                              }}
+                            />
+                          </View>
+                        </View>
+                      );
+                    })}
+                </>
+              ) : null}
+              {adjustMode === "mask" ? (
+                <View
+                  pointerEvents={roughSelectionActive ? "none" : "box-none"}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    width: cropWidth,
+                    height: cropHeight,
+                    zIndex: 5,
+                  }}
+                >
+                  {orderedSubjectMaskSectionRects.map((section) => {
+                    const active = activeSubjectMaskSectionSet.has(section.id);
+                    const displayRect = getMaskGuideDisplayRect(section.rect);
+
+                    if (displayRect.width < 28 || displayRect.height < 18) {
+                      return null;
+                    }
+
+                    return (
+                      <Text
+                        key={`mask-section-label-${section.id}`}
+                        pointerEvents="none"
+                        selectable={false}
+                        numberOfLines={1}
+                        style={{
+                          position: "absolute",
+                          left: displayRect.left + 5,
+                          top: displayRect.top + 3,
+                          maxWidth: Math.max(24, displayRect.width - 10),
+                          zIndex: 6,
+                          color: active ? "#b7f6ff" : "rgba(255, 255, 255, 0.72)",
+                          fontSize: 10,
+                          fontWeight: "900",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {section.label}
+                      </Text>
+                    );
+                  })}
+                  {orderedSubjectMaskSectionGuideRects.map(({ section, rect, rectIndex }) => {
+                    const active = activeSubjectMaskSectionSet.has(section.id);
+                    const displayRect = getMaskGuideDisplayRect(rect);
+                    const displayRadius = Math.max(2, (rect.radius ?? 4) * coordinateScale);
+
+                    return (
+                      <Pressable
+                        key={`mask-section-${section.id}-${rectIndex}`}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${active ? "Disable" : "Enable"} ${section.label} mask area`}
+                        accessibilityState={{ selected: active }}
+                        hitSlop={6}
+                        onPress={() => toggleSubjectMaskSection(section.id)}
+                        style={({ pressed }) => ({
+                          position: "absolute",
+                          ...displayRect,
+                          borderRadius: displayRadius,
+                          borderCurve: "continuous",
+                          borderWidth: active ? 2 : 1.25,
+                          borderStyle: section.id === "frame" ? "dashed" : "solid",
+                          borderColor: active ? "rgba(85, 223, 245, 0.96)" : "rgba(255, 255, 255, 0.52)",
+                          backgroundColor: active
+                            ? pressed
+                              ? "rgba(85, 223, 245, 0.18)"
+                              : "rgba(85, 223, 245, 0.08)"
+                            : pressed
+                              ? "rgba(255, 255, 255, 0.12)"
+                              : "rgba(12, 14, 18, 0.08)",
+                        })}
+                      />
+                    );
+                  })}
+                </View>
+              ) : null}
+              {adjustMode === "crop" || maskArtDragEnabled ? (
                 <GestureDetector gesture={artGesture}>
                   <View
                     collapsable={false}
@@ -15899,8 +14747,16 @@ function ArtAdjustmentModal({
                       borderRadius: ART_ADJUSTMENT_CROP_RADIUS,
                       borderCurve: "continuous",
                       borderWidth: 2,
-                      borderColor: "#ffffff",
-                      backgroundColor: "transparent",
+                      borderColor:
+                        adjustMode === "crop"
+                          ? "#ffffff"
+                          : maskOverlayVisible
+                            ? "#55dff5"
+                            : "rgba(255, 255, 255, 0.72)",
+                      backgroundColor:
+                        adjustMode === "mask" && maskOverlayVisible
+                          ? "rgba(85, 223, 245, 0.08)"
+                          : "transparent",
                       boxShadow: "0 18px 42px rgba(0, 0, 0, 0.36)",
                     }}
                   />
@@ -16013,6 +14869,17 @@ function ArtAdjustmentModal({
                 </View>
               ) : null}
             </View>
+            {showDesktopMaskZoomRail ? (
+              <DesktopMaskZoomSlider
+                value={artTransform.scale}
+                min={1}
+                max={desktopMaskZoomMax}
+                height={Math.max(180, cropHeight)}
+                disabled={subjectMaskBusy}
+                onChange={updateMaskZoomScale}
+              />
+            ) : null}
+            </View>
             <View
               style={{
                 flexDirection: "row",
@@ -16067,89 +14934,193 @@ function ArtAdjustmentModal({
                   backgroundColor: "rgba(255, 255, 255, 0.1)",
                   paddingHorizontal: 12,
                   paddingVertical: 10,
-                  flexDirection: "row",
-                  flexWrap: "wrap",
-                  alignItems: "center",
                   gap: 8,
                 }}
               >
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={subjectMaskBusy ? "Generating mask" : "Generate mask"}
-                  accessibilityState={{ busy: subjectMaskBusy }}
-                  disabled={subjectMaskBusy}
-                  onPress={() => {
-                    if (roughSelectionBrushSamplesRef.current.length > 0) {
-                      submitRoughSelection();
-                    } else {
-                      onGenerateSubjectMask(maskTargetPrompt);
-                    }
-                  }}
-                  style={({ pressed }) => ({
-                    flex: 1,
-                    minWidth: 132,
-                    minHeight: 36,
-                    borderRadius: 999,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: subjectMaskBusy ? "rgba(85, 223, 245, 0.78)" : "rgba(85, 223, 245, 0.84)",
-                    backgroundColor: subjectMaskBusy
-                      ? "rgba(85, 223, 245, 0.2)"
-                      : pressed
-                        ? "rgba(85, 223, 245, 0.3)"
-                        : "rgba(85, 223, 245, 0.22)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexDirection: "row",
-                    gap: 7,
-                    paddingHorizontal: 12,
-                    opacity: subjectMaskBusy ? 0.76 : 1,
-                  })}
-                >
-                  {subjectMaskBusy ? (
-                    <ActivityIndicator color="#b7f6ff" />
-                  ) : (
-                    <Layers size={16} color="#b7f6ff" strokeWidth={2.7} />
-                  )}
-                  <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
-                    {subjectMaskBusy ? "Generating" : "Generate"}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={hasSubjectMaskPreview ? "Done editing mask" : "Cancel mask editing"}
-                  disabled={subjectMaskBusy}
-                  onPress={onClose}
-                  style={({ pressed }) => ({
-                    minHeight: 36,
-                    borderRadius: 999,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: hasSubjectMaskPreview ? "rgba(255, 255, 255, 0.92)" : "rgba(255, 255, 255, 0.24)",
-                    backgroundColor: hasSubjectMaskPreview
-                      ? pressed
-                        ? "rgba(255, 255, 255, 0.82)"
-                        : "#ffffff"
-                      : pressed
-                        ? "rgba(255, 255, 255, 0.16)"
-                        : "rgba(255, 255, 255, 0.06)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    paddingHorizontal: 12,
-                    opacity: subjectMaskBusy ? 0.48 : 1,
-                  })}
-                >
-                  <Text
-                    selectable={false}
-                    style={{
-                      color: hasSubjectMaskPreview ? "#151820" : "rgba(255, 255, 255, 0.76)",
-                      fontSize: 12,
-                      fontWeight: "900",
+                <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={subjectMaskBusy ? "Cropping mask" : "Crop mask"}
+                    accessibilityState={{ busy: subjectMaskBusy }}
+                    disabled={subjectMaskBusy}
+                    onPress={() => {
+                      if (roughSelectionBrushSamplesRef.current.length > 0) {
+                        submitRoughSelection();
+                      } else {
+                        onGenerateSubjectMask(maskTargetPrompt);
+                      }
                     }}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      minWidth: 132,
+                      minHeight: 36,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: subjectMaskBusy ? "rgba(85, 223, 245, 0.78)" : "rgba(85, 223, 245, 0.84)",
+                      backgroundColor: subjectMaskBusy
+                        ? "rgba(85, 223, 245, 0.2)"
+                        : pressed
+                          ? "rgba(85, 223, 245, 0.3)"
+                          : "rgba(85, 223, 245, 0.22)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexDirection: "row",
+                      gap: 7,
+                      paddingHorizontal: 12,
+                      opacity: subjectMaskBusy ? 0.76 : 1,
+                    })}
                   >
-                    {hasSubjectMaskPreview ? "Done" : "Cancel"}
+                    {subjectMaskBusy ? (
+                      <ActivityIndicator color="#b7f6ff" />
+                    ) : (
+                      <Layers size={16} color="#b7f6ff" strokeWidth={2.7} />
+                    )}
+                    <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
+                      {subjectMaskBusy ? "Cropping" : "Crop"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={hasSubjectMaskPreview ? "Done editing mask" : "Cancel mask editing"}
+                    disabled={subjectMaskBusy}
+                    onPress={onClose}
+                    style={({ pressed }) => ({
+                      minHeight: 36,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: hasSubjectMaskPreview ? "rgba(255, 255, 255, 0.92)" : "rgba(255, 255, 255, 0.24)",
+                      backgroundColor: hasSubjectMaskPreview
+                        ? pressed
+                          ? "rgba(255, 255, 255, 0.82)"
+                          : "#ffffff"
+                        : pressed
+                          ? "rgba(255, 255, 255, 0.16)"
+                          : "rgba(255, 255, 255, 0.06)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      opacity: subjectMaskBusy ? 0.48 : 1,
+                    })}
+                  >
+                    <Text
+                      selectable={false}
+                      style={{
+                        color: hasSubjectMaskPreview ? "#151820" : "rgba(255, 255, 255, 0.76)",
+                        fontSize: 12,
+                        fontWeight: "900",
+                      }}
+                    >
+                      {hasSubjectMaskPreview ? "Done" : "Cancel"}
+                    </Text>
+                  </Pressable>
+                </View>
+                <View style={{ gap: 6 }}>
+                  <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
+                    MASK TARGET
                   </Text>
-                </Pressable>
+                  <TextInput
+                    value={maskTargetPrompt}
+                    onChangeText={setMaskTargetPrompt}
+                    placeholder="Optional: sword, wings, face, blue flame"
+                    placeholderTextColor="rgba(255, 255, 255, 0.5)"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!subjectMaskBusy}
+                    style={{
+                      minHeight: 40,
+                      borderRadius: 12,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: "rgba(255, 255, 255, 0.22)",
+                      backgroundColor: "rgba(255, 255, 255, 0.12)",
+                      color: "#ffffff",
+                      fontSize: 14,
+                      fontWeight: "800",
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                    }}
+                  />
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: roughSelectionActive, disabled: subjectMaskBusy }}
+                      accessibilityLabel={roughSelectionActive ? "Stop painting subject selection" : "Start painting subject selection"}
+                      disabled={subjectMaskBusy}
+                      onPress={() => setRoughSelectionActive((current) => !current)}
+                      style={({ pressed }) => ({
+                        minHeight: 36,
+                        borderRadius: 999,
+                        borderCurve: "continuous",
+                        borderWidth: 1,
+                        borderColor: roughSelectionActive ? "rgba(85, 223, 245, 0.84)" : "rgba(255, 255, 255, 0.28)",
+                        backgroundColor: roughSelectionActive
+                          ? "rgba(85, 223, 245, 0.22)"
+                          : pressed
+                            ? "rgba(255, 255, 255, 0.16)"
+                            : "rgba(255, 255, 255, 0.08)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        paddingHorizontal: 12,
+                      })}
+                    >
+                      <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
+                        {roughSelectionActive ? "Painting" : "Paint selection"}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Undo last painted subject stroke"
+                      disabled={subjectMaskBusy || roughSelectionBrushSamples.length === 0}
+                      onPress={undoLastRoughSelectionStroke}
+                      style={({ pressed }) => ({
+                        minHeight: 36,
+                        borderRadius: 999,
+                        borderCurve: "continuous",
+                        borderWidth: 1,
+                        borderColor: "rgba(255, 255, 255, 0.24)",
+                        backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexDirection: "row",
+                        gap: 6,
+                        paddingHorizontal: 12,
+                        opacity: subjectMaskBusy || roughSelectionBrushSamples.length === 0 ? 0.46 : 1,
+                      })}
+                    >
+                      <Undo2 size={14} color="rgba(255, 255, 255, 0.76)" strokeWidth={2.7} />
+                      <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.76)", fontSize: 12, fontWeight: "900" }}>
+                        Undo
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear painted subject selection"
+                      disabled={subjectMaskBusy || roughSelectionBrushSamples.length === 0}
+                      onPress={() => {
+                        roughSelectionBrushSamplesRef.current = [];
+                        setRoughSelectionBrushSamples([]);
+                      }}
+                      style={({ pressed }) => ({
+                        minHeight: 36,
+                        borderRadius: 999,
+                        borderCurve: "continuous",
+                        borderWidth: 1,
+                        borderColor: "rgba(255, 255, 255, 0.24)",
+                        backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        paddingHorizontal: 12,
+                        opacity: subjectMaskBusy || roughSelectionBrushSamples.length === 0 ? 0.46 : 1,
+                      })}
+                    >
+                      <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.76)", fontSize: 12, fontWeight: "900" }}>
+                        Clear
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
               </View>
             ) : null}
             {adjustMode === "mask" ? (
@@ -16163,112 +15134,121 @@ function ArtAdjustmentModal({
                   backgroundColor: "rgba(255, 255, 255, 0.1)",
                   paddingHorizontal: 12,
                   paddingVertical: 10,
-                  gap: 6,
+                  gap: 10,
                 }}
               >
-                <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
-                  MASK TARGET
-                </Text>
-                <TextInput
-                  value={maskTargetPrompt}
-                  onChangeText={setMaskTargetPrompt}
-                  placeholder="Optional: sword, wings, face, blue flame"
-                  placeholderTextColor="rgba(255, 255, 255, 0.5)"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  editable={!subjectMaskBusy}
-                  style={{
-                    minHeight: 40,
-                    borderRadius: 12,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.22)",
-                    backgroundColor: "rgba(255, 255, 255, 0.12)",
-                    color: "#ffffff",
-                    fontSize: 14,
-                    fontWeight: "800",
-                    paddingHorizontal: 12,
-                    paddingVertical: 8,
-                  }}
-                />
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: roughSelectionActive, disabled: subjectMaskBusy }}
-                    accessibilityLabel={roughSelectionActive ? "Stop painting subject selection" : "Start painting subject selection"}
-                    disabled={subjectMaskBusy}
-                    onPress={() => setRoughSelectionActive((current) => !current)}
-                    style={({ pressed }) => ({
-                      minHeight: 36,
-                      borderRadius: 999,
-                      borderCurve: "continuous",
-                      borderWidth: 1,
-                      borderColor: roughSelectionActive ? "rgba(85, 223, 245, 0.84)" : "rgba(255, 255, 255, 0.28)",
-                      backgroundColor: roughSelectionActive
-                        ? "rgba(85, 223, 245, 0.22)"
-                        : pressed
-                          ? "rgba(255, 255, 255, 0.16)"
-                          : "rgba(255, 255, 255, 0.08)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      paddingHorizontal: 12,
+                <View style={{ gap: 7 }}>
+                  <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
+                    MASK AREAS
+                  </Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {orderedSubjectMaskSectionControls.map((section) => {
+                      const active = activeSubjectMaskSectionSet.has(section.id);
+
+                      return (
+                        <Pressable
+                          key={`mask-section-button-${section.id}`}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`${active ? "Disable" : "Enable"} ${section.label} mask area`}
+                          onPress={() => toggleSubjectMaskSection(section.id)}
+                          style={({ pressed }) => ({
+                            minHeight: 34,
+                            borderRadius: 999,
+                            borderCurve: "continuous",
+                            borderWidth: 1,
+                            borderColor: active ? "rgba(85, 223, 245, 0.84)" : "rgba(255, 255, 255, 0.24)",
+                            backgroundColor: active
+                              ? pressed
+                                ? "rgba(85, 223, 245, 0.28)"
+                                : "rgba(85, 223, 245, 0.18)"
+                              : pressed
+                                ? "rgba(255, 255, 255, 0.14)"
+                                : "rgba(255, 255, 255, 0.06)",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexDirection: "row",
+                            gap: 6,
+                            paddingHorizontal: 11,
+                          })}
+                        >
+                          {active ? (
+                            <Check size={13} color="#b7f6ff" strokeWidth={3} />
+                          ) : null}
+                          <Text
+                            selectable={false}
+                            style={{
+                              color: active ? "#e6f7fb" : "rgba(255, 255, 255, 0.7)",
+                              fontSize: 12,
+                              fontWeight: "900",
+                            }}
+                          >
+                            {section.label}
+                          </Text>
+                        </Pressable>
+                      );
                     })}
-                  >
-                    <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
-                      {roughSelectionActive ? "Painting" : "Paint selection"}
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Undo last painted subject stroke"
-                    disabled={subjectMaskBusy || roughSelectionBrushSamples.length === 0}
-                    onPress={undoLastRoughSelectionStroke}
-                    style={({ pressed }) => ({
-                      minHeight: 36,
-                      borderRadius: 999,
-                      borderCurve: "continuous",
-                      borderWidth: 1,
-                      borderColor: "rgba(255, 255, 255, 0.24)",
-                      backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexDirection: "row",
-                      gap: 6,
-                      paddingHorizontal: 12,
-                      opacity: subjectMaskBusy || roughSelectionBrushSamples.length === 0 ? 0.46 : 1,
-                    })}
-                  >
-                    <Undo2 size={14} color="rgba(255, 255, 255, 0.76)" strokeWidth={2.7} />
-                    <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.76)", fontSize: 12, fontWeight: "900" }}>
-                      Undo
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Clear painted subject selection"
-                    disabled={subjectMaskBusy || roughSelectionBrushSamples.length === 0}
-                    onPress={() => {
-                      roughSelectionBrushSamplesRef.current = [];
-                      setRoughSelectionBrushSamples([]);
-                    }}
-                    style={({ pressed }) => ({
-                      minHeight: 36,
-                      borderRadius: 999,
-                      borderCurve: "continuous",
-                      borderWidth: 1,
-                      borderColor: "rgba(255, 255, 255, 0.24)",
-                      backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      paddingHorizontal: 12,
-                      opacity: subjectMaskBusy || roughSelectionBrushSamples.length === 0 ? 0.46 : 1,
-                    })}
-                  >
-                    <Text selectable={false} style={{ color: "rgba(255, 255, 255, 0.76)", fontSize: 12, fontWeight: "900" }}>
-                      Clear
-                    </Text>
-                  </Pressable>
+                  </View>
                 </View>
+                {!showDesktopMaskZoomRail ? (
+                <View style={{ gap: 7 }}>
+                  <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
+                    MASK FIT
+                  </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignSelf: "flex-start",
+                      gap: 6,
+                      padding: 3,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      backgroundColor: "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    {([
+                      ["expanded", "Expanded"],
+                      ["artOpening", "Opening"],
+                    ] as const).map(([fitMode, label]) => {
+                      const active = subjectMaskFitMode === fitMode;
+
+                      return (
+                        <Pressable
+                          key={fitMode}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`Use ${label.toLowerCase()} mask fit`}
+                          onPress={() => setSubjectMaskFitMode(fitMode)}
+                          style={({ pressed }) => ({
+                            minHeight: 30,
+                            borderRadius: 999,
+                            borderCurve: "continuous",
+                            backgroundColor: active
+                              ? "#ffffff"
+                              : pressed
+                                ? "rgba(255, 255, 255, 0.14)"
+                                : "transparent",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            paddingHorizontal: 12,
+                          })}
+                        >
+                          <Text
+                            selectable={false}
+                            style={{
+                              color: active ? "#151820" : "rgba(255, 255, 255, 0.72)",
+                              fontSize: 12,
+                              fontWeight: "900",
+                            }}
+                          >
+                            {label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+                ) : null}
               </View>
             ) : null}
             <View
@@ -16353,40 +15333,6 @@ function ArtAdjustmentModal({
                   >
                     {subjectMaskError ?? subjectMaskStatus}
                   </Text>
-                </View>
-              ) : null}
-              {subjectMaskTrace.length > 0 && adjustMode === "mask" ? (
-                <View
-                  style={{
-                    width: "100%",
-                    maxWidth: cropWidth,
-                    borderRadius: 12,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: "rgba(148, 163, 184, 0.38)",
-                    backgroundColor: "rgba(15, 23, 42, 0.74)",
-                    paddingHorizontal: 12,
-                    paddingVertical: 8,
-                    gap: 4,
-                  }}
-                >
-                  <Text selectable={false} style={{ color: "#d9eef4", fontSize: 11, fontWeight: "900" }}>
-                    MASK DEBUG TRACE
-                  </Text>
-                  {subjectMaskTrace.map((entry) => (
-                    <Text
-                      key={entry.id}
-                      selectable
-                      style={{
-                        color: entry.tone === "error" ? "#ffd4ce" : entry.tone === "success" ? "#9bedf7" : "rgba(226, 232, 240, 0.82)",
-                        fontSize: 11,
-                        lineHeight: 15,
-                        fontWeight: "800",
-                      }}
-                    >
-                      {entry.message}
-                    </Text>
-                  ))}
                 </View>
               ) : null}
               {subjectMaskComponents.length > 0 && adjustMode === "mask" ? (
@@ -16539,28 +15485,30 @@ function ArtAdjustmentModal({
                       Pick photo
                     </Text>
                   </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Regenerate replacement art"
-                    onPress={onGenerateArt}
-                    style={{
-                      minHeight: 46,
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: "rgba(255, 255, 255, 0.38)",
-                      backgroundColor: "rgba(255, 255, 255, 0.12)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      paddingHorizontal: 14,
-                      flexDirection: "row",
-                      gap: 7,
-                    }}
-                  >
-                    <Palette size={17} color="#ffffff" strokeWidth={2.5} />
-                    <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}>
-                      Regenerate
-                    </Text>
-                  </Pressable>
+                  {onGenerateArt ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Regenerate replacement art"
+                      onPress={onGenerateArt}
+                      style={{
+                        minHeight: 46,
+                        borderRadius: 999,
+                        borderWidth: 1,
+                        borderColor: "rgba(255, 255, 255, 0.38)",
+                        backgroundColor: "rgba(255, 255, 255, 0.12)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        paddingHorizontal: 14,
+                        flexDirection: "row",
+                        gap: 7,
+                      }}
+                    >
+                      <Palette size={17} color="#ffffff" strokeWidth={2.5} />
+                      <Text selectable={false} style={{ color: "#ffffff", fontSize: 14, fontWeight: "800" }}>
+                        Regenerate
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </>
               ) : null}
               {adjustMode !== "mask" ? (
@@ -16588,6 +15536,138 @@ function ArtAdjustmentModal({
         </View>
       </GestureHandlerRootView>
     </Modal>
+  );
+}
+
+function DesktopMaskZoomSlider({
+  value,
+  min,
+  max,
+  height,
+  disabled,
+  onChange,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  height: number;
+  disabled?: boolean;
+  onChange: (nextValue: number) => void;
+}) {
+  const trackHeight = Math.max(124, height - 116);
+  const clampedValue = clamp(value, min, max);
+  const valueRatio = max > min ? (clampedValue - min) / (max - min) : 0;
+  const thumbTop = (1 - valueRatio) * trackHeight;
+  const setValueFromTrackY = (locationY: number) => {
+    if (disabled) {
+      return;
+    }
+
+    const nextRatio = 1 - clamp(locationY, 0, trackHeight) / trackHeight;
+    onChange(min + nextRatio * (max - min));
+  };
+  const step = 0.08;
+
+  return (
+    <View
+      style={{
+        width: 58,
+        height,
+        minHeight: 210,
+        borderRadius: 18,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: "rgba(255, 255, 255, 0.22)",
+        backgroundColor: "rgba(7, 11, 18, 0.68)",
+        alignItems: "center",
+        justifyContent: "center",
+        paddingVertical: 10,
+        gap: 8,
+        opacity: disabled ? 0.58 : 1,
+      }}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Zoom mask image in"
+        disabled={disabled}
+        onPress={() => onChange(clamp(clampedValue + step, min, max))}
+        style={({ pressed }) => ({
+          width: 36,
+          height: 36,
+          borderRadius: 18,
+          borderCurve: "continuous",
+          backgroundColor: pressed ? "rgba(85, 223, 245, 0.24)" : "rgba(255, 255, 255, 0.1)",
+          alignItems: "center",
+          justifyContent: "center",
+        })}
+      >
+        <Plus size={16} color="#e6f7fb" strokeWidth={3} />
+      </Pressable>
+      <View
+        onStartShouldSetResponder={() => !disabled}
+        onMoveShouldSetResponder={() => !disabled}
+        onResponderGrant={(event) => setValueFromTrackY(event.nativeEvent.locationY)}
+        onResponderMove={(event) => setValueFromTrackY(event.nativeEvent.locationY)}
+        style={{
+          width: 34,
+          height: trackHeight,
+          borderRadius: 999,
+          borderCurve: "continuous",
+          backgroundColor: "rgba(255, 255, 255, 0.11)",
+          borderWidth: 1,
+          borderColor: "rgba(255, 255, 255, 0.2)",
+          overflow: "hidden",
+        }}
+      >
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: `${valueRatio * 100}%`,
+            backgroundColor: "rgba(85, 223, 245, 0.34)",
+          }}
+        />
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: 5,
+            top: clamp(thumbTop - 12, 4, trackHeight - 28),
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+            borderCurve: "continuous",
+            backgroundColor: "#e6f7fb",
+            borderWidth: 2,
+            borderColor: "#06232c",
+            boxShadow: "0 4px 12px rgba(0, 0, 0, 0.28)",
+          }}
+        />
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Zoom mask image out"
+        disabled={disabled}
+        onPress={() => onChange(clamp(clampedValue - step, min, max))}
+        style={({ pressed }) => ({
+          width: 36,
+          height: 36,
+          borderRadius: 18,
+          borderCurve: "continuous",
+          backgroundColor: pressed ? "rgba(85, 223, 245, 0.24)" : "rgba(255, 255, 255, 0.1)",
+          alignItems: "center",
+          justifyContent: "center",
+        })}
+      >
+        <Minus size={16} color="#e6f7fb" strokeWidth={3} />
+      </Pressable>
+      <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 11, fontWeight: "900" }}>
+        {Math.round(clampedValue * 100)}%
+      </Text>
+    </View>
   );
 }
 
@@ -17301,6 +16381,7 @@ function SaveDestinationSetModal({
   sets,
   selectedSetId,
   onSaveToSet,
+  onCreateSetAndSave,
   onClose,
 }: {
   visible: boolean;
@@ -17308,8 +16389,29 @@ function SaveDestinationSetModal({
   sets: CardSet[];
   selectedSetId: string;
   onSaveToSet: (setId: string) => void;
+  onCreateSetAndSave: (name: string) => void;
   onClose: () => void;
 }) {
+  const [newSetName, setNewSetName] = useState("");
+  const trimmedNewSetName = newSetName.trim();
+
+  useEffect(() => {
+    if (!visible) {
+      setNewSetName("");
+    }
+  }, [visible]);
+
+  const submitNewSetSave = () => {
+    if (!trimmedNewSetName) {
+      console.warn("Unable to create a save destination set because the set name is empty.");
+      return;
+    }
+
+    Keyboard.dismiss();
+    onCreateSetAndSave(trimmedNewSetName);
+    setNewSetName("");
+  };
+
   if (!visible) {
     return null;
   }
@@ -17348,7 +16450,7 @@ function SaveDestinationSetModal({
                 Save to set
               </Text>
               <Text selectable style={{ color: "#5f6570", fontSize: 14, lineHeight: 19, fontWeight: "700" }}>
-                Pick the destination set for {cardName || "this card"}.
+                Pick or create the destination set for {cardName || "this card"}.
               </Text>
             </View>
             <Pressable
@@ -17366,6 +16468,74 @@ function SaveDestinationSetModal({
             >
               <X size={19} color="#222733" strokeWidth={2.5} />
             </Pressable>
+          </View>
+
+          <View
+            style={{
+              borderRadius: 10,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#d8dbe2",
+              backgroundColor: "#f8f9fb",
+              padding: 10,
+              gap: 8,
+            }}
+          >
+            <Text
+              selectable={false}
+              style={{ color: "#5f6470", fontSize: 12, fontWeight: "900", textTransform: "uppercase" }}
+            >
+              New Set
+            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <TextInput
+                accessibilityLabel="New set name"
+                value={newSetName}
+                onChangeText={setNewSetName}
+                onSubmitEditing={submitNewSetSave}
+                returnKeyType="done"
+                placeholder="Set name"
+                placeholderTextColor="#8b92a0"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  minHeight: 42,
+                  borderRadius: 8,
+                  borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: "#d7dbe3",
+                  backgroundColor: "#ffffff",
+                  color: "#151820",
+                  fontSize: 15,
+                  fontWeight: "800",
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                }}
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Create new set and save ${cardName || "card"}`}
+                disabled={!trimmedNewSetName}
+                onPress={submitNewSetSave}
+                style={{
+                  minHeight: 42,
+                  borderRadius: 8,
+                  borderCurve: "continuous",
+                  backgroundColor: trimmedNewSetName ? "#151820" : "#c8ccd5",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 7,
+                  paddingHorizontal: 12,
+                  opacity: trimmedNewSetName ? 1 : 0.82,
+                }}
+              >
+                <ListPlus size={17} color="#ffffff" strokeWidth={2.5} />
+                <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                  Save
+                </Text>
+              </Pressable>
+            </View>
           </View>
 
           <ScrollView
@@ -19111,25 +18281,29 @@ function CardSettingsAction({
   icon,
   selected = false,
   destructive = false,
+  disabled = false,
   onPress,
 }: {
   label: string;
   icon: ReactNode;
   selected?: boolean;
   destructive?: boolean;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={{
         minHeight: 44,
         borderRadius: 9,
         borderCurve: "continuous",
         backgroundColor: selected ? "#151820" : destructive ? "#fff1f1" : "#f5f6f8",
+        opacity: disabled ? 0.62 : 1,
         paddingHorizontal: 12,
         flexDirection: "row",
         alignItems: "center",
@@ -19544,7 +18718,6 @@ function SetsPanel({
   selectedSetId,
   accountUserId,
   scrollWindow,
-  newSetName,
   customCardBacks,
   generatedSetSymbols,
   canRefreshSets,
@@ -19552,7 +18725,6 @@ function SetsPanel({
   setCardImageRemoteHydrated,
   canInviteSetCollaborators,
   onRefreshSets,
-  onChangeNewSetName,
   onSelectSet,
   onCreateSet,
   onRenameSet,
@@ -19577,7 +18749,6 @@ function SetsPanel({
   selectedSetId: string;
   accountUserId?: string;
   scrollWindow: MainScrollWindow | null;
-  newSetName: string;
   customCardBacks: CustomCardBackEntry[];
   generatedSetSymbols: GeneratedSetSymbolEntry[];
   canRefreshSets: boolean;
@@ -19585,9 +18756,8 @@ function SetsPanel({
   setCardImageRemoteHydrated: boolean;
   canInviteSetCollaborators: boolean;
   onRefreshSets: () => void;
-  onChangeNewSetName: (name: string) => void;
   onSelectSet: (setId: string) => void;
-  onCreateSet: () => void;
+  onCreateSet: (name: string) => void;
   onRenameSet: (setId: string, name: string) => void;
   onChangeSetCode: (setId: string, code: string) => void;
   onCreateCardInSet: (setId: string) => void;
@@ -19601,15 +18771,16 @@ function SetsPanel({
     patch: Pick<CardDraft, "setSymbolPreset" | "setSymbolId" | "setSymbolUri" | "setSymbolUsesRarityTreatment">,
   ) => void;
   onPickSetSymbol: (setId: string) => void;
-  onGenerateSetSymbol: (setId: string) => void;
+  onGenerateSetSymbol?: (setId: string) => void;
   onFetchSetCollaborators: (setId: string) => Promise<CollaborationSetMemberPayload[]>;
   onFetchPendingInvites: (setId: string) => Promise<CollaborationPendingInvitePayload[]>;
   onInviteSetCollaborator: (setId: string, inviteIdentifier: string) => Promise<void>;
-  onCreateSetInviteLink: (setId: string) => Promise<string>;
+  onCreateSetInviteLink: (setId: string, role?: CollaborationSetInviteLinkRole) => Promise<string>;
   getSetCardImageRenderStatus: (setId: string, snapshot: SetCardSnapshot) => SetCardImageRenderStatus | undefined;
   onEnsureSetCardImage: (setId: string, snapshot: SetCardSnapshot) => void;
 }) {
   const { width: viewportWidth } = useWindowDimensions();
+  const [newSetName, setNewSetName] = useState("");
   const [expandedSetIds, setExpandedSetIds] = useState<Set<string>>(() => new Set([selectedSetId]));
   const [editingSetId, setEditingSetId] = useState<string | null>(null);
   const [editingSetDefaultsPanel, setEditingSetDefaultsPanel] = useState<"cardBack" | "setSymbol" | null>(null);
@@ -19618,8 +18789,8 @@ function SetsPanel({
   const [invitingSetId, setInvitingSetId] = useState<string | null>(null);
   const [inviteIdentifier, setInviteIdentifier] = useState("");
   const [inviteBusySetId, setInviteBusySetId] = useState<string | null>(null);
-  const [inviteLinkBusySetId, setInviteLinkBusySetId] = useState<string | null>(null);
-  const [inviteLinkBySetId, setInviteLinkBySetId] = useState<Record<string, string>>({});
+  const [inviteLinkBusyKey, setInviteLinkBusyKey] = useState<string | null>(null);
+  const [inviteLinkByKey, setInviteLinkByKey] = useState<Record<string, string>>({});
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccessMessage, setInviteSuccessMessage] = useState<string | null>(null);
   const [inviteSuggestions, setInviteSuggestions] = useState<CollaborationInviteProfileSuggestion[]>([]);
@@ -19627,6 +18798,7 @@ function SetsPanel({
   const [inviteSuggestionsSuppressedFor, setInviteSuggestionsSuppressedFor] = useState<string | null>(null);
   const [inviteSendingSlow, setInviteSendingSlow] = useState(false);
   const [collaboratorsBySetId, setCollaboratorsBySetId] = useState<Record<string, CollaborationSetMemberPayload[]>>({});
+  const [collaboratorsFetchedAtBySetId, setCollaboratorsFetchedAtBySetId] = useState<Record<string, number>>({});
   const [collaboratorsLoadingSetId, setCollaboratorsLoadingSetId] = useState<string | null>(null);
   const [collaboratorsErrorBySetId, setCollaboratorsErrorBySetId] = useState<Record<string, string>>({});
   const [pendingInvitesBySetId, setPendingInvitesBySetId] = useState<Record<string, CollaborationPendingInvitePayload[]>>({});
@@ -19651,12 +18823,41 @@ function SetsPanel({
   const gridItemWidth = Math.floor((gridContentWidth - gridGap * (gridColumns - 1)) / gridColumns);
   const previewWidth = Math.max(96, gridItemWidth);
   const blankCardHeight = previewWidth / CARD_BACK_PREVIEW_ASPECT_RATIO;
+  const initialVisibleSetLimit = compactSetGrid ? SET_LIST_COMPACT_INITIAL_LIMIT : SET_LIST_INITIAL_LIMIT;
+  const visibleSetPageSize = compactSetGrid ? SET_LIST_COMPACT_PAGE_SIZE : SET_LIST_PAGE_SIZE;
+  const [visibleSetLimit, setVisibleSetLimit] = useState(initialVisibleSetLimit);
+  const visibleSetCount = Math.min(sets.length, visibleSetLimit);
+  const visibleSets = useMemo(() => sets.slice(0, visibleSetCount), [sets, visibleSetCount]);
+  const hiddenSetCount = Math.max(0, sets.length - visibleSets.length);
+  const setBarGradientsById = useMemo(() => {
+    const gradients = new Map<string, SetBarGradient>();
+
+    for (const set of sets) {
+      gradients.set(set.id, getSetBarGradient(set));
+    }
+
+    return gradients;
+  }, [sets]);
 
   const handleGridLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = Math.floor(event.nativeEvent.layout.width);
 
     setMeasuredGridContentWidth((current) => (Math.abs(current - nextWidth) > 1 ? nextWidth : current));
   }, []);
+
+  useEffect(() => {
+    setVisibleSetLimit((current) => Math.max(current, initialVisibleSetLimit));
+  }, [initialVisibleSetLimit]);
+
+  useEffect(() => {
+    const selectedIndex = sets.findIndex((set) => set.id === selectedSetId);
+
+    if (selectedIndex < 0) {
+      return;
+    }
+
+    setVisibleSetLimit((current) => Math.max(current, initialVisibleSetLimit, selectedIndex + 1));
+  }, [initialVisibleSetLimit, selectedSetId, sets]);
 
   useEffect(() => {
     setExpandedSetIds((current) => {
@@ -19711,9 +18912,21 @@ function SetsPanel({
     try {
       const collaborators = await onFetchSetCollaborators(setId);
 
-      setCollaboratorsBySetId((current) => ({
+      setCollaboratorsBySetId((current) => {
+        const existingCollaborators = current[setId] ?? [];
+
+        if (collaborators.length === 0 && existingCollaborators.length > 0) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [setId]: collaborators,
+        };
+      });
+      setCollaboratorsFetchedAtBySetId((current) => ({
         ...current,
-        [setId]: collaborators,
+        [setId]: Date.now(),
       }));
     } catch (error) {
       setCollaboratorsErrorBySetId((current) => ({
@@ -19779,6 +18992,76 @@ function SetsPanel({
     }
   }, [canInviteSetCollaborators, invitingSetId, loadPendingInvites, loadSetCollaborators, onSelectSet]);
 
+  useEffect(() => {
+    const liveSetIds = new Set(sets.map((set) => set.id));
+
+    setCollaboratorsBySetId((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([setId]) => liveSetIds.has(setId)));
+
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+    setCollaboratorsFetchedAtBySetId((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([setId]) => liveSetIds.has(setId)));
+
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+    setCollaboratorsErrorBySetId((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([setId]) => liveSetIds.has(setId)));
+
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+    setPendingInvitesBySetId((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([setId]) => liveSetIds.has(setId)));
+
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+    setPendingInvitesErrorBySetId((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([setId]) => liveSetIds.has(setId)));
+
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [sets]);
+
+  useEffect(() => {
+    if (!invitingSetId) {
+      return;
+    }
+
+    const set = sets.find((candidate) => candidate.id === invitingSetId);
+
+    if (!set) {
+      setInvitingSetId(null);
+      return;
+    }
+
+    if (collaboratorsLoadingSetId === invitingSetId || pendingInvitesLoadingSetId === invitingSetId) {
+      return;
+    }
+
+    const canManageInvites = canInviteSetCollaborators && canDeleteCardSetContent(set, accountUserId);
+    const lastFetchedAt = collaboratorsFetchedAtBySetId[invitingSetId] ?? 0;
+
+    if (Date.now() - lastFetchedAt <= COLLABORATION_ROSTER_STALE_MS) {
+      return;
+    }
+
+    void loadSetCollaborators(invitingSetId);
+
+    if (canManageInvites) {
+      void loadPendingInvites(invitingSetId);
+    }
+  }, [
+    accountUserId,
+    canInviteSetCollaborators,
+    collaboratorsFetchedAtBySetId,
+    collaboratorsLoadingSetId,
+    invitingSetId,
+    loadPendingInvites,
+    loadSetCollaborators,
+    pendingInvitesLoadingSetId,
+    sets,
+  ]);
+
   const submitSetInvite = useCallback(async (setId: string, setName: string) => {
     const identifier = inviteIdentifier.trim();
 
@@ -19810,48 +19093,61 @@ function SetsPanel({
     }
   }, [inviteIdentifier, loadPendingInvites, loadSetCollaborators, onInviteSetCollaborator]);
 
-  const createSetInviteLink = useCallback(async (setId: string, setName: string) => {
-    setInviteLinkBusySetId(setId);
+  const getInviteLinkKey = useCallback((setId: string, role: CollaborationSetInviteLinkRole) => `${setId}:${role}`, []);
+
+  const createSetInviteLink = useCallback(async (
+    setId: string,
+    setName: string,
+    role: CollaborationSetInviteLinkRole,
+  ) => {
+    const inviteLinkKey = getInviteLinkKey(setId, role);
+
+    setInviteLinkBusyKey(inviteLinkKey);
     setInviteError(null);
     setInviteSuccessMessage(null);
 
     try {
-      const inviteUrl = await onCreateSetInviteLink(setId);
+      const inviteUrl = await onCreateSetInviteLink(setId, role);
 
-      setInviteLinkBySetId((current) => ({
+      setInviteLinkByKey((current) => ({
         ...current,
-        [setId]: inviteUrl,
+        [inviteLinkKey]: inviteUrl,
       }));
-      setInviteSuccessMessage(`Invite link created for ${setName}.`);
+      setInviteSuccessMessage(`${role === "viewer" ? "Viewer" : "Editor"} invite link created for ${setName}.`);
     } catch (error) {
       setInviteError(error instanceof Error ? error.message : "CardMagic could not create that invite link.");
     } finally {
-      setInviteLinkBusySetId(null);
+      setInviteLinkBusyKey(null);
     }
-  }, [onCreateSetInviteLink]);
+  }, [getInviteLinkKey, onCreateSetInviteLink]);
 
-  const copyCreatedSetInviteLink = useCallback(async (setId: string, setName: string) => {
-    const inviteUrl = inviteLinkBySetId[setId];
+  const copyCreatedSetInviteLink = useCallback(async (
+    setId: string,
+    setName: string,
+    role: CollaborationSetInviteLinkRole,
+  ) => {
+    const inviteLinkKey = getInviteLinkKey(setId, role);
+    const inviteUrl = inviteLinkByKey[inviteLinkKey];
 
     if (!inviteUrl) {
-      await createSetInviteLink(setId, setName);
+      await createSetInviteLink(setId, setName, role);
       return;
     }
 
-    setInviteLinkBusySetId(setId);
+    setInviteLinkBusyKey(inviteLinkKey);
     setInviteError(null);
     setInviteSuccessMessage(null);
 
     try {
       await copyTextToClipboardOrShare(inviteUrl);
-      setInviteSuccessMessage(`Invite link copied for ${setName}.`);
+      setInviteSuccessMessage(`${role === "viewer" ? "Viewer" : "Editor"} invite link copied for ${setName}.`);
     } catch (error) {
       console.warn("Invite link copy/share unavailable.", error);
       setInviteError(error instanceof Error ? error.message : "CardMagic could not copy that invite link.");
     } finally {
-      setInviteLinkBusySetId(null);
+      setInviteLinkBusyKey(null);
     }
-  }, [createSetInviteLink, inviteLinkBySetId]);
+  }, [createSetInviteLink, getInviteLinkKey, inviteLinkByKey]);
 
   useEffect(() => {
     const query = getInviteUsernameSearchQuery(inviteIdentifier);
@@ -19930,12 +19226,21 @@ function SetsPanel({
         <EditorField
           label="New set name"
           value={newSetName}
-          onChangeText={onChangeNewSetName}
+          onChangeText={setNewSetName}
         />
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Create set"
-          onPress={onCreateSet}
+          onPress={() => {
+            const name = newSetName.trim();
+
+            if (!name) {
+              return;
+            }
+
+            onCreateSet(name);
+            setNewSetName("");
+          }}
           style={{
             minHeight: 44,
             borderRadius: 8,
@@ -20002,12 +19307,12 @@ function SetsPanel({
           </Pressable>
         </View>
 
-        {sets.map((set) => {
+        {visibleSets.map((set) => {
           const selected = set.id === selectedSetId;
           const expanded = expandedSetIds.has(set.id);
           const setCardBackId = set.cardBackId ?? DEFAULT_CARD_BACK_ID;
           const setCardBackOption = getCardBackOption(setCardBackId, customCardBacks);
-          const setBarGradient = getSetBarGradient(set);
+          const setBarGradient = setBarGradientsById.get(set.id) ?? getSetBarGradient(set);
           const isEditingSet = editingSetId === set.id;
           const visibleCardLimit = visibleCardLimits[set.id] ?? initialVisibleCardLimit;
           const visibleSetCards = set.cards.slice(0, visibleCardLimit);
@@ -20328,75 +19633,93 @@ function SetsPanel({
                       </View>
                       <View
                         style={{
-                          flexDirection: viewportWidth >= 560 ? "row" : "column",
-                          alignItems: viewportWidth >= 560 ? "center" : "stretch",
+                          flexDirection: "column",
+                          alignItems: "stretch",
                           gap: 8,
                         }}
                       >
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={inviteLinkBySetId[set.id]
-                            ? `Copy ${set.name} collaboration invite link`
-                            : `Create ${set.name} collaboration invite link`}
-                          disabled={inviteLinkBusySetId === set.id}
-                          onPress={() => {
-                            if (inviteLinkBySetId[set.id]) {
-                              void copyCreatedSetInviteLink(set.id, set.name);
-                            } else {
-                              void createSetInviteLink(set.id, set.name);
-                            }
-                          }}
-                          style={({ pressed }) => ({
-                            minHeight: 38,
-                            borderRadius: 8,
-                            borderCurve: "continuous",
-                            borderWidth: 1,
-                            borderColor: "#c8edf2",
-                            backgroundColor: inviteLinkBusySetId === set.id
-                              ? "#e7f4f6"
-                              : pressed
-                                ? "#dff7fa"
-                                : "#f2fcfd",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            flexDirection: "row",
-                            gap: 8,
-                            paddingHorizontal: 12,
-                          })}
-                        >
-                          {inviteLinkBusySetId === set.id ? (
-                            <ActivityIndicator color="#0b7180" size="small" />
-                          ) : (
-                            <Share2 size={15} color="#0b7180" strokeWidth={2.5} />
-                          )}
-                          <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900" }}>
-                            {inviteLinkBySetId[set.id] ? "Copy link" : "Create invite link"}
-                          </Text>
-                        </Pressable>
-                        {inviteLinkBySetId[set.id] ? (
-                          <TextInput
-                            accessibilityLabel={`${set.name} collaboration invite link`}
-                            value={inviteLinkBySetId[set.id]}
-                            editable={false}
-                            selectTextOnFocus
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            style={{
-                              flex: 1,
-                              minWidth: 0,
-                              minHeight: 38,
-                              borderRadius: 8,
-                              borderCurve: "continuous",
-                              borderWidth: 1,
-                              borderColor: "#d4d8e0",
-                              backgroundColor: "#ffffff",
-                              paddingHorizontal: 10,
-                              color: "#3c4656",
-                              fontSize: 12,
-                              fontWeight: "800",
-                            }}
-                          />
-                        ) : null}
+                        {(["editor", "viewer"] as const).map((inviteRole) => {
+                          const inviteLinkKey = getInviteLinkKey(set.id, inviteRole);
+                          const inviteLink = inviteLinkByKey[inviteLinkKey];
+                          const inviteLinkBusy = inviteLinkBusyKey === inviteLinkKey;
+                          const roleLabel = inviteRole === "viewer" ? "Viewer" : "Editor";
+
+                          return (
+                            <View
+                              key={inviteRole}
+                              style={{
+                                flexDirection: viewportWidth >= 560 ? "row" : "column",
+                                alignItems: viewportWidth >= 560 ? "center" : "stretch",
+                                gap: 8,
+                              }}
+                            >
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={inviteLink
+                                  ? `Copy ${set.name} ${inviteRole} invite link`
+                                  : `Create ${set.name} ${inviteRole} invite link`}
+                                disabled={inviteLinkBusy}
+                                onPress={() => {
+                                  if (inviteLink) {
+                                    void copyCreatedSetInviteLink(set.id, set.name, inviteRole);
+                                  } else {
+                                    void createSetInviteLink(set.id, set.name, inviteRole);
+                                  }
+                                }}
+                                style={({ pressed }) => ({
+                                  minHeight: 38,
+                                  borderRadius: 8,
+                                  borderCurve: "continuous",
+                                  borderWidth: 1,
+                                  borderColor: inviteRole === "viewer" ? "#d8dbe2" : "#c8edf2",
+                                  backgroundColor: inviteLinkBusy
+                                    ? "#e7f4f6"
+                                    : pressed
+                                      ? inviteRole === "viewer" ? "#eef0f4" : "#dff7fa"
+                                      : inviteRole === "viewer" ? "#ffffff" : "#f2fcfd",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  flexDirection: "row",
+                                  gap: 8,
+                                  paddingHorizontal: 12,
+                                })}
+                              >
+                                {inviteLinkBusy ? (
+                                  <ActivityIndicator color="#0b7180" size="small" />
+                                ) : (
+                                  <Share2 size={15} color="#0b7180" strokeWidth={2.5} />
+                                )}
+                                <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900" }}>
+                                  {inviteLink ? `Copy ${roleLabel} link` : `Create ${roleLabel} link`}
+                                </Text>
+                              </Pressable>
+                              {inviteLink ? (
+                                <TextInput
+                                  accessibilityLabel={`${set.name} ${inviteRole} invite link`}
+                                  value={inviteLink}
+                                  editable={false}
+                                  selectTextOnFocus
+                                  autoCapitalize="none"
+                                  autoCorrect={false}
+                                  style={{
+                                    flex: 1,
+                                    minWidth: 0,
+                                    minHeight: 38,
+                                    borderRadius: 8,
+                                    borderCurve: "continuous",
+                                    borderWidth: 1,
+                                    borderColor: "#d4d8e0",
+                                    backgroundColor: "#ffffff",
+                                    paddingHorizontal: 10,
+                                    color: "#3c4656",
+                                    fontSize: 12,
+                                    fontWeight: "800",
+                                  }}
+                                />
+                              ) : null}
+                            </View>
+                          );
+                        })}
                       </View>
                     </>
                   ) : null}
@@ -20853,34 +20176,36 @@ function SetsPanel({
                       {editingSetDefaultsPanel === "setSymbol" ? (
                         <View style={{ gap: 10 }}>
                         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={`Generate default set symbol for ${set.name}`}
-                            onPress={() => {
-                              onSelectSet(set.id);
-                              setEditingSetId(set.id);
-                              setEditingSetDefaultsPanel("setSymbol");
-                              onGenerateSetSymbol(set.id);
-                            }}
-                            style={{
-                              flexGrow: 1,
-                              flexBasis: 148,
-                              minHeight: 40,
-                              borderRadius: 8,
-                              borderCurve: "continuous",
-                              backgroundColor: "#0b7180",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              flexDirection: "row",
-                              gap: 8,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Sparkles size={16} color="#ffffff" strokeWidth={2.4} />
-                            <Text selectable={false} numberOfLines={1} adjustsFontSizeToFit style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-                              Generate
-                            </Text>
-                          </Pressable>
+                          {onGenerateSetSymbol ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Generate default set symbol for ${set.name}`}
+                              onPress={() => {
+                                onSelectSet(set.id);
+                                setEditingSetId(set.id);
+                                setEditingSetDefaultsPanel("setSymbol");
+                                onGenerateSetSymbol(set.id);
+                              }}
+                              style={{
+                                flexGrow: 1,
+                                flexBasis: 148,
+                                minHeight: 40,
+                                borderRadius: 8,
+                                borderCurve: "continuous",
+                                backgroundColor: "#0b7180",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                flexDirection: "row",
+                                gap: 8,
+                                paddingHorizontal: 10,
+                              }}
+                            >
+                              <Sparkles size={16} color="#ffffff" strokeWidth={2.4} />
+                              <Text selectable={false} numberOfLines={1} adjustsFontSizeToFit style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
+                                Generate
+                              </Text>
+                            </Pressable>
+                          ) : null}
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel={`Upload default set symbol for ${set.name}`}
@@ -21065,2978 +20390,35 @@ function SetsPanel({
             </View>
           );
         })}
-      </View>
-
-    </View>
-  );
-}
-
-type CommunityBrowseMode = "cards" | "sets";
-const COMMUNITY_CARD_PAGE_SIZE = 8;
-const COMMUNITY_INITIAL_RENDERED_CARD_COUNT = 3;
-const COMMUNITY_AUTO_LOAD_MORE_THRESHOLD = 420;
-const COMMUNITY_SCROLL_WINDOW_UPDATE_THRESHOLD = 96;
-const COMMUNITY_FEED_CARD_ROW_CHROME_HEIGHT = 150;
-const COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT = 4;
-const COMMUNITY_SET_RENDERED_CARD_BATCH_SIZE = 4;
-const COMMUNITY_FEED_OVERSCAN_PX = 1200;
-const COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT = 690;
-
-function CommunityPanel({
-  sets,
-  accountUser,
-  onRegisterMainScrollHandler,
-  onExportCardImage,
-}: {
-  sets: CardSet[];
-  accountUser: SupabaseUser | null;
-  onRegisterMainScrollHandler?: (handler: MainScrollBoundaryHandler | null) => void;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
-}) {
-  const [browseMode, setBrowseMode] = useState<CommunityBrowseMode>("cards");
-  const [searchText, setSearchText] = useState("");
-  const [feedSort, setFeedSort] = useState<CommunityCardFeedSort>("newest");
-  const [hideSeenCards, setHideSeenCards] = useState(false);
-  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
-  const [communityCards, setCommunityCards] = useState<CommunityCardPayload[]>([]);
-  const [communitySets, setCommunitySets] = useState<CommunitySetPayload[]>([]);
-  const [selectedCommunitySetId, setSelectedCommunitySetId] = useState<string | null>(null);
-  const [communitySetCardsBySetId, setCommunitySetCardsBySetId] = useState<Record<string, CommunitySetCardPayload[]>>({});
-  const [communitySetCardsLoadingId, setCommunitySetCardsLoadingId] = useState<string | null>(null);
-  const [communitySetCardsErrorBySetId, setCommunitySetCardsErrorBySetId] = useState<Record<string, string>>({});
-  const [visibleCommunitySetCardCountsBySetId, setVisibleCommunitySetCardCountsBySetId] = useState<Record<string, number>>({});
-  const [featuredCard, setFeaturedCard] = useState<CommunityCardPayload | null>(null);
-  const [communityBusy, setCommunityBusy] = useState(false);
-  const [communitySetsLoaded, setCommunitySetsLoaded] = useState(false);
-  const [communityLoadingMore, setCommunityLoadingMore] = useState(false);
-  const [communityHasMoreCards, setCommunityHasMoreCards] = useState(false);
-  const [communityNextOffset, setCommunityNextOffset] = useState(0);
-  const [communityError, setCommunityError] = useState<string | null>(null);
-  const [commentPopoverCard, setCommentPopoverCard] = useState<CommunityCardPayload | null>(null);
-  const [pollsPopoverOpen, setPollsPopoverOpen] = useState(false);
-  const [feedbackPopoverOpen, setFeedbackPopoverOpen] = useState(false);
-  const [communityScrollWindow, setCommunityScrollWindow] = useState<MainScrollWindow | null>(null);
-  const communityCardsRef = useRef<CommunityCardPayload[]>([]);
-  const communitySetsRef = useRef<CommunitySetPayload[]>([]);
-  const featuredCardRef = useRef<CommunityCardPayload | null>(null);
-  const communityAutoLoadInFlightRef = useRef(false);
-  const communitySeenMarkIdsRef = useRef<Set<string>>(new Set());
-  const communityScrollWindowRef = useRef<MainScrollWindow | null>(null);
-  const canManageCommunityPolls = accountUser?.email?.toLowerCase() === "gtjoe51@gmail.com";
-  const localCards = useMemo(
-    () =>
-      sets.flatMap((set) =>
-        set.cards.slice(0, 6).map((snapshot) => ({
-          id: snapshot.id,
-          setName: set.name,
-          card: getSafeSetCardPreviewCard(snapshot, set),
-        })),
-      ),
-    [sets],
-  );
-  const normalizedSearchText = searchText.trim().toLowerCase();
-  const filteredCommunityCards = useMemo(() => {
-    if (!normalizedSearchText) {
-      return communityCards;
-    }
-
-    return communityCards.filter((entry) => {
-      const haystack = `${entry.name} ${entry.typeLine} ${entry.rarity ?? ""} ${entry.frameTreatment ?? ""}`.toLowerCase();
-      return haystack.includes(normalizedSearchText);
-    });
-  }, [communityCards, normalizedSearchText]);
-  const filteredSets = useMemo(() => {
-    if (!normalizedSearchText) {
-      return communitySets;
-    }
-
-    return communitySets.filter((set) => {
-      const haystack = `${set.name} ${set.code ?? ""} ${set.authorName}`.toLowerCase();
-      return haystack.includes(normalizedSearchText);
-    });
-  }, [communitySets, normalizedSearchText]);
-  const loadCommunityCards = useCallback(async () => {
-    if (!isSupabaseConfigured) {
-      setCommunityError("Supabase is not configured.");
-      return;
-    }
-
-    setCommunityBusy(true);
-    setCommunityLoadingMore(false);
-    setCommunityError(null);
-
-    try {
-      const page = await fetchCommunityCards(COMMUNITY_CARD_PAGE_SIZE, 0, { sort: feedSort, hideSeen: hideSeenCards });
-      setCommunityCards(page.cards);
-      setCommunityHasMoreCards(page.hasMore);
-      setCommunityNextOffset(page.nextOffset);
-
-      void fetchCommunityFeaturedCard()
-        .then(setFeaturedCard)
-        .catch((error) => {
-          console.warn("Unable to load weekly featured card.", error);
-        });
-    } catch (error) {
-      setCommunityError(error instanceof Error ? error.message : "Unable to load community cards.");
-    } finally {
-      setCommunityBusy(false);
-    }
-  }, [feedSort, hideSeenCards]);
-
-  const loadCommunitySets = useCallback(async () => {
-    if (!isSupabaseConfigured || communitySetsLoaded) {
-      return;
-    }
-
-    try {
-      const directory = await fetchCommunitySets(24, 0);
-      setCommunitySets(directory);
-      setCommunitySetsLoaded(true);
-    } catch (error) {
-      console.warn("Unable to load community sets.", error);
-    }
-  }, [communitySetsLoaded]);
-
-  const loadMoreCommunityCards = useCallback(async () => {
-    if (communityBusy || communityLoadingMore || !communityHasMoreCards) {
-      return;
-    }
-
-    setCommunityLoadingMore(true);
-    setCommunityError(null);
-
-    try {
-      const page: CommunityCardPagePayload = await fetchCommunityCards(
-        COMMUNITY_CARD_PAGE_SIZE,
-        communityNextOffset,
-        { sort: feedSort, hideSeen: hideSeenCards },
-      );
-      setCommunityCards((current) => {
-        const existingIds = new Set(current.map((entry) => entry.id));
-        const uniqueCards = page.cards.filter((entry) => !existingIds.has(entry.id));
-        return [...current, ...uniqueCards];
-      });
-      setCommunityHasMoreCards(page.hasMore);
-      setCommunityNextOffset(page.nextOffset);
-    } catch (error) {
-      setCommunityError(error instanceof Error ? error.message : "Unable to load more community cards.");
-    } finally {
-      setCommunityLoadingMore(false);
-    }
-  }, [communityBusy, communityHasMoreCards, communityLoadingMore, communityNextOffset, feedSort, hideSeenCards]);
-
-  const handleCommunityMainScroll = useCallback<MainScrollBoundaryHandler>((event) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const nextScrollWindow = {
-      offsetY: Math.max(0, contentOffset.y),
-      viewportHeight: Math.max(1, layoutMeasurement.height),
-    };
-    const previousScrollWindow = communityScrollWindowRef.current;
-
-    if (
-      !previousScrollWindow ||
-      Math.abs(previousScrollWindow.offsetY - nextScrollWindow.offsetY) >= COMMUNITY_SCROLL_WINDOW_UPDATE_THRESHOLD ||
-      Math.abs(previousScrollWindow.viewportHeight - nextScrollWindow.viewportHeight) >= 24
-    ) {
-      communityScrollWindowRef.current = nextScrollWindow;
-      setCommunityScrollWindow(nextScrollWindow);
-    }
-
-    if (
-      browseMode !== "cards" ||
-      normalizedSearchText ||
-      communityBusy ||
-      communityLoadingMore ||
-      !communityHasMoreCards ||
-      communityCards.length === 0
-    ) {
-      return;
-    }
-
-    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-
-    if (distanceFromBottom > COMMUNITY_AUTO_LOAD_MORE_THRESHOLD || communityAutoLoadInFlightRef.current) {
-      return;
-    }
-
-    communityAutoLoadInFlightRef.current = true;
-    void loadMoreCommunityCards().finally(() => {
-      communityAutoLoadInFlightRef.current = false;
-    });
-  }, [
-    browseMode,
-    communityBusy,
-    communityCards.length,
-    communityHasMoreCards,
-    communityLoadingMore,
-    loadMoreCommunityCards,
-    normalizedSearchText,
-  ]);
-
-  useEffect(() => {
-    onRegisterMainScrollHandler?.(handleCommunityMainScroll);
-
-    return () => {
-      onRegisterMainScrollHandler?.(null);
-    };
-  }, [handleCommunityMainScroll, onRegisterMainScrollHandler]);
-
-  useEffect(() => {
-    communityCardsRef.current = communityCards;
-  }, [communityCards]);
-
-  useEffect(() => {
-    communitySetsRef.current = communitySets;
-  }, [communitySets]);
-
-  useEffect(() => {
-    featuredCardRef.current = featuredCard;
-  }, [featuredCard]);
-
-  const patchCommunityCard = useCallback((cardId: string, patch: Partial<CommunityCardPayload>) => {
-    setCommunityCards((current) => current.map((entry) => entry.id === cardId ? { ...entry, ...patch } : entry));
-    setFeaturedCard((current) => current?.id === cardId ? { ...current, ...patch } : current);
-  }, []);
-
-  const handleToggleCommunityLike = useCallback(async (cardId: string, liked: boolean) => {
-    const currentCard =
-      communityCardsRef.current.find((entry) => entry.id === cardId) ??
-      (featuredCardRef.current?.id === cardId ? featuredCardRef.current : null);
-
-    if (!currentCard) {
-      return;
-    }
-
-    const nextLikeCount = Math.max(0, currentCard.likeCount + (liked ? 1 : -1));
-    patchCommunityCard(cardId, { likedByViewer: liked, likeCount: nextLikeCount });
-
-    try {
-      await toggleCommunityCardLike(cardId, liked);
-    } catch (error) {
-      patchCommunityCard(cardId, {
-        likedByViewer: currentCard.likedByViewer,
-        likeCount: currentCard.likeCount,
-      });
-      Alert.alert("Community like unavailable", error instanceof Error ? error.message : "CardMagic could not update the like.");
-    }
-  }, [patchCommunityCard]);
-
-  const handleToggleCommunitySetFollow = useCallback(async (setId: string, followed: boolean) => {
-    const previousSet = communitySetsRef.current.find((entry) => entry.id === setId);
-
-    if (!previousSet) {
-      return;
-    }
-
-    setCommunitySets((current) => current.map((entry) => (
-      entry.id === setId
-        ? {
-            ...entry,
-            followedByViewer: followed,
-            followerCount: Math.max(0, entry.followerCount + (followed ? 1 : -1)),
-          }
-        : entry
-    )));
-
-    try {
-      await toggleCommunitySetFollow(setId, followed);
-    } catch (error) {
-      setCommunitySets((current) => current.map((entry) => (
-        entry.id === setId
-          ? {
-              ...entry,
-              followedByViewer: previousSet.followedByViewer,
-              followerCount: previousSet.followerCount,
-            }
-          : entry
-      )));
-      Alert.alert("Set follow unavailable", error instanceof Error ? error.message : "CardMagic could not update this set follow.");
-    }
-  }, []);
-
-  const openCommunityComments = useCallback((cardId: string) => {
-    const currentCard =
-      communityCardsRef.current.find((entry) => entry.id === cardId) ??
-      (featuredCardRef.current?.id === cardId ? featuredCardRef.current : null);
-
-    if (!currentCard) {
-      return;
-    }
-
-    setCommentPopoverCard(currentCard);
-  }, []);
-  const handleCommunityCommentCountChange = useCallback((cardId: string, commentCount: number) => {
-    patchCommunityCard(cardId, { commentCount });
-  }, [patchCommunityCard]);
-
-  const markVisibleCommunityCardsSeen = useCallback((cardIds: string[]) => {
-    if (hideSeenCards || cardIds.length === 0) {
-      return;
-    }
-
-    const unmarkedIds = Array.from(new Set(cardIds)).filter((cardId) => (
-      !communitySeenMarkIdsRef.current.has(cardId)
-    ));
-
-    if (unmarkedIds.length === 0) {
-      return;
-    }
-
-    for (const cardId of unmarkedIds) {
-      communitySeenMarkIdsRef.current.add(cardId);
-    }
-
-    void markCommunityCardsSeen(unmarkedIds).catch((error) => {
-      for (const cardId of unmarkedIds) {
-        communitySeenMarkIdsRef.current.delete(cardId);
-      }
-
-      console.warn("Unable to mark rendered community cards seen.", error);
-    });
-  }, [hideSeenCards]);
-
-  const openCommunitySet = useCallback((set: CommunitySetPayload) => {
-    const nextSelectedSetId = selectedCommunitySetId === set.id ? null : set.id;
-    setSelectedCommunitySetId(nextSelectedSetId);
-    setVisibleCommunitySetCardCountsBySetId((current) => ({
-      ...current,
-      [set.id]: current[set.id] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT,
-    }));
-
-    if (!nextSelectedSetId || communitySetCardsBySetId[set.id] || communitySetCardsLoadingId === set.id) {
-      return;
-    }
-
-    setCommunitySetCardsLoadingId(set.id);
-    setCommunitySetCardsErrorBySetId((current) => {
-      const next = { ...current };
-      delete next[set.id];
-      return next;
-    });
-
-    void fetchCommunitySetCards(set.id)
-      .then((cards) => {
-        setCommunitySetCardsBySetId((current) => ({
-          ...current,
-          [set.id]: cards,
-        }));
-        setVisibleCommunitySetCardCountsBySetId((current) => ({
-          ...current,
-          [set.id]: current[set.id] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT,
-        }));
-      })
-      .catch((error) => {
-        setCommunitySetCardsErrorBySetId((current) => ({
-          ...current,
-          [set.id]: error instanceof Error ? error.message : "Unable to load this set.",
-        }));
-      })
-      .finally(() => {
-        setCommunitySetCardsLoadingId((current) => current === set.id ? null : current);
-      });
-  }, [communitySetCardsBySetId, communitySetCardsLoadingId, selectedCommunitySetId]);
-
-  const showMoreCommunitySetCards = useCallback((setId: string) => {
-    setVisibleCommunitySetCardCountsBySetId((current) => ({
-      ...current,
-      [setId]: (current[setId] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT) + COMMUNITY_SET_RENDERED_CARD_BATCH_SIZE,
-    }));
-  }, []);
-
-  useEffect(() => {
-    void loadCommunityCards();
-  }, [accountUser?.id, loadCommunityCards]);
-
-  useEffect(() => {
-    setCommunitySets([]);
-    setCommunitySetsLoaded(false);
-    setSelectedCommunitySetId(null);
-    setCommunitySetCardsBySetId({});
-    setCommunitySetCardsErrorBySetId({});
-    setCommunitySetCardsLoadingId(null);
-    setVisibleCommunitySetCardCountsBySetId({});
-  }, [accountUser?.id]);
-
-  useEffect(() => {
-    if (browseMode === "sets") {
-      void loadCommunitySets();
-    }
-  }, [browseMode, loadCommunitySets]);
-
-  return (
-    <View style={{ width: "100%", maxWidth: 560, gap: 14 }}>
-      <View
-        style={{
-          gap: 10,
-          zIndex: 30,
-        }}
-      >
-        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
-          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-            <Text
-              selectable
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              style={{ color: "#101318", fontSize: 32, fontWeight: "900" }}
-            >
-              Community
-            </Text>
-            <Text selectable style={{ color: "#606775", fontSize: 14, fontWeight: "700" }}>
-              Browse shared cards and sets
-            </Text>
-          </View>
-
+        {hiddenSetCount > 0 ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Open community polls"
-            onPress={() => setPollsPopoverOpen(true)}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              borderWidth: 1,
-              borderColor: pollsPopoverOpen ? "#0b7180" : "#d8dbe2",
-              backgroundColor: pollsPopoverOpen ? "#151820" : "#ffffff",
-              alignItems: "center",
-              justifyContent: "center",
-              shadowColor: "#000000",
-              shadowOpacity: 0.08,
-              shadowRadius: 10,
-              shadowOffset: { width: 0, height: 5 },
+            accessibilityLabel={`Load ${Math.min(visibleSetPageSize, hiddenSetCount)} more saved sets`}
+            onPress={() => {
+              setVisibleSetLimit((current) => Math.min(sets.length, current + visibleSetPageSize));
             }}
-          >
-            <ListPlus size={18} color={pollsPopoverOpen ? "#ffffff" : "#151820"} strokeWidth={2.6} />
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open community feedback"
-            onPress={() => setFeedbackPopoverOpen(true)}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              borderWidth: 1,
-              borderColor: feedbackPopoverOpen ? "#0b7180" : "#d8dbe2",
-              backgroundColor: feedbackPopoverOpen ? "#151820" : "#ffffff",
-              alignItems: "center",
-              justifyContent: "center",
-              shadowColor: "#000000",
-              shadowOpacity: 0.08,
-              shadowRadius: 10,
-              shadowOffset: { width: 0, height: 5 },
-            }}
-          >
-            <MessageCircle size={18} color={feedbackPopoverOpen ? "#ffffff" : "#151820"} strokeWidth={2.6} />
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Refresh community feed"
-            disabled={communityBusy}
-            onPress={() => void loadCommunityCards()}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              borderWidth: 1,
-              borderColor: "#d8dbe2",
-              backgroundColor: communityBusy ? "#eef1f5" : "#ffffff",
-              alignItems: "center",
-              justifyContent: "center",
-              shadowColor: "#000000",
-              shadowOpacity: 0.08,
-              shadowRadius: 10,
-              shadowOffset: { width: 0, height: 5 },
-            }}
-          >
-            {communityBusy ? (
-              <ActivityIndicator color="#0b7180" size="small" />
-            ) : (
-              <RefreshCw size={18} color="#151820" strokeWidth={2.6} />
-            )}
-          </Pressable>
-        </View>
-
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <View
-            style={{
-              flex: 1,
-              minHeight: 44,
-              borderRadius: 999,
-              borderCurve: "continuous",
-              borderWidth: 1,
-              borderColor: "#d8dbe2",
-              backgroundColor: "#ffffff",
-              paddingHorizontal: 12,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 9,
-            }}
-          >
-            <Search size={17} color="#68707d" strokeWidth={2.4} />
-            <TextInput
-              accessibilityLabel="Search community cards and sets"
-              value={searchText}
-              onChangeText={setSearchText}
-              placeholder="Search community"
-              placeholderTextColor="#68707d"
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={{
-                flex: 1,
-                minHeight: 42,
-                color: "#151820",
-                fontSize: 14,
-                fontWeight: "800",
-                paddingVertical: 0,
-              }}
-            />
-          </View>
-
-          <View style={{ position: "relative" }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open community filter menu"
-              accessibilityState={{ expanded: filterMenuOpen }}
-              onPress={() => setFilterMenuOpen((current) => !current)}
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: 22,
-                borderWidth: 1,
-                borderColor: filterMenuOpen || hideSeenCards || feedSort !== "newest" ? "#0b7180" : "#d8dbe2",
-                backgroundColor: filterMenuOpen || hideSeenCards || feedSort !== "newest" ? "#151820" : "#ffffff",
-                alignItems: "center",
-                justifyContent: "center",
-                shadowColor: "#000000",
-                shadowOpacity: 0.08,
-                shadowRadius: 10,
-                shadowOffset: { width: 0, height: 5 },
-              }}
-            >
-              <SlidersHorizontal
-                size={18}
-                color={filterMenuOpen || hideSeenCards || feedSort !== "newest" ? "#ffffff" : "#151820"}
-                strokeWidth={2.6}
-              />
-            </Pressable>
-
-            {filterMenuOpen ? (
-              <View
-                style={{
-                  position: "absolute",
-                  top: 50,
-                  right: 0,
-                  width: 220,
-                  borderRadius: 14,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: "#d8dbe2",
-                  backgroundColor: "#ffffff",
-                  padding: 8,
-                  gap: 6,
-                  shadowColor: "#000000",
-                  shadowOpacity: 0.16,
-                  shadowRadius: 18,
-                  shadowOffset: { width: 0, height: 12 },
-                  zIndex: 50,
-                }}
-              >
-                <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "900", textTransform: "uppercase", paddingHorizontal: 8, paddingTop: 2 }}>
-                  Feed order
-                </Text>
-                <CommunityMenuOptionButton
-                  label="Newest"
-                  selected={feedSort === "newest"}
-                  onPress={() => {
-                    setFeedSort("newest");
-                    setFilterMenuOpen(false);
-                  }}
-                />
-                <CommunityMenuOptionButton
-                  label="Most liked"
-                  selected={feedSort === "most_liked"}
-                  onPress={() => {
-                    setFeedSort("most_liked");
-                    setFilterMenuOpen(false);
-                  }}
-                />
-                <View style={{ height: 1, backgroundColor: "#eceef2", marginVertical: 2 }} />
-                <CommunityMenuOptionButton
-                  label="Hide seen cards"
-                  selected={hideSeenCards}
-                  onPress={() => setHideSeenCards((current) => !current)}
-                />
-              </View>
-            ) : null}
-          </View>
-        </View>
-      </View>
-
-      <WeeklyFeaturedCardPreview card={featuredCard} loading={communityBusy} />
-
-      <View style={{ flexDirection: "row", gap: 8 }}>
-        <CommunityModeButton
-          label="Cards"
-          selected={browseMode === "cards"}
-          onPress={() => setBrowseMode("cards")}
-        />
-        <CommunityModeButton
-          label="Sets"
-          selected={browseMode === "sets"}
-          onPress={() => setBrowseMode("sets")}
-        />
-      </View>
-
-      <View
-        style={{
-          borderRadius: 12,
-          borderCurve: "continuous",
-          borderWidth: 1,
-          borderColor: "#d8dbe2",
-          backgroundColor: "#ffffff",
-          overflow: "hidden",
-        }}
-      >
-        <View
-          style={{
-            paddingHorizontal: 12,
-            paddingVertical: 10,
-            borderBottomWidth: 1,
-            borderBottomColor: "#eceef2",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <Database size={17} color="#151820" strokeWidth={2.4} />
-          <Text selectable={false} style={{ flex: 1, color: "#151820", fontSize: 14, fontWeight: "900" }}>
-            {browseMode === "cards" ? "Card Feed" : "Set Directory"}
-          </Text>
-          <Text selectable={false} style={{ color: "#0b7180", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-            {communityBusy ? "Loading" : "Live"}
-          </Text>
-        </View>
-
-        {communityError ? (
-          <CommunityEmptyState
-            icon={<Database size={24} color="#68707d" strokeWidth={2.4} />}
-            title="Community feed unavailable"
-            detail={communityError}
-          />
-        ) : browseMode === "cards" ? (
-          <CommunityCardsPreview
-            cards={filteredCommunityCards}
-            localFallbackCards={localCards}
-            feedResetKey={`${feedSort}:${hideSeenCards ? "hide-seen" : "all"}:${normalizedSearchText}`}
-            scrollWindow={communityScrollWindow}
-            hasMore={Boolean(!normalizedSearchText && communityCards.length > 0 && communityHasMoreCards)}
-            loadingMore={communityLoadingMore}
-            onVisibleCommunityCardIdsChange={markVisibleCommunityCardsSeen}
-            onToggleLike={handleToggleCommunityLike}
-            onOpenComments={openCommunityComments}
-            onExportCardImage={onExportCardImage}
-          />
-        ) : (
-          <CommunitySetsPreview
-            sets={filteredSets}
-            viewerUserId={accountUser?.id}
-            selectedSetId={selectedCommunitySetId}
-            cardsBySetId={communitySetCardsBySetId}
-            loadingSetId={communitySetCardsLoadingId}
-            errorBySetId={communitySetCardsErrorBySetId}
-            visibleCardCountsBySetId={visibleCommunitySetCardCountsBySetId}
-            onOpenSet={openCommunitySet}
-            onToggleSetFollow={handleToggleCommunitySetFollow}
-            onShowMoreSetCards={showMoreCommunitySetCards}
-            onExportCardImage={onExportCardImage}
-          />
-        )}
-      </View>
-      <CommunityCommentsPopover
-        card={commentPopoverCard}
-        onClose={() => setCommentPopoverCard(null)}
-        onCommentCountChange={handleCommunityCommentCountChange}
-      />
-      <CommunityPollsPopover
-        visible={pollsPopoverOpen}
-        canCreatePolls={canManageCommunityPolls}
-        onClose={() => setPollsPopoverOpen(false)}
-      />
-      <CommunityFeedbackPopover
-        visible={feedbackPopoverOpen}
-        accountUser={accountUser}
-        onClose={() => setFeedbackPopoverOpen(false)}
-      />
-    </View>
-  );
-}
-
-function WeeklyFeaturedCardPreview({
-  card,
-  loading,
-}: {
-  card: CommunityCardPayload | null;
-  loading: boolean;
-}) {
-  const { width: windowWidth } = useWindowDimensions();
-  const previewWidth =
-    windowWidth >= 900 ? 360 :
-    windowWidth >= 620 ? 320 :
-    Math.min(300, Math.max(232, windowWidth - 96));
-  const previewAspectRatio = card ? getTypeFrameSpec(getPreviewTypeFrame(card.card)).aspectRatio : CARD_BACK_PREVIEW_ASPECT_RATIO;
-  const reservedPreviewHeight = previewWidth / previewAspectRatio;
-
-  return (
-    <View
-      style={{
-        borderRadius: 12,
-        borderCurve: "continuous",
-        backgroundColor: "#101820",
-        padding: 14,
-        gap: 12,
-        overflow: "hidden",
-      }}
-    >
-      <LinearGradient
-        pointerEvents="none"
-        colors={["rgba(80,214,255,0.2)", "rgba(255,255,255,0)", "rgba(255,208,98,0.14)"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: "absolute", inset: 0 }}
-      />
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <View
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: 21,
-            backgroundColor: "rgba(255,255,255,0.12)",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Heart size={21} color="#ffffff" strokeWidth={2.5} />
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text selectable={false} style={{ color: "#ffffff", fontSize: 18, fontWeight: "900" }}>
-            Weekly Featured Card
-          </Text>
-        </View>
-      </View>
-
-      {loading && !card ? (
-        <View style={{ gap: 12, alignItems: "center" }}>
-          <View
-            style={{
-              width: previewWidth,
-              height: reservedPreviewHeight,
-              borderRadius: 9,
-              backgroundColor: "rgba(255,255,255,0.1)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.14)",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <ActivityIndicator color="#6ed7e8" />
-          </View>
-          <View style={{ width: "100%", gap: 6, alignItems: "center" }}>
-            <View style={{ width: "62%", height: 15, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.16)" }} />
-            <View style={{ width: "46%", height: 12, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.12)" }} />
-          </View>
-        </View>
-      ) : card ? (
-        <View style={{ gap: 12, alignItems: "center" }}>
-          {card.imageUrl ? (
-            <Image
-              source={{ uri: card.imageUrl }}
-              resizeMode="contain"
-              style={{
-                width: previewWidth,
-                height: previewWidth / previewAspectRatio,
-                borderRadius: 9,
-              }}
-            />
-          ) : (
-            <CardPreview
-              card={card.card}
-              activeSection={null}
-              width={previewWidth}
-              cornerRadius={9}
-              footerOwnerName={card.authorName}
-              onSectionPress={noopCardPreviewHandler}
-              onChange={noopCardPreviewHandler}
-            />
-          )}
-          <View style={{ width: "100%", gap: 4 }}>
-            <Text selectable={false} numberOfLines={1} style={{ color: "#ffffff", fontSize: 15, fontWeight: "900", textAlign: "center" }}>
-              {card.name || "Untitled Card"}
-            </Text>
-            <Text selectable={false} numberOfLines={1} style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, fontWeight: "800", textAlign: "center" }}>
-              {card.authorName} · Level {card.authorLevel} · {card.likeCount} likes · {card.commentCount} comments
-            </Text>
-          </View>
-        </View>
-      ) : (
-        <Text selectable={false} style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 18, fontWeight: "800" }}>
-          No public cards are available for the weekly feature yet.
-        </Text>
-      )}
-    </View>
-  );
-}
-
-function CommunityModeButton({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      accessibilityLabel={`Show community ${label.toLowerCase()}`}
-      onPress={onPress}
-      style={{
-        flex: 1,
-        minHeight: 42,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: selected ? "#151820" : "#d8dbe2",
-        backgroundColor: selected ? "#151820" : "#ffffff",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <Text selectable={false} style={{ color: selected ? "#ffffff" : "#151820", fontSize: 13, fontWeight: "900" }}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function CommunityMenuOptionButton({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="menuitem"
-      accessibilityState={{ selected }}
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={{
-        minHeight: 38,
-        borderRadius: 10,
-        borderCurve: "continuous",
-        backgroundColor: selected ? "rgba(11,113,128,0.1)" : "#ffffff",
-        paddingHorizontal: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-      }}
-    >
-      <View
-        style={{
-          width: 16,
-          height: 16,
-          borderRadius: 8,
-          borderWidth: 2,
-          borderColor: selected ? "#0b7180" : "#c8ced8",
-          backgroundColor: selected ? "#0b7180" : "#ffffff",
-        }}
-      />
-      <Text selectable={false} numberOfLines={1} style={{ flex: 1, color: selected ? "#0b7180" : "#151820", fontSize: 13, fontWeight: "900" }}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-type FeedbackScreenshotDraft = {
-  id: string;
-  uri: string;
-};
-
-function CommunityFeedbackPopover({
-  visible,
-  accountUser,
-  onClose,
-}: {
-  visible: boolean;
-  accountUser: SupabaseUser | null;
-  onClose: () => void;
-}) {
-  const { height: windowHeight } = useWindowDimensions();
-  const [feedbackType, setFeedbackType] = useState<CommunityFeedbackType>("feedback");
-  const [feedbackBody, setFeedbackBody] = useState("");
-  const [screenshots, setScreenshots] = useState<FeedbackScreenshotDraft[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (visible) {
-      setFeedbackError(null);
-      setFeedbackSuccess(null);
-    }
-  }, [visible]);
-
-  if (!visible) {
-    return null;
-  }
-
-  const pickScreenshot = async () => {
-    if (screenshots.length >= 3) {
-      setFeedbackError("You can attach up to three screenshots.");
-      return;
-    }
-
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (!permission.granted) {
-      setFeedbackError("Enable photo library access to attach screenshots.");
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 0.82,
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
-    });
-
-    if (result.canceled || !result.assets[0]?.uri) {
-      return;
-    }
-
-    try {
-      const uri = await normalizePickedImage(result.assets[0], {
-        maxDimension: 1600,
-        compress: 0.82,
-        format: ImageManipulator.SaveFormat.JPEG,
-      });
-      setScreenshots((current) => [...current, { id: createUuid(), uri }].slice(0, 3));
-      setFeedbackError(null);
-    } catch (error) {
-      setFeedbackError(error instanceof Error ? error.message : "CardMagic could not attach that screenshot.");
-    }
-  };
-
-  const sendFeedback = async () => {
-    if (!accountUser) {
-      setFeedbackError("Sign in before sending feedback.");
-      return;
-    }
-
-    setSubmitting(true);
-    setFeedbackError(null);
-    setFeedbackSuccess(null);
-
-    try {
-      const screenshotPaths: string[] = [];
-
-      for (const [index, screenshot] of screenshots.entries()) {
-        screenshotPaths.push(await uploadCommunityFeedbackScreenshot(accountUser.id, screenshot.uri, index));
-      }
-
-      await submitCommunityFeedback({
-        feedbackType,
-        body: feedbackBody,
-        appVersion: CARDMAGIC_APP_VERSION,
-        deviceInfo: getCommunityFeedbackDeviceInfo(),
-        screenshotPaths,
-      });
-
-      setFeedbackBody("");
-      setScreenshots([]);
-      setFeedbackSuccess("Feedback submitted. Device metadata and screenshots were attached.");
-    } catch (error) {
-      setFeedbackError(error instanceof Error ? error.message : "CardMagic could not send feedback.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const content = (
-    <View
-      pointerEvents="auto"
-      style={{
-        flex: 1,
-        backgroundColor: "rgba(15, 18, 24, 0.48)",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 14,
-      }}
-    >
-      <View
-        style={{
-          width: "100%",
-          maxWidth: 620,
-          maxHeight: Math.max(430, windowHeight - 58),
-          borderRadius: 16,
-          borderCurve: "continuous",
-          backgroundColor: "#ffffff",
-          borderWidth: 1,
-          borderColor: "#d8dbe2",
-          overflow: "hidden",
-          shadowColor: "#000000",
-          shadowOpacity: 0.22,
-          shadowRadius: 24,
-          shadowOffset: { width: 0, height: 14 },
-          elevation: 18,
-        }}
-      >
-        <View
-          style={{
-            paddingHorizontal: 14,
-            paddingVertical: 12,
-            borderBottomWidth: 1,
-            borderBottomColor: "#eceef2",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text selectable={false} style={{ color: "#151820", fontSize: 17, fontWeight: "900" }}>
-              Community feedback
-            </Text>
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-              Send a bug report or product note with diagnostic context
-            </Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close community feedback"
-            onPress={onClose}
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 17,
-              backgroundColor: "#eef0f4",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <X size={18} color="#20242d" strokeWidth={2.6} />
-          </Pressable>
-        </View>
-
-        <ScrollView
-          style={{ maxHeight: Math.max(360, windowHeight - 150) }}
-          contentContainerStyle={{ padding: 14, gap: 14 }}
-          keyboardShouldPersistTaps="handled"
-        >
-          {feedbackError ? (
-            <View
-              style={{
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#f1bcc4",
-                backgroundColor: "#fff5f6",
-                padding: 10,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                {feedbackError}
-              </Text>
-            </View>
-          ) : null}
-
-          {feedbackSuccess ? (
-            <View
-              style={{
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#b7ecf4",
-                backgroundColor: "#f2fcfd",
-                padding: 10,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, lineHeight: 17, fontWeight: "900" }}>
-                {feedbackSuccess}
-              </Text>
-            </View>
-          ) : null}
-
-          {!accountUser ? (
-            <View
-              style={{
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#f2d6a7",
-                backgroundColor: "#fff9ed",
-                padding: 10,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#8a5d0a", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                Sign in so CardMagic can associate this report with your account.
-              </Text>
-            </View>
-          ) : null}
-
-          <View style={{ flexDirection: "row", gap: 8 }}>
-            <CommunityModeButton
-              label="Feedback"
-              selected={feedbackType === "feedback"}
-              onPress={() => setFeedbackType("feedback")}
-            />
-            <CommunityModeButton
-              label="Bug report"
-              selected={feedbackType === "bug"}
-              onPress={() => setFeedbackType("bug")}
-            />
-          </View>
-
-          <TextInput
-            accessibilityLabel="Feedback content"
-            value={feedbackBody}
-            onChangeText={setFeedbackBody}
-            placeholder={feedbackType === "bug" ? "What broke, what did you expect, and what did you tap before it happened?" : "What should CardMagic improve or add?"}
-            placeholderTextColor="#68707d"
-            multiline
-            maxLength={4000}
-            style={[communityPollInputStyle, { minHeight: 156, textAlignVertical: "top" }]}
-          />
-
-          <View style={{ gap: 10 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text selectable={false} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
-                  Screenshots
-                </Text>
-                <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
-                  Optional, up to 3 images
-                </Text>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Attach feedback screenshot"
-                disabled={submitting || screenshots.length >= 3}
-                onPress={() => void pickScreenshot()}
-                style={{
-                  minHeight: 38,
-                  borderRadius: 999,
-                  backgroundColor: screenshots.length >= 3 ? "#d8dbe2" : "#151820",
-                  paddingHorizontal: 14,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 8,
-                }}
-              >
-                <Upload size={15} color="#ffffff" strokeWidth={2.6} />
-                <Text selectable={false} style={{ color: "#ffffff", fontSize: 12, fontWeight: "900" }}>
-                  Add
-                </Text>
-              </Pressable>
-            </View>
-
-            {screenshots.length > 0 ? (
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-                {screenshots.map((screenshot, index) => (
-                  <View
-                    key={screenshot.id}
-                    style={{
-                      width: 96,
-                      borderRadius: 12,
-                      borderCurve: "continuous",
-                      borderWidth: 1,
-                      borderColor: "#d8dbe2",
-                      backgroundColor: "#f8f9fb",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <Image source={{ uri: screenshot.uri }} style={{ width: 94, height: 94, backgroundColor: "#eef0f4" }} resizeMode="cover" />
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove screenshot ${index + 1}`}
-                      disabled={submitting}
-                      onPress={() => setScreenshots((current) => current.filter((entry) => entry.id !== screenshot.id))}
-                      style={{ minHeight: 32, alignItems: "center", justifyContent: "center" }}
-                    >
-                      <Text selectable={false} style={{ color: "#a62231", fontSize: 11, fontWeight: "900" }}>
-                        Remove
-                      </Text>
-                    </Pressable>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-          </View>
-
-          <View
-            style={{
-              borderRadius: 12,
-              borderCurve: "continuous",
-              borderWidth: 1,
-              borderColor: "#e1e5eb",
-              backgroundColor: "#f8f9fb",
-              padding: 10,
-              gap: 4,
-            }}
-          >
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-              Diagnostics
-            </Text>
-            <Text selectable={false} style={{ color: "#46505d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-              v{CARDMAGIC_APP_VERSION} · {Platform.OS}
-            </Text>
-          </View>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Submit community feedback"
-            disabled={submitting}
-            onPress={() => void sendFeedback()}
             style={{
               minHeight: 46,
-              borderRadius: 999,
-              backgroundColor: submitting ? "#8aa7ad" : "#151820",
+              borderRadius: 10,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#d4d8e0",
+              backgroundColor: "#ffffff",
               alignItems: "center",
               justifyContent: "center",
               flexDirection: "row",
               gap: 8,
+              paddingHorizontal: 12,
             }}
           >
-            {submitting ? <ActivityIndicator color="#ffffff" size="small" /> : feedbackType === "bug" ? <Bug size={17} color="#ffffff" strokeWidth={2.6} /> : <MessageCircle size={17} color="#ffffff" strokeWidth={2.6} />}
-            <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-              {submitting ? "Submitting" : "Submit"}
+            <Plus size={17} color="#151820" strokeWidth={2.5} />
+            <Text selectable={false} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+              Load {Math.min(visibleSetPageSize, hiddenSetCount)} more sets
             </Text>
           </Pressable>
-        </ScrollView>
-      </View>
-    </View>
-  );
-
-  if (Platform.OS === "web" && typeof document !== "undefined") {
-    return createPortal(
-      <View style={{ position: "fixed" as unknown as "absolute", inset: 0, zIndex: 190 }}>
-        {content}
-      </View>,
-      document.body,
-    );
-  }
-
-  return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
-      {content}
-    </Modal>
-  );
-}
-
-function getCommunityFeedbackDeviceInfo() {
-  const screenInfo = Platform.OS === "web" && typeof window !== "undefined"
-    ? {
-        width: window.screen?.width,
-        height: window.screen?.height,
-        pixelRatio: window.devicePixelRatio,
-      }
-    : undefined;
-
-  return {
-    platform: Platform.OS,
-    os: Platform.OS,
-    userAgent: Platform.OS === "web" && typeof navigator !== "undefined" ? navigator.userAgent : undefined,
-    language: Platform.OS === "web" && typeof navigator !== "undefined" ? navigator.language : undefined,
-    screen: screenInfo,
-  };
-}
-
-function CommunityPollsPopover({
-  visible,
-  canCreatePolls,
-  onClose,
-}: {
-  visible: boolean;
-  canCreatePolls: boolean;
-  onClose: () => void;
-}) {
-  const { height: windowHeight } = useWindowDimensions();
-  const [polls, setPolls] = useState<CommunityPollPayload[]>([]);
-  const [pollsLoading, setPollsLoading] = useState(false);
-  const [pollsError, setPollsError] = useState<string | null>(null);
-  const [draftSelections, setDraftSelections] = useState<Record<string, string[]>>({});
-  const [savingPollId, setSavingPollId] = useState<string | null>(null);
-  const [creatingPoll, setCreatingPoll] = useState(false);
-  const [newPollTitle, setNewPollTitle] = useState("");
-  const [newPollDescription, setNewPollDescription] = useState("");
-  const [newPollSelectionType, setNewPollSelectionType] = useState<CommunityPollSelectionType>("single");
-  const [newPollOptionsText, setNewPollOptionsText] = useState("Yes\nNo");
-
-  const reloadPolls = useCallback(async () => {
-    if (!visible) {
-      return;
-    }
-
-    setPollsLoading(true);
-    setPollsError(null);
-
-    try {
-      const nextPolls = await fetchCommunityPolls();
-      setPolls(nextPolls);
-      setDraftSelections(Object.fromEntries(
-        nextPolls.map((poll) => [
-          poll.id,
-          poll.options.filter((option) => option.selectedByViewer).map((option) => option.id),
-        ]),
-      ));
-    } catch (error) {
-      setPollsError(error instanceof Error ? error.message : "CardMagic could not load community polls.");
-    } finally {
-      setPollsLoading(false);
-    }
-  }, [visible]);
-
-  useEffect(() => {
-    if (visible) {
-      void reloadPolls();
-    }
-  }, [reloadPolls, visible]);
-
-  if (!visible) {
-    return null;
-  }
-
-  const submitVote = async (poll: CommunityPollPayload) => {
-    const optionIds = draftSelections[poll.id] ?? [];
-
-    if (optionIds.length === 0) {
-      setPollsError("Choose at least one option before submitting your vote.");
-      return;
-    }
-
-    setSavingPollId(poll.id);
-    setPollsError(null);
-
-    try {
-      await submitCommunityPollVote(poll.id, optionIds);
-      await reloadPolls();
-    } catch (error) {
-      setPollsError(error instanceof Error ? error.message : "CardMagic could not submit this vote.");
-    } finally {
-      setSavingPollId(null);
-    }
-  };
-
-  const togglePollStatus = async (poll: CommunityPollPayload) => {
-    setSavingPollId(poll.id);
-    setPollsError(null);
-
-    try {
-      await setCommunityPollStatus(poll.id, poll.status === "open" ? "closed" : "open");
-      await reloadPolls();
-    } catch (error) {
-      setPollsError(error instanceof Error ? error.message : "CardMagic could not update this poll.");
-    } finally {
-      setSavingPollId(null);
-    }
-  };
-
-  const createPoll = async () => {
-    const options = newPollOptionsText
-      .split(/\r?\n/)
-      .map((option) => option.trim())
-      .filter(Boolean);
-
-    setCreatingPoll(true);
-    setPollsError(null);
-
-    try {
-      await createCommunityPoll({
-        title: newPollTitle,
-        description: newPollDescription,
-        selectionType: newPollSelectionType,
-        options,
-      });
-      setNewPollTitle("");
-      setNewPollDescription("");
-      setNewPollSelectionType("single");
-      setNewPollOptionsText("Yes\nNo");
-      await reloadPolls();
-    } catch (error) {
-      setPollsError(error instanceof Error ? error.message : "CardMagic could not create this poll.");
-    } finally {
-      setCreatingPoll(false);
-    }
-  };
-
-  const content = (
-    <View
-      pointerEvents="auto"
-      style={{
-        flex: 1,
-        backgroundColor: "rgba(15, 18, 24, 0.48)",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 14,
-      }}
-    >
-      <View
-        style={{
-          width: "100%",
-          maxWidth: 720,
-          maxHeight: Math.max(430, windowHeight - 58),
-          borderRadius: 16,
-          borderCurve: "continuous",
-          backgroundColor: "#ffffff",
-          borderWidth: 1,
-          borderColor: "#d8dbe2",
-          overflow: "hidden",
-          shadowColor: "#000000",
-          shadowOpacity: 0.22,
-          shadowRadius: 24,
-          shadowOffset: { width: 0, height: 14 },
-          elevation: 18,
-        }}
-      >
-        <View
-          style={{
-            paddingHorizontal: 14,
-            paddingVertical: 12,
-            borderBottomWidth: 1,
-            borderBottomColor: "#eceef2",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text selectable={false} style={{ color: "#151820", fontSize: 17, fontWeight: "900" }}>
-              Community polls
-            </Text>
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-              Vote on feature direction and app priorities
-            </Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Refresh community polls"
-            disabled={pollsLoading}
-            onPress={() => void reloadPolls()}
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 17,
-              backgroundColor: "#eef0f4",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {pollsLoading ? <ActivityIndicator color="#0b7180" size="small" /> : <RefreshCw size={17} color="#20242d" strokeWidth={2.6} />}
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close community polls"
-            onPress={onClose}
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 17,
-              backgroundColor: "#eef0f4",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <X size={18} color="#20242d" strokeWidth={2.6} />
-          </Pressable>
-        </View>
-
-        <ScrollView
-          style={{ maxHeight: Math.max(360, windowHeight - 150) }}
-          contentContainerStyle={{ padding: 14, gap: 14 }}
-        >
-          {pollsError ? (
-            <View
-              style={{
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#f1bcc4",
-                backgroundColor: "#fff5f6",
-                padding: 10,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                {pollsError}
-              </Text>
-            </View>
-          ) : null}
-
-          {canCreatePolls ? (
-            <View
-              style={{
-                borderRadius: 14,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: "#b7ecf4",
-                backgroundColor: "#f2fcfd",
-                padding: 12,
-                gap: 10,
-              }}
-            >
-              <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900", textTransform: "uppercase" }}>
-                Create poll
-              </Text>
-              <TextInput
-                accessibilityLabel="Poll title"
-                value={newPollTitle}
-                onChangeText={setNewPollTitle}
-                placeholder="Feature poll title"
-                placeholderTextColor="#68707d"
-                maxLength={120}
-                style={communityPollInputStyle}
-              />
-              <TextInput
-                accessibilityLabel="Poll description"
-                value={newPollDescription}
-                onChangeText={setNewPollDescription}
-                placeholder="Optional context"
-                placeholderTextColor="#68707d"
-                maxLength={500}
-                multiline
-                style={[communityPollInputStyle, { minHeight: 72, textAlignVertical: "top" }]}
-              />
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                <CommunityModeButton
-                  label="Single choice"
-                  selected={newPollSelectionType === "single"}
-                  onPress={() => setNewPollSelectionType("single")}
-                />
-                <CommunityModeButton
-                  label="Multi choice"
-                  selected={newPollSelectionType === "multiple"}
-                  onPress={() => setNewPollSelectionType("multiple")}
-                />
-              </View>
-              <TextInput
-                accessibilityLabel="Poll options"
-                value={newPollOptionsText}
-                onChangeText={setNewPollOptionsText}
-                placeholder="One option per line"
-                placeholderTextColor="#68707d"
-                multiline
-                style={[communityPollInputStyle, { minHeight: 96, textAlignVertical: "top" }]}
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Create community poll"
-                disabled={creatingPoll}
-                onPress={() => void createPoll()}
-                style={{
-                  minHeight: 44,
-                  borderRadius: 999,
-                  backgroundColor: creatingPoll ? "#8aa7ad" : "#151820",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexDirection: "row",
-                  gap: 8,
-                }}
-              >
-                {creatingPoll ? <ActivityIndicator color="#ffffff" size="small" /> : <ListPlus size={17} color="#ffffff" strokeWidth={2.6} />}
-                <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-                  {creatingPoll ? "Creating poll" : "Create poll"}
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {pollsLoading && polls.length === 0 ? (
-            <View style={{ minHeight: 180, alignItems: "center", justifyContent: "center" }}>
-              <ActivityIndicator color="#0b7180" />
-            </View>
-          ) : polls.length > 0 ? (
-            polls.map((poll) => {
-              const selectedOptionIds = draftSelections[poll.id] ?? [];
-              const totalVotes = poll.options.reduce((total, option) => total + option.voteCount, 0);
-              const isSaving = savingPollId === poll.id;
-              const isClosed = poll.status === "closed";
-
-              return (
-                <View
-                  key={poll.id}
-                  style={{
-                    borderRadius: 14,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: isClosed ? "#d8dbe2" : "#b7ecf4",
-                    backgroundColor: isClosed ? "#f8f9fb" : "#ffffff",
-                    padding: 12,
-                    gap: 10,
-                  }}
-                >
-                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
-                    <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                      <Text selectable={false} style={{ color: "#151820", fontSize: 16, lineHeight: 21, fontWeight: "900" }}>
-                        {poll.title}
-                      </Text>
-                      {poll.description ? (
-                        <Text selectable style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                          {poll.description}
-                        </Text>
-                      ) : null}
-                      <Text selectable={false} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-                        {poll.selectionType === "multiple" ? "Multi choice" : "Single choice"} · {poll.status} · {totalVotes} {totalVotes === 1 ? "vote" : "votes"}
-                      </Text>
-                    </View>
-                    {canCreatePolls ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={isClosed ? "Reopen poll" : "Close poll"}
-                        disabled={isSaving}
-                        onPress={() => void togglePollStatus(poll)}
-                        style={{
-                          minHeight: 32,
-                          borderRadius: 999,
-                          borderWidth: 1,
-                          borderColor: "#d8dbe2",
-                          backgroundColor: "#ffffff",
-                          paddingHorizontal: 10,
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <Text selectable={false} style={{ color: "#46505d", fontSize: 11, fontWeight: "900" }}>
-                          {isClosed ? "Reopen" : "Close"}
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-
-                  <View style={{ gap: 8 }}>
-                    {poll.options.map((option) => {
-                      const selected = selectedOptionIds.includes(option.id);
-                      const percent = totalVotes > 0 ? Math.round((option.voteCount / totalVotes) * 100) : 0;
-
-                      return (
-                        <Pressable
-                          key={option.id}
-                          accessibilityRole={poll.selectionType === "multiple" ? "checkbox" : "radio"}
-                          accessibilityState={{ checked: selected, disabled: isClosed }}
-                          accessibilityLabel={`${option.label}, ${option.voteCount} votes`}
-                          disabled={isClosed || isSaving}
-                          onPress={() => {
-                            setDraftSelections((current) => {
-                              const currentSelection = current[poll.id] ?? [];
-                              const nextSelection = poll.selectionType === "single"
-                                ? [option.id]
-                                : currentSelection.includes(option.id)
-                                  ? currentSelection.filter((id) => id !== option.id)
-                                  : [...currentSelection, option.id];
-
-                              return { ...current, [poll.id]: nextSelection };
-                            });
-                          }}
-                          style={{
-                            minHeight: 44,
-                            borderRadius: 12,
-                            borderCurve: "continuous",
-                            borderWidth: 1,
-                            borderColor: selected ? "#0b7180" : "#d8dbe2",
-                            backgroundColor: selected ? "rgba(11,113,128,0.08)" : "#ffffff",
-                            padding: 10,
-                            gap: 7,
-                          }}
-                        >
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
-                            <View
-                              style={{
-                                width: 18,
-                                height: 18,
-                                borderRadius: poll.selectionType === "multiple" ? 5 : 9,
-                                borderWidth: 2,
-                                borderColor: selected ? "#0b7180" : "#c8ced8",
-                                backgroundColor: selected ? "#0b7180" : "#ffffff",
-                              }}
-                            />
-                            <Text selectable={false} style={{ flex: 1, color: "#151820", fontSize: 13, fontWeight: "900" }}>
-                              {option.label}
-                            </Text>
-                            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "900" }}>
-                              {percent}%
-                            </Text>
-                          </View>
-                          <View style={{ height: 6, borderRadius: 999, backgroundColor: "#eceef2", overflow: "hidden" }}>
-                            <View style={{ width: `${percent}%`, height: "100%", backgroundColor: selected ? "#0b7180" : "#b8c0cc" }} />
-                          </View>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Submit vote for ${poll.title}`}
-                    disabled={isClosed || isSaving || selectedOptionIds.length === 0}
-                    onPress={() => void submitVote(poll)}
-                    style={{
-                      minHeight: 42,
-                      borderRadius: 999,
-                      backgroundColor: isClosed || selectedOptionIds.length === 0 ? "#d8dbe2" : "#151820",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexDirection: "row",
-                      gap: 8,
-                    }}
-                  >
-                    {isSaving ? <ActivityIndicator color="#ffffff" size="small" /> : <ListPlus size={16} color="#ffffff" strokeWidth={2.6} />}
-                    <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-                      {isClosed ? "Poll closed" : isSaving ? "Saving vote" : "Submit vote"}
-                    </Text>
-                  </Pressable>
-                </View>
-              );
-            })
-          ) : (
-            <CommunityEmptyState
-              icon={<ListPlus size={24} color="#68707d" strokeWidth={2.4} />}
-              title="No polls yet"
-              detail="Open polls will appear here for feature requests, release priorities, and community feedback."
-            />
-          )}
-        </ScrollView>
-      </View>
-    </View>
-  );
-
-  if (Platform.OS === "web" && typeof document !== "undefined") {
-    return createPortal(
-      <View style={{ position: "fixed" as unknown as "absolute", inset: 0, zIndex: 180 }}>
-        {content}
-      </View>,
-      document.body,
-    );
-  }
-
-  return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
-      {content}
-    </Modal>
-  );
-}
-
-const communityPollInputStyle = {
-  minHeight: 44,
-  borderRadius: 12,
-  borderCurve: "continuous" as const,
-  borderWidth: 1,
-  borderColor: "#d8dbe2",
-  backgroundColor: "#ffffff",
-  color: "#151820",
-  fontSize: 14,
-  lineHeight: 19,
-  fontWeight: "800" as const,
-  paddingHorizontal: 12,
-  paddingVertical: 10,
-};
-
-function CommunityCommentsPopover({
-  card,
-  onClose,
-  onCommentCountChange,
-}: {
-  card: CommunityCardPayload | null;
-  onClose: () => void;
-  onCommentCountChange: (cardId: string, commentCount: number) => void;
-}) {
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const [comments, setComments] = useState<CommunityCardCommentPayload[]>([]);
-  const [draftBody, setDraftBody] = useState("");
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
-  const [loadingComments, setLoadingComments] = useState(false);
-  const [savingComment, setSavingComment] = useState(false);
-  const [commentError, setCommentError] = useState<string | null>(null);
-  const previewWidth =
-    windowWidth >= 900 ? 260 :
-    windowWidth >= 620 ? 230 :
-    Math.min(210, Math.max(160, windowWidth - 190));
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!card) {
-      setComments([]);
-      setDraftBody("");
-      setEditingCommentId(null);
-      setCommentError(null);
-      return;
-    }
-
-    setLoadingComments(true);
-    setCommentError(null);
-    setDraftBody("");
-    setEditingCommentId(null);
-
-    fetchCommunityCardComments(card.id)
-      .then((nextComments) => {
-        if (cancelled) {
-          return;
-        }
-
-        setComments(nextComments);
-        onCommentCountChange(card.id, nextComments.length);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setCommentError(error instanceof Error ? error.message : "CardMagic could not load comments.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingComments(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [card, onCommentCountChange]);
-
-  if (!card) {
-    return null;
-  }
-
-  const editingComment = editingCommentId ? comments.find((comment) => comment.id === editingCommentId) : null;
-  const saveLabel = editingComment ? "Update comment" : "Post comment";
-  const canSaveComment = draftBody.trim().length > 0 && !savingComment;
-  const saveComment = async () => {
-    if (!canSaveComment) {
-      return;
-    }
-
-    setSavingComment(true);
-    setCommentError(null);
-
-    try {
-      const savedComment = await saveCommunityCardComment(card.id, draftBody, editingCommentId ?? undefined);
-      setComments((current) => {
-        const nextComments = editingCommentId
-          ? current.map((comment) => comment.id === savedComment.id ? savedComment : comment)
-          : [...current, savedComment];
-
-        onCommentCountChange(card.id, nextComments.length);
-        return nextComments;
-      });
-      setDraftBody("");
-      setEditingCommentId(null);
-    } catch (error) {
-      setCommentError(error instanceof Error ? error.message : "CardMagic could not save this comment.");
-    } finally {
-      setSavingComment(false);
-    }
-  };
-  const content = (
-    <View
-      pointerEvents="auto"
-      style={{
-        flex: 1,
-        backgroundColor: "rgba(15, 18, 24, 0.48)",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 14,
-      }}
-    >
-      <View
-        style={{
-          width: "100%",
-          maxWidth: 720,
-          maxHeight: Math.max(420, windowHeight - 58),
-          borderRadius: 16,
-          borderCurve: "continuous",
-          backgroundColor: "#ffffff",
-          borderWidth: 1,
-          borderColor: "#d8dbe2",
-          overflow: "hidden",
-          shadowColor: "#000000",
-          shadowOpacity: 0.22,
-          shadowRadius: 24,
-          shadowOffset: { width: 0, height: 14 },
-          elevation: 18,
-        }}
-      >
-        <View
-          style={{
-            paddingHorizontal: 14,
-            paddingVertical: 12,
-            borderBottomWidth: 1,
-            borderBottomColor: "#eceef2",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 16, fontWeight: "900" }}>
-              {card.name || "Untitled Card"}
-            </Text>
-            <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-              {card.authorName} · Level {card.authorLevel}
-            </Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close comments"
-            onPress={onClose}
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 17,
-              backgroundColor: "#eef0f4",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <X size={18} color="#20242d" strokeWidth={2.6} />
-          </Pressable>
-        </View>
-
-        <View
-          style={{
-            padding: 14,
-            gap: 14,
-            flexDirection: windowWidth >= 640 ? "row" : "column",
-          }}
-        >
-          <View style={{ alignItems: "center", gap: 8 }}>
-            <CardPreview
-              card={card.card}
-              activeSection={null}
-              width={previewWidth}
-              cornerRadius={9}
-              footerOwnerName={card.authorName}
-              onSectionPress={noopCardPreviewHandler}
-              onChange={noopCardPreviewHandler}
-            />
-            <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-              {comments.length} {comments.length === 1 ? "comment" : "comments"}
-            </Text>
-          </View>
-
-          <View style={{ flex: 1, minWidth: 0, gap: 12 }}>
-            <ScrollView
-              style={{ maxHeight: windowWidth >= 640 ? Math.max(230, windowHeight - 360) : 210 }}
-              contentContainerStyle={{ gap: 10, paddingRight: 2 }}
-            >
-              {loadingComments ? (
-                <View style={{ minHeight: 120, alignItems: "center", justifyContent: "center" }}>
-                  <ActivityIndicator color="#0b7180" />
-                </View>
-              ) : comments.length > 0 ? (
-                comments.map((comment) => (
-                  <View
-                    key={comment.id}
-                    style={{
-                      borderRadius: 12,
-                      borderCurve: "continuous",
-                      borderWidth: 1,
-                      borderColor: comment.editableByViewer ? "#b7ecf4" : "#eceef2",
-                      backgroundColor: comment.editableByViewer ? "#f2fcfd" : "#f8f9fb",
-                      padding: 10,
-                      gap: 6,
-                    }}
-                  >
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                      <Text selectable={false} style={{ flex: 1, color: "#151820", fontSize: 12, fontWeight: "900" }}>
-                        {comment.authorName}
-                      </Text>
-                      <Text selectable={false} style={{ color: "#8a93a3", fontSize: 10, fontWeight: "800" }}>
-                        {formatCompactCommentDate(comment.updatedAt)}
-                      </Text>
-                    </View>
-                    <Text selectable style={{ color: "#2a303a", fontSize: 13, lineHeight: 18, fontWeight: "700" }}>
-                      {comment.body}
-                    </Text>
-                    {comment.editableByViewer ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Edit your comment"
-                        onPress={() => {
-                          setEditingCommentId(comment.id);
-                          setDraftBody(comment.body);
-                        }}
-                        style={{ alignSelf: "flex-start", paddingVertical: 4 }}
-                      >
-                        <Text selectable={false} style={{ color: "#0b7180", fontSize: 12, fontWeight: "900" }}>
-                          Edit
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                ))
-              ) : (
-                <View
-                  style={{
-                    minHeight: 120,
-                    borderRadius: 12,
-                    backgroundColor: "#f4f5f7",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    padding: 16,
-                  }}
-                >
-                  <Text selectable={false} style={{ color: "#68707d", fontSize: 13, fontWeight: "900", textAlign: "center" }}>
-                    No comments yet
-                  </Text>
-                </View>
-              )}
-            </ScrollView>
-
-            <View style={{ gap: 8 }}>
-              <TextInput
-                accessibilityLabel={editingComment ? "Edit your comment" : "Add a comment"}
-                value={draftBody}
-                onChangeText={setDraftBody}
-                placeholder={editingComment ? "Edit your comment" : "Add a comment"}
-                placeholderTextColor="#8a93a3"
-                multiline
-                maxLength={500}
-                style={{
-                  minHeight: 82,
-                  borderRadius: 12,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: "#d8dbe2",
-                  backgroundColor: "#ffffff",
-                  color: "#151820",
-                  fontSize: 14,
-                  lineHeight: 19,
-                  fontWeight: "700",
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  textAlignVertical: "top",
-                }}
-              />
-              {commentError ? (
-                <Text selectable={false} style={{ color: "#a52735", fontSize: 12, fontWeight: "800" }}>
-                  {commentError}
-                </Text>
-              ) : null}
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                {editingComment ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Cancel comment edit"
-                    onPress={() => {
-                      setEditingCommentId(null);
-                      setDraftBody("");
-                    }}
-                    style={{
-                      minHeight: 42,
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: "#d8dbe2",
-                      paddingHorizontal: 14,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Text selectable={false} style={{ color: "#46505d", fontSize: 13, fontWeight: "900" }}>
-                      Cancel
-                    </Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={saveLabel}
-                  disabled={!canSaveComment}
-                  onPress={() => void saveComment()}
-                  style={{
-                    flex: 1,
-                    minHeight: 42,
-                    borderRadius: 999,
-                    backgroundColor: canSaveComment ? "#151820" : "#d8dbe2",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexDirection: "row",
-                    gap: 8,
-                  }}
-                >
-                  {savingComment ? <ActivityIndicator color="#ffffff" size="small" /> : <MessageCircle size={16} color="#ffffff" strokeWidth={2.5} />}
-                  <Text selectable={false} style={{ color: "#ffffff", fontSize: 13, fontWeight: "900" }}>
-                    {savingComment ? "Saving" : saveLabel}
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        </View>
-      </View>
-    </View>
-  );
-
-  if (Platform.OS === "web" && typeof document !== "undefined") {
-    return createPortal(
-      <View style={{ position: "fixed" as unknown as "absolute", inset: 0, zIndex: 180 }}>
-        {content}
-      </View>,
-      document.body,
-    );
-  }
-
-  return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
-      {content}
-    </Modal>
-  );
-}
-
-function formatCompactCommentDate(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function CommunityCardsPreview({
-  cards,
-  localFallbackCards,
-  feedResetKey,
-  scrollWindow,
-  hasMore,
-  loadingMore,
-  onVisibleCommunityCardIdsChange,
-  onToggleLike,
-  onOpenComments,
-  onExportCardImage,
-}: {
-  cards: CommunityCardPayload[];
-  localFallbackCards: Array<{ id: string; setName: string; card: CardDraft }>;
-  feedResetKey: string;
-  scrollWindow: MainScrollWindow | null;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onVisibleCommunityCardIdsChange: (cardIds: string[]) => void;
-  onToggleLike: (cardId: string, liked: boolean) => void;
-  onOpenComments: (cardId: string) => void;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
-}) {
-  const { width: windowWidth } = useWindowDimensions();
-  const [listTopY, setListTopY] = useState(0);
-  const [itemHeightsById, setItemHeightsById] = useState<Record<string, number>>({});
-  const cardPreviewWidth =
-    windowWidth >= 900 ? 420 :
-    windowWidth >= 620 ? 380 :
-    Math.min(360, Math.max(286, windowWidth - 28));
-  const usingCommunityCards = cards.length > 0;
-  const feedItems = useMemo(
-    () =>
-      usingCommunityCards
-        ? cards.map((entry) => ({ kind: "community" as const, id: entry.id, entry }))
-        : localFallbackCards.map((entry) => ({ kind: "fallback" as const, id: entry.id, entry })),
-    [cards, localFallbackCards, usingCommunityCards],
-  );
-  const feedItemCount = feedItems.length;
-
-  useEffect(() => {
-    setItemHeightsById({});
-  }, [cardPreviewWidth, feedResetKey]);
-
-  const virtualWindow = useMemo(() => {
-    if (feedItemCount === 0) {
-      return {
-        startIndex: 0,
-        endIndex: 0,
-        topSpacerHeight: 0,
-        bottomSpacerHeight: 0,
-      };
-    }
-
-    const estimatedInitialHeight =
-      COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT * COMMUNITY_INITIAL_RENDERED_CARD_COUNT;
-    const viewportTop = scrollWindow
-      ? Math.max(0, scrollWindow.offsetY - listTopY - COMMUNITY_FEED_OVERSCAN_PX)
-      : 0;
-    const viewportBottom = scrollWindow
-      ? Math.max(
-          viewportTop + scrollWindow.viewportHeight,
-          scrollWindow.offsetY - listTopY + scrollWindow.viewportHeight + COMMUNITY_FEED_OVERSCAN_PX,
-        )
-      : estimatedInitialHeight;
-    let cursorY = 0;
-    let startIndex = 0;
-    let endIndex = feedItemCount;
-    let topSpacerHeight = 0;
-    let visibleHeight = 0;
-
-    for (let index = 0; index < feedItemCount; index += 1) {
-      const item = feedItems[index];
-      const itemHeight = itemHeightsById[item.id] ?? COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT;
-      const itemTop = cursorY;
-      const itemBottom = cursorY + itemHeight;
-
-      if (itemBottom < viewportTop) {
-        startIndex = index + 1;
-        topSpacerHeight += itemHeight;
-      }
-
-      if (itemTop <= viewportBottom) {
-        endIndex = index + 1;
-      }
-
-      cursorY = itemBottom;
-    }
-
-    endIndex = Math.min(feedItemCount, Math.max(endIndex, startIndex + 1));
-
-    for (let index = startIndex; index < endIndex; index += 1) {
-      const item = feedItems[index];
-      visibleHeight += itemHeightsById[item.id] ?? COMMUNITY_FEED_ESTIMATED_CARD_ITEM_HEIGHT;
-    }
-
-    return {
-      startIndex,
-      endIndex,
-      topSpacerHeight,
-      bottomSpacerHeight: Math.max(0, cursorY - topSpacerHeight - visibleHeight),
-    };
-  }, [feedItemCount, feedItems, itemHeightsById, listTopY, scrollWindow]);
-
-  const visibleFeedItems = feedItems.slice(virtualWindow.startIndex, virtualWindow.endIndex);
-  const visibleCommunityCardIds = useMemo(
-    () => visibleFeedItems.flatMap((item) => (item.kind === "community" ? [item.id] : [])),
-    [visibleFeedItems],
-  );
-  const visibleCommunityCardIdsKey = visibleCommunityCardIds.join("\n");
-  const handleItemLayout = useCallback((itemId: string, event: LayoutChangeEvent) => {
-    const measuredHeight = event.nativeEvent.layout.height;
-
-    if (measuredHeight <= 0) {
-      return;
-    }
-
-    setItemHeightsById((current) => {
-      if (Math.abs((current[itemId] ?? 0) - measuredHeight) < 2) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [itemId]: measuredHeight,
-      };
-    });
-  }, []);
-
-  useEffect(() => {
-    if (visibleCommunityCardIds.length > 0) {
-      onVisibleCommunityCardIdsChange(visibleCommunityCardIds);
-    }
-  }, [onVisibleCommunityCardIdsChange, visibleCommunityCardIdsKey]);
-
-  if (feedItemCount === 0) {
-    return (
-      <CommunityEmptyState
-        icon={<Tags size={24} color="#68707d" strokeWidth={2.4} />}
-        title="No community cards yet"
-        detail="Save cards while signed in to publish them into the public Supabase card feed."
-      />
-    );
-  }
-
-  return (
-    <View
-      onLayout={(event) => setListTopY(event.nativeEvent.layout.y)}
-      style={{ padding: 12, gap: 16 }}
-    >
-      {virtualWindow.topSpacerHeight > 0 ? (
-        <View pointerEvents="none" style={{ height: virtualWindow.topSpacerHeight }} />
-      ) : null}
-      {visibleFeedItems.map((item) => (
-        <View
-          key={item.id}
-          onLayout={(event) => handleItemLayout(item.id, event)}
-        >
-          {item.kind === "community" ? (
-            <CommunityFeedCardItem
-              entry={item.entry}
-              cardPreviewWidth={cardPreviewWidth}
-              onToggleLike={onToggleLike}
-              onOpenComments={onOpenComments}
-              onExportCardImage={onExportCardImage}
-            />
-          ) : (
-            <CommunityFallbackCardItem
-              entry={item.entry}
-              cardPreviewWidth={cardPreviewWidth}
-              onExportCardImage={onExportCardImage}
-            />
-          )}
-        </View>
-      ))}
-      {virtualWindow.bottomSpacerHeight > 0 ? (
-        <View pointerEvents="none" style={{ height: virtualWindow.bottomSpacerHeight }} />
-      ) : null}
-      {cards.length > 0 && hasMore && loadingMore ? (
-        <View
-          accessibilityRole="progressbar"
-          style={{
-            minHeight: 46,
-            borderRadius: 999,
-            borderWidth: 1,
-            borderColor: "#d8dbe2",
-            backgroundColor: "#f4f5f7",
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "row",
-            gap: 8,
-          }}
-        >
-          <ActivityIndicator color="#0b7180" size="small" />
-          <Text selectable={false} style={{ color: "#68707d", fontSize: 13, fontWeight: "900" }}>
-            Loading cards
-          </Text>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-const CommunityFeedCardItem = memo(function CommunityFeedCardItem({
-  entry,
-  cardPreviewWidth,
-  onToggleLike,
-  onOpenComments,
-  onExportCardImage,
-}: {
-  entry: CommunityCardPayload;
-  cardPreviewWidth: number;
-  onToggleLike: (cardId: string, liked: boolean) => void;
-  onOpenComments: (cardId: string) => void;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
-}) {
-  // Use the lean row fields (not the card JSON) so this works whether the feed
-  // payload carries a full card or just display metadata.
-  const cardName = entry.name || "Untitled Card";
-  const label = entry.typeLine || "Community card";
-  const cardAspectRatio = getTypeFrameSpec(getPreviewTypeFrame(entry.card)).aspectRatio;
-  const cardPreviewHeight = cardPreviewWidth / cardAspectRatio;
-  const [imageLoaded, setImageLoaded] = useState(false);
-
-  useEffect(() => {
-    setImageLoaded(false);
-  }, [entry.id, entry.imageUrl, cardPreviewWidth]);
-
-  return (
-    <View
-      style={{
-        borderBottomWidth: 1,
-        borderBottomColor: "#eceef2",
-        paddingVertical: 14,
-        gap: 12,
-        minHeight: cardPreviewHeight + COMMUNITY_FEED_CARD_ROW_CHROME_HEIGHT,
-      }}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <View
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: 19,
-            backgroundColor: "#151820",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Users size={18} color="#ffffff" strokeWidth={2.5} />
-        </View>
-        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-          <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
-            {cardName}
-          </Text>
-          <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-            {entry.authorName} · Level {entry.authorLevel} · {label}
-          </Text>
-        </View>
+        ) : null}
       </View>
 
-      <View
-        style={{
-          alignItems: "center",
-          backgroundColor: "#f4f5f7",
-          paddingVertical: 12,
-        }}
-      >
-        <View
-          style={{
-            width: cardPreviewWidth,
-            height: cardPreviewHeight,
-            minHeight: cardPreviewHeight,
-            borderRadius: 9,
-            overflow: "hidden",
-            backgroundColor: "#e7e9ee",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
-          }}
-        >
-          {entry.imageUrl ? (
-            <>
-              {!imageLoaded ? <CommunityCardImagePlaceholder /> : null}
-              <ExpoImage
-                source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
-                contentFit="contain"
-                transition={180}
-                cachePolicy="memory-disk"
-                recyclingKey={entry.id}
-                onLoad={() => setImageLoaded(true)}
-                onError={() => setImageLoaded(true)}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  opacity: imageLoaded ? 1 : 0,
-                }}
-              />
-            </>
-          ) : (
-            <CardPreview
-              card={entry.card}
-              activeSection={null}
-              width={cardPreviewWidth}
-              cornerRadius={9}
-              footerOwnerName={entry.authorName}
-              onSectionPress={noopCardPreviewHandler}
-              onChange={noopCardPreviewHandler}
-            />
-          )}
-        </View>
-      </View>
-
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <CommunityFeedActionButton
-          label={`${entry.likedByViewer ? "Unlike" : "Like"} ${cardName}`}
-          icon={
-            <Heart
-              size={18}
-              color={entry.likedByViewer ? "#d93a4a" : "#46505d"}
-              fill={entry.likedByViewer ? "#d93a4a" : "transparent"}
-              strokeWidth={2.5}
-            />
-          }
-          text={`${entry.likeCount}`}
-          selected={entry.likedByViewer}
-          onPress={() => onToggleLike(entry.id, !entry.likedByViewer)}
-        />
-        <CommunityFeedActionButton
-          label={`Comment on ${cardName}`}
-          icon={<MessageCircle size={18} color="#46505d" strokeWidth={2.5} />}
-          text={`${entry.commentCount}`}
-          onPress={() => onOpenComments(entry.id)}
-        />
-        <CommunityFeedActionButton
-          label={`Save rendered image for ${cardName}`}
-          icon={<Download size={18} color="#46505d" strokeWidth={2.5} />}
-          onPress={() => void onExportCardImage(entry.card, cardName, entry.authorName, entry.imageUrl)}
-        />
-      </View>
-    </View>
-  );
-});
-
-const CommunityFallbackCardItem = memo(function CommunityFallbackCardItem({
-  entry,
-  cardPreviewWidth,
-  onExportCardImage,
-}: {
-  entry: { id: string; setName: string; card: CardDraft };
-  cardPreviewWidth: number;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
-}) {
-  const face = getEditableCardFace(entry.card);
-  const cardName = face.name || "Untitled Card";
-
-  return (
-    <View
-      style={{
-        borderBottomWidth: 1,
-        borderBottomColor: "#eceef2",
-        paddingVertical: 14,
-        gap: 12,
-      }}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <View
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: 19,
-            backgroundColor: "#151820",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Users size={18} color="#ffffff" strokeWidth={2.5} />
-        </View>
-        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-          <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
-            {cardName}
-          </Text>
-          <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-            {entry.setName} · Local preview
-          </Text>
-        </View>
-      </View>
-
-      <View
-        style={{
-          alignItems: "center",
-          backgroundColor: "#f4f5f7",
-          paddingVertical: 12,
-        }}
-      >
-        <CardPreview
-          card={entry.card}
-          activeSection={null}
-          width={cardPreviewWidth}
-          cornerRadius={9}
-          footerOwnerName={entry.setName}
-          onSectionPress={noopCardPreviewHandler}
-          onChange={noopCardPreviewHandler}
-        />
-      </View>
-
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <CommunityFeedActionButton
-          label={`Save rendered image for ${cardName}`}
-          icon={<Download size={18} color="#46505d" strokeWidth={2.5} />}
-          onPress={() => void onExportCardImage(entry.card, cardName, entry.setName)}
-        />
-      </View>
-    </View>
-  );
-});
-
-function CommunityFeedActionButton({
-  label,
-  icon,
-  text,
-  selected = false,
-  onPress,
-}: {
-  label: string;
-  icon: ReactNode;
-  text?: string;
-  selected?: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={{
-        flex: 1,
-        minHeight: 40,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: selected ? "rgba(217,58,74,0.28)" : "#d8dbe2",
-        backgroundColor: selected ? "rgba(217,58,74,0.08)" : "#ffffff",
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-        paddingHorizontal: 8,
-      }}
-    >
-      {icon}
-      {typeof text === "string" ? (
-        <Text selectable={false} numberOfLines={1} style={{ color: selected ? "#a62231" : "#46505d", fontSize: 12, fontWeight: "900" }}>
-          {text}
-        </Text>
-      ) : null}
-    </Pressable>
-  );
-}
-
-function CommunityCardImagePlaceholder() {
-  return (
-    <View
-      pointerEvents="none"
-      style={{
-        position: "absolute",
-        inset: 0,
-        backgroundColor: "#e7e9ee",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <ActivityIndicator color="#0b7180" size="small" />
-    </View>
-  );
-}
-
-function CommunitySetsPreview({
-  sets,
-  viewerUserId,
-  selectedSetId,
-  cardsBySetId,
-  loadingSetId,
-  errorBySetId,
-  visibleCardCountsBySetId,
-  onOpenSet,
-  onToggleSetFollow,
-  onShowMoreSetCards,
-  onExportCardImage,
-}: {
-  sets: CommunitySetPayload[];
-  viewerUserId?: string;
-  selectedSetId: string | null;
-  cardsBySetId: Record<string, CommunitySetCardPayload[]>;
-  loadingSetId: string | null;
-  errorBySetId: Record<string, string>;
-  visibleCardCountsBySetId: Record<string, number>;
-  onOpenSet: (set: CommunitySetPayload) => void;
-  onToggleSetFollow: (setId: string, followed: boolean) => void;
-  onShowMoreSetCards: (setId: string) => void;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
-}) {
-  const { width: windowWidth } = useWindowDimensions();
-  const cardPreviewWidth =
-    windowWidth >= 900 ? 360 :
-    windowWidth >= 620 ? 330 :
-    Math.min(320, Math.max(270, windowWidth - 56));
-
-  if (sets.length === 0) {
-    return (
-      <CommunityEmptyState
-        icon={<BookOpen size={24} color="#68707d" strokeWidth={2.4} />}
-        title="No community sets yet"
-        detail="The directory is ready for published set metadata, cover images, card counts, authors, and sort indexes."
-      />
-    );
-  }
-
-  return (
-    <View style={{ padding: 12, gap: 10 }}>
-      {sets.map((set) => {
-        const expanded = selectedSetId === set.id;
-        const setCards = cardsBySetId[set.id] ?? [];
-        const visibleCardCount = Math.min(
-          setCards.length,
-          visibleCardCountsBySetId[set.id] ?? COMMUNITY_SET_INITIAL_RENDERED_CARD_COUNT,
-        );
-        const visibleSetCards = setCards.slice(0, visibleCardCount);
-        const loading = loadingSetId === set.id;
-        const error = errorBySetId[set.id];
-        const viewerOwnsSet = Boolean(viewerUserId && viewerUserId === set.userId);
-
-        return (
-          <View
-            key={set.id}
-            style={{
-              borderRadius: 10,
-              borderCurve: "continuous",
-              borderWidth: 1,
-              borderColor: expanded ? "#9edbe5" : "#eceef2",
-              backgroundColor: expanded ? "#f7fdfe" : "#fbfcfe",
-              overflow: "hidden",
-            }}
-          >
-            <View
-              style={{
-                minHeight: 72,
-                padding: 10,
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 10,
-              }}
-            >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`${expanded ? "Collapse" : "View"} ${set.name}`}
-                accessibilityState={{ expanded }}
-                onPress={() => onOpenSet(set)}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  minWidth: 0,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 10,
-                  opacity: pressed ? 0.72 : 1,
-                })}
-              >
-                <View
-                  style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 10,
-                    backgroundColor: "#151820",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <BookOpen size={21} color="#ffffff" strokeWidth={2.5} />
-                </View>
-                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                  <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
-                    {set.name}
-                  </Text>
-                  <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 12, fontWeight: "800" }}>
-                    {set.authorName} · Level {set.authorLevel} · {set.cardCount} {set.cardCount === 1 ? "card" : "cards"}
-                  </Text>
-                  <Text selectable={false} numberOfLines={1} style={{ color: "#8a93a3", fontSize: 11, fontWeight: "900", textTransform: "uppercase" }}>
-                    {set.code ?? "SET"} · {set.followerCount} {set.followerCount === 1 ? "viewer" : "viewers"}
-                  </Text>
-                </View>
-              </Pressable>
-              {viewerOwnsSet ? (
-                <View
-                  style={{
-                    minHeight: 34,
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: "#d8dbe2",
-                    backgroundColor: "#f4f5f7",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    paddingHorizontal: 10,
-                  }}
-                >
-                  <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "900" }}>
-                    Your set
-                  </Text>
-                </View>
-              ) : (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: set.followedByViewer }}
-                  accessibilityLabel={`${set.followedByViewer ? "Stop viewing" : "Follow"} ${set.name}`}
-                  onPress={() => onToggleSetFollow(set.id, !set.followedByViewer)}
-                  style={{
-                    minHeight: 34,
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: set.followedByViewer ? "#0b7180" : "#d8dbe2",
-                    backgroundColor: set.followedByViewer ? "rgba(11,113,128,0.1)" : "#ffffff",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexDirection: "row",
-                    gap: 6,
-                    paddingHorizontal: 10,
-                  }}
-                >
-                  <Eye size={15} color={set.followedByViewer ? "#0b7180" : "#46505d"} strokeWidth={2.5} />
-                  <Text selectable={false} numberOfLines={1} style={{ color: set.followedByViewer ? "#0b7180" : "#46505d", fontSize: 11, fontWeight: "900" }}>
-                    {set.followedByViewer ? "Viewing" : "Follow"}
-                  </Text>
-                </Pressable>
-              )}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`${expanded ? "Collapse" : "View"} ${set.name}`}
-                accessibilityState={{ expanded }}
-                onPress={() => onOpenSet(set)}
-                style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 17,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {expanded ? (
-                  <ChevronUp size={18} color="#46505d" strokeWidth={2.6} />
-                ) : (
-                  <ChevronDown size={18} color="#46505d" strokeWidth={2.6} />
-                )}
-              </Pressable>
-            </View>
-
-            {expanded ? (
-              <View style={{ borderTopWidth: 1, borderTopColor: "#e2f1f4", padding: 10, gap: 12 }}>
-                {loading ? (
-                  <View style={{ minHeight: 54, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 }}>
-                    <ActivityIndicator color="#0b7180" size="small" />
-                    <Text selectable={false} style={{ color: "#68707d", fontSize: 12, fontWeight: "900" }}>
-                      Loading set cards
-                    </Text>
-                  </View>
-                ) : error ? (
-                  <Text selectable style={{ color: "#a62231", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                    {error}
-                  </Text>
-                ) : setCards.length === 0 ? (
-                  <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-                    No public cards are available for this set.
-                  </Text>
-                ) : (
-                  <>
-                    {visibleSetCards.map((entry) => (
-                      <CommunitySetCardPreview
-                        key={entry.id}
-                        entry={entry}
-                        cardPreviewWidth={cardPreviewWidth}
-                        onExportCardImage={onExportCardImage}
-                      />
-                    ))}
-                    {visibleCardCount < setCards.length ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Load more cards from ${set.name}`}
-                        onPress={() => onShowMoreSetCards(set.id)}
-                        style={({ pressed }) => ({
-                          minHeight: 42,
-                          borderRadius: 999,
-                          borderWidth: 1,
-                          borderColor: "#d8dbe2",
-                          backgroundColor: pressed ? "#eef1f5" : "#ffffff",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          paddingHorizontal: 12,
-                          opacity: pressed ? 0.78 : 1,
-                        })}
-                      >
-                        <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 12, fontWeight: "900" }}>
-                          Load {Math.min(COMMUNITY_SET_RENDERED_CARD_BATCH_SIZE, setCards.length - visibleCardCount)} more cards
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </>
-                )}
-              </View>
-            ) : null}
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-function CommunitySetCardPreview({
-  entry,
-  cardPreviewWidth,
-  onExportCardImage,
-}: {
-  entry: CommunitySetCardPayload;
-  cardPreviewWidth: number;
-  onExportCardImage: (card: CardDraft, cardName: string, footerOwnerName?: string, imageUrl?: string) => Promise<void>;
-}) {
-  const cardName = entry.name || "Untitled Card";
-  const cardAspectRatio = getTypeFrameSpec(getPreviewTypeFrame(entry.card)).aspectRatio;
-  const cardPreviewHeight = cardPreviewWidth / cardAspectRatio;
-  const [imageLoaded, setImageLoaded] = useState(false);
-
-  useEffect(() => {
-    setImageLoaded(false);
-  }, [entry.id, entry.imageUrl, cardPreviewWidth]);
-
-  return (
-    <View style={{ gap: 8 }}>
-      <View style={{ gap: 2 }}>
-        <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
-          {cardName}
-        </Text>
-        <Text selectable={false} numberOfLines={1} style={{ color: "#68707d", fontSize: 11, fontWeight: "800" }}>
-          {entry.typeLine || "Community card"}
-        </Text>
-      </View>
-      <View
-        style={{
-          alignItems: "center",
-          backgroundColor: "transparent",
-        }}
-      >
-        <View
-          style={{
-            width: cardPreviewWidth,
-            height: cardPreviewHeight,
-            minHeight: cardPreviewHeight,
-            borderRadius: 9,
-            overflow: "hidden",
-            backgroundColor: "#e7e9ee",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
-          }}
-        >
-          {entry.imageUrl ? (
-            <>
-              {!imageLoaded ? <CommunityCardImagePlaceholder /> : null}
-              <ExpoImage
-                source={{ uri: getResizedCommunityImageUrl(entry.imageUrl, cardPreviewWidth) }}
-                contentFit="contain"
-                transition={180}
-                cachePolicy="memory-disk"
-                recyclingKey={`set-${entry.id}`}
-                onLoad={() => setImageLoaded(true)}
-                onError={() => setImageLoaded(true)}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  opacity: imageLoaded ? 1 : 0,
-                }}
-              />
-            </>
-          ) : (
-            <CardPreview
-              card={entry.card}
-              activeSection={null}
-              width={cardPreviewWidth}
-              cornerRadius={9}
-              footerOwnerName={entry.authorName}
-              onSectionPress={noopCardPreviewHandler}
-              onChange={noopCardPreviewHandler}
-            />
-          )}
-        </View>
-      </View>
-      <CommunityFeedActionButton
-        label={`Save rendered image for ${cardName}`}
-        icon={<Download size={18} color="#46505d" strokeWidth={2.5} />}
-        onPress={() => void onExportCardImage(entry.card, cardName, entry.authorName, entry.imageUrl)}
-      />
-    </View>
-  );
-}
-
-function CommunityEmptyState({
-  icon,
-  title,
-  detail,
-}: {
-  icon: ReactNode;
-  title: string;
-  detail: string;
-}) {
-  return (
-    <View style={{ padding: 22, alignItems: "center", gap: 10 }}>
-      <View
-        style={{
-          width: 48,
-          height: 48,
-          borderRadius: 24,
-          backgroundColor: "#f0f2f5",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {icon}
-      </View>
-      <View style={{ gap: 4 }}>
-        <Text selectable={false} style={{ color: "#151820", fontSize: 16, fontWeight: "900", textAlign: "center" }}>
-          {title}
-        </Text>
-        <Text selectable style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800", textAlign: "center" }}>
-          {detail}
-        </Text>
-      </View>
     </View>
   );
 }

@@ -640,6 +640,10 @@ function getImageUriLogDescriptor(uri: string) {
 }
 
 function logStorageInfo(message: string, detail?: unknown) {
+  if (!__DEV__) {
+    return;
+  }
+
   if (detail === undefined) {
     console.info(STORAGE_LOG_PREFIX, message);
     return;

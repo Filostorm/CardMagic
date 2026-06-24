@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { getAuthPasswordRecoveryRedirectUrl, supabase } from "@/lib/supabase";
 
 export type AccountProfile = {
   username?: string;
@@ -56,12 +56,59 @@ export async function updateAccountUsername(username: string): Promise<AccountPr
   };
 }
 
-export async function changeAccountPassword(password: string): Promise<void> {
+export async function changeAccountPassword(email: string, currentPassword: string, newPassword: string): Promise<void> {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
   }
 
-  const { error } = await supabase.auth.updateUser({ password });
+  const trimmedEmail = email.trim();
+
+  if (!trimmedEmail) {
+    throw new Error("Account email is unavailable.");
+  }
+
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email: trimmedEmail,
+    password: currentPassword,
+  });
+
+  if (signInError) {
+    throw new Error(signInError.message);
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function setAccountPasswordFromRecovery(newPassword: string): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function sendAccountPasswordResetEmail(email: string): Promise<void> {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const trimmedEmail = email.trim();
+
+  if (!trimmedEmail) {
+    throw new Error("Enter your account email first.");
+  }
+
+  const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+    redirectTo: getAuthPasswordRecoveryRedirectUrl(),
+  });
 
   if (error) {
     throw new Error(error.message);

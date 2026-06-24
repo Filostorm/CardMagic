@@ -14,6 +14,7 @@ import {
   MseM15ColorBlendKey,
   MseM15ColorBlendMode,
 } from "@/data/mse-frame-blends";
+import { getMseM15LegendaryCrownFamily } from "@/data/mse-frame-crowns";
 import {
   getMseM15StampedTreatmentFamilySource,
   getMseM15TreatmentFamilySource,
@@ -208,6 +209,28 @@ export const MSE_M15_RENDERER = {
       artifact: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless/artifact.png"),
       land: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless/land.png"),
       colorless: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless/colorless.png"),
+    } satisfies Record<FrameIdentity, ImageSourcePropType>,
+    godzillaAlias: {
+      white: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/white.png"),
+      blue: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/blue.png"),
+      black: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/black.png"),
+      red: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/red.png"),
+      green: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/green.png"),
+      gold: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/gold.png"),
+      artifact: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/artifact.png"),
+      land: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/land.png"),
+      colorless: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/godzilla-alias/colorless.png"),
+    } satisfies Record<FrameIdentity, ImageSourcePropType>,
+    borderlessGodzillaLegendary: {
+      white: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/white.png"),
+      blue: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/blue.png"),
+      black: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/black.png"),
+      red: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/red.png"),
+      green: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/green.png"),
+      gold: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/gold.png"),
+      artifact: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/artifact.png"),
+      land: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/land.png"),
+      colorless: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/borderless-godzilla-legendary/colorless.png"),
     } satisfies Record<FrameIdentity, ImageSourcePropType>,
     nyx: {
       white: require("../../assets/card-assets/basic-m15/mse-renderer/crowns/nyx-masked/white.png"),
@@ -755,6 +778,7 @@ export function getMseM15OverlaySources(
   frameEffects: FrameEffect[],
   frameColors: ManaColor[] = [],
   treatment: FrameTreatment = "standard",
+  options: { usesGodzillaAlias?: boolean } = {},
 ): MseM15OverlayLayer[] {
   const layers: MseM15OverlayLayer[] = [];
   const isNyx = frameEffects.includes("nyx");
@@ -773,11 +797,11 @@ export function getMseM15OverlaySources(
     }
 
     layers.push(
-      isBorderless
-        ? getLegendaryCrownLayer(MSE_M15_RENDERER.crowns.borderless, frameIdentity, frameColors)
-        : isNyx
-        ? getLegendaryCrownLayer(MSE_M15_RENDERER.crowns.nyx, frameIdentity, frameColors)
-        : getLegendaryCrownLayer(MSE_M15_RENDERER.crowns.standard, frameIdentity, frameColors),
+      getLegendaryCrownLayer(
+        MSE_M15_RENDERER.crowns[getMseM15LegendaryCrownFamily(treatment, isNyx, options)],
+        frameIdentity,
+        frameColors,
+      ),
     );
   }
 

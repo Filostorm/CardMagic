@@ -16,6 +16,19 @@ const siteUrl = process.env.EXPO_PUBLIC_SITE_URL ?? DEFAULT_SITE_URL;
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 export const authRedirectUrl = siteUrl.replace(/\/$/, "");
 
+export function getAuthPasswordRecoveryRedirectUrl(): string {
+  const baseUrl =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : authRedirectUrl;
+  const url = new URL(baseUrl);
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("account", "password-recovery");
+  return url.toString();
+}
+
 export const supabase: SupabaseClient | null = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {

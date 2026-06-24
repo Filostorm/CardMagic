@@ -20,6 +20,391 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.37.4",
+    date: "2026-06-24",
+    title: "Editor resume reliability",
+    branches: ["beta", "main"],
+    bullets: [
+      "The editor now persists the active workspace card, including dirty state and saved-card identity, so reloads return to the last worked card instead of falling through to a starter card.",
+    ],
+  },
+  {
+    version: "3.37.3",
+    date: "2026-06-24",
+    title: "Large set stability",
+    bullets: [
+      "Saved sets now defer heavy card-media hydration during web startup and resolve media only when a card is opened, exported, or synced.",
+      "The Sets tab now renders saved set rows in batches and reuses computed set summaries to reduce mobile Safari memory pressure.",
+    ],
+  },
+  {
+    version: "3.37.2",
+    date: "2026-06-24",
+    title: "Save to new set",
+    bullets: [
+      "The save-destination picker now lets you create a new set and save the active card into it in one flow.",
+    ],
+  },
+  {
+    version: "3.37.1",
+    date: "2026-06-23",
+    title: "Action menu cleanup",
+    branches: ["beta", "main"],
+    bullets: [
+      "Hid the experimental Slop card action from the card action menu before the main release.",
+    ],
+  },
+  {
+    version: "3.37.0",
+    date: "2026-06-22",
+    title: "Slop card generator",
+    bullets: [
+      "The card action menu now includes a Slop button that creates a deliberately incoherent Magic-like card and requests matching nonsensical generated art.",
+    ],
+  },
+  {
+    version: "3.36.74",
+    date: "2026-06-19",
+    title: "Godzilla alias text and stamp",
+    bullets: [
+      "Borderless legendary Godzilla alias cards now lower the alias text into the name shelf and use the neutral stamp backing for land frames to avoid the bright land rim around the rare stamp.",
+    ],
+  },
+  {
+    version: "3.36.73",
+    date: "2026-06-19",
+    title: "Borderless Godzilla crown geometry",
+    bullets: [
+      "Borderless legendary cards with the Godzilla alias-name box now use a dedicated MSE-masked crown and alias overlay instead of stacking the separate Godzilla crown and alias chrome.",
+    ],
+  },
+  {
+    version: "3.36.72",
+    date: "2026-06-19",
+    title: "Last card restore",
+    bullets: [
+      "Reloading CardMagic now restores the last active saved card from the editor session instead of opening a fresh default card.",
+    ],
+  },
+  {
+    version: "3.36.71",
+    date: "2026-06-19",
+    title: "Save destination fix",
+    bullets: [
+      "Saving a card as a new copy to a different set now writes to the chosen destination set instead of falling back to the currently selected set.",
+    ],
+  },
+  {
+    version: "3.36.70",
+    date: "2026-06-19",
+    title: "Godzilla alias crown",
+    bullets: [
+      "Legendary cards with the Godzilla alias-name box now use the MSE Godzilla crown family, including the integrated alias ribbon outline.",
+    ],
+  },
+  {
+    version: "3.36.69",
+    date: "2026-06-19",
+    title: "Borderless Godzilla frame cleanup",
+    bullets: [
+      "Removed the extra security-stamp pinline bump from borderless cards and restored the borderless legendary crown when the Godzilla alias-name box is shown.",
+    ],
+  },
+  {
+    version: "3.36.68",
+    date: "2026-06-19",
+    title: "Borderless stamp pinline",
+    bullets: [
+      "Borderless standard cards now restore the MSE pinline through the security-stamp notch, matching the land stamp backing treatment used by the source pack.",
+    ],
+  },
+  {
+    version: "3.36.67",
+    date: "2026-06-19",
+    title: "Godzilla crown correction",
+    bullets: [
+      "Borderless cards with the Godzilla alias-name treatment now use the regular M15 legendary crown instead of the borderless crown silhouette.",
+    ],
+  },
+  {
+    version: "3.36.66",
+    date: "2026-06-15",
+    title: "Collaborator visibility refresh",
+    bullets: [
+      "Shared collaboration sets are no longer removed during transient Supabase auth refreshes.",
+      "Open collaborator rosters now revalidate stale data and preserve the last known-good list when Supabase briefly returns an empty roster.",
+    ],
+  },
+  {
+    version: "3.36.65",
+    date: "2026-06-15",
+    title: "Mask target panel merge",
+    bullets: [
+      "Moved the Mask Target input and paint-selection controls into the same Mask action panel as Crop and Done.",
+    ],
+  },
+  {
+    version: "3.36.64",
+    date: "2026-06-15",
+    title: "Mask guide separation",
+    bullets: [
+      "The Mask editor now clips the Type guide/control rectangle before the Text frame while keeping the larger Type approval aperture for pinline occlusion.",
+    ],
+  },
+  {
+    version: "3.36.63",
+    date: "2026-06-15",
+    title: "Mask plate halo cleanup",
+    bullets: [
+      "Expanded the Title and Type subject-mask plate envelopes slightly so masked art fully covers the remaining pinline halo around those bars.",
+    ],
+  },
+  {
+    version: "3.36.62",
+    date: "2026-06-15",
+    title: "Type mask pinline cleanup",
+    bullets: [
+      "Extended the Type subject-mask aperture just enough to cover the remaining lower pinline pixels on borderless plates.",
+    ],
+  },
+  {
+    version: "3.36.61",
+    date: "2026-06-15",
+    title: "Mask plate envelopes",
+    bullets: [
+      "Title and Type subject-mask apertures now use the visible plate envelope, including the pinline stroke and rounded endcaps.",
+      "The Title aperture now reserves the full mana plate instead of shrinking to the current mana-symbol cluster.",
+    ],
+  },
+  {
+    version: "3.36.60",
+    date: "2026-06-15",
+    title: "Mask rectangle alignment",
+    bullets: [
+      "Tightened the subject-mask approval rectangles so the title mask follows the actual title/mana plate instead of an expanded guide boundary.",
+      "The type-line mask now uses the rendered type plate bounds directly, avoiding extra masked pixels around the set-symbol area.",
+    ],
+  },
+  {
+    version: "3.36.59",
+    date: "2026-06-15",
+    title: "Mask pinline layering",
+    bullets: [
+      "Borderless subject masks now paint a hard-alpha foreground underlay beneath the soft mask layer so pinlines sit visually under masked art.",
+      "The normal soft subject-mask edge remains visible while frame pinline pixels are occluded inside the approved masked regions.",
+    ],
+  },
+  {
+    version: "3.36.58",
+    date: "2026-06-15",
+    title: "Mask pinline restore",
+    bullets: [
+      "Reverted the opt-in pinline switch and restored the previous borderless subject-mask pinline compositing behavior.",
+      "Borderless masked art again uses the default pinline restore layer in the editor and mask-aware exports.",
+    ],
+  },
+  {
+    version: "3.36.57",
+    date: "2026-06-15",
+    title: "Mask pinline toggle",
+    bullets: [
+      "Borderless subject masks no longer restore pinlines over masked art by default.",
+      "The Mask panel now includes a Pinlines toggle for opting into pinlines above the foreground mask when desired.",
+    ],
+  },
+  {
+    version: "3.36.56",
+    date: "2026-06-15",
+    title: "Account delete sync",
+    bullets: [
+      "Signed-in accounts now sync set and card deletion tombstones through Supabase so beta and main can converge after a delete.",
+      "Account set hydration and manual sync now apply the remote deletion ledger before merging local browser cache with remote sets.",
+    ],
+  },
+  {
+    version: "3.36.55",
+    date: "2026-06-15",
+    title: "Borderless artifact pinlines",
+    bullets: [
+      "Borderless colored artifact cards now restore pinlines from the artifact color-composited frame source instead of falling back to artifact-grey treatment pinlines.",
+      "The pinline restore layer stays below the foreground subject mask so approved masked art can still cover frame details.",
+    ],
+  },
+  {
+    version: "3.36.54",
+    date: "2026-06-15",
+    title: "Foreground mask stacking",
+    bullets: [
+      "Subject-mask art now uses the earlier foreground compositing order again, so approved mask regions can visibly cross frame borders.",
+      "The frame-furniture restack introduced in the prior mask layering update was removed from the subject-mask preview path.",
+    ],
+  },
+  {
+    version: "3.36.53",
+    date: "2026-06-15",
+    title: "Border mask visibility",
+    bullets: [
+      "Subject-mask art can render over approved border and frame-rail regions again.",
+      "The frame-restack pass is now clipped to title, type, and text furniture instead of repainting the full border above the mask.",
+    ],
+  },
+  {
+    version: "3.36.52",
+    date: "2026-06-15",
+    title: "Mask compositor restore",
+    bullets: [
+      "Subject-mask art now renders above the standard art-aperture redraw again, restoring visible mask compositing.",
+      "Frame furniture is re-applied above the mask on supported treatments so title, type, text, and frame boxes still visually occlude the masked art.",
+    ],
+  },
+  {
+    version: "3.36.51",
+    date: "2026-06-15",
+    title: "Mask drag and zoom cap",
+    bullets: [
+      "Mask editing now lets you drag and pinch the artwork while the paint-selection brush is off.",
+      "The desktop mask zoom slider now caps at 200% and clamps existing higher zooms when entering desktop Mask mode.",
+    ],
+  },
+  {
+    version: "3.36.50",
+    date: "2026-06-15",
+    title: "Mask art under frame furniture",
+    bullets: [
+      "Approved mask art now composites beneath the visible title, type, text, and frame furniture instead of painting over those framed boxes.",
+      "Desktop mask editing replaces the Expanded/Opening fit toggle with a side zoom slider that uses the standard art-opening fit.",
+    ],
+  },
+  {
+    version: "3.36.49",
+    date: "2026-06-15",
+    title: "Treatment-specific mask geometry",
+    bullets: [
+      "Mask Text apertures and active textbox outlines now use treatment-specific textbox frame bounds across standard, full-art, extended-art, borderless, showcase, textless, retro, and etched frames.",
+      "Rules text layout stays on its inset content rectangle while masking uses the visible textbox furniture rectangle.",
+    ],
+  },
+  {
+    version: "3.36.48",
+    date: "2026-06-15",
+    title: "Borderless textbox alignment",
+    bullets: [
+      "Borderless textbox geometry now follows the MSE altered-frame text field bounds.",
+      "The active rules outline and Mask editor Text aperture now use the exact textbox rectangle instead of the expanded hit target.",
+    ],
+  },
+  {
+    version: "3.36.47",
+    date: "2026-06-15",
+    title: "Accurate mask apertures",
+    bullets: [
+      "Mask section toggles now use non-overlapping approval apertures, so disabling Title, Type, or Frame blocks subject art from those regions.",
+      "The Mask editor now draws tighter guide outlines that match the actual compositing regions.",
+    ],
+  },
+  {
+    version: "3.36.46",
+    date: "2026-06-13",
+    title: "Mask section controls",
+    bullets: [
+      "The Mask editor now outlines Title, Type, Text, and Frame mask zones with tappable active/inactive controls.",
+      "Subject-mask compositing now uses the active mask zones, with an Opening fit mode for standard art-aperture placement.",
+    ],
+  },
+  {
+    version: "3.36.45",
+    date: "2026-06-13",
+    title: "Password reset landing",
+    bullets: [
+      "Password reset emails now open a recovery-specific Account panel with new-password and confirmation fields.",
+      "Recovery password updates no longer require the old password.",
+    ],
+  },
+  {
+    version: "3.36.44",
+    date: "2026-06-13",
+    title: "Printing controls cleanup",
+    bullets: [
+      "Printing back and set-symbol actions now use compact inline buttons.",
+      "Rarity swatches now include names beneath each symbol, and the redundant set-symbol summary was removed.",
+    ],
+  },
+  {
+    version: "3.36.43",
+    date: "2026-06-13",
+    title: "Rarity symbol selector",
+    bullets: [
+      "The Printing rarity control now uses colored set-symbol swatches instead of text buttons.",
+    ],
+  },
+  {
+    version: "3.36.42",
+    date: "2026-06-13",
+    title: "Profile privacy controls",
+    bullets: [
+      "AI generation actions, credit balance, and XP surfaces now stay hidden until Creator tools is enabled in Account.",
+      "The Account panel now uses a compact username save button and an expandable password-change flow with current-password or reset-email options.",
+      "Account storage and empty notification reminder copy have been removed from the profile panel.",
+    ],
+  },
+  {
+    version: "3.36.41",
+    date: "2026-06-12",
+    title: "Mask crop control cleanup",
+    branches: ["beta", "main"],
+    bullets: [
+      "The image adjustment Mask tab now labels the masking action as Crop.",
+      "Mask diagnostic trace output is no longer shown in the art menus.",
+    ],
+  },
+  {
+    version: "3.36.40",
+    date: "2026-06-12",
+    title: "Mask crop button copy",
+    bullets: [
+      "The subject masking action now says Crop instead of Generate subject mask.",
+    ],
+  },
+  {
+    version: "3.36.39",
+    date: "2026-06-12",
+    title: "Placeholder persistence fix",
+    branches: ["beta", "main"],
+    bullets: [
+      "Empty bootstrap Main Sets are no longer written to browser or account storage.",
+      "Generated starter and reset cards stay out of active-draft storage until they are actually edited.",
+    ],
+  },
+  {
+    version: "3.36.38",
+    date: "2026-06-12",
+    title: "Login set restore fix",
+    branches: ["beta", "main"],
+    bullets: [
+      "Fresh browser sign-ins no longer upload the bootstrap Main Set as a new account set.",
+      "Fresh browser sign-ins now open the newest saved account card when no local editor session exists.",
+    ],
+  },
+  {
+    version: "3.36.37",
+    date: "2026-06-09",
+    title: "Viewer invite links",
+    branches: ["beta", "main"],
+    bullets: [
+      "Set owners can now create separate viewer invite links from the collaborator panel.",
+      "Viewer links follow the set through the existing community viewer system instead of granting collaboration edit access.",
+    ],
+  },
+  {
+    version: "3.36.36",
+    date: "2026-06-09",
+    title: "Guest AI credits",
+    branches: ["beta", "main"],
+    bullets: [
+      "Signed-out users can spend starter credits through an internal guest credit session.",
+    ],
+  },
+  {
     version: "3.36.35",
     date: "2026-06-06",
     title: "Shared card removal",

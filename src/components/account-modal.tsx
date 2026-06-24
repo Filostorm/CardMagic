@@ -1,5 +1,5 @@
-import { Bell, BookOpen, Check, RefreshCw, User, UserPlus, X } from "lucide-react-native";
-import { useEffect, useMemo, useState } from "react";
+import { Bell, BookOpen, Check, ChevronDown, KeyRound, RefreshCw, Save, Sparkles, User, UserPlus, X } from "lucide-react-native";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
@@ -8,6 +8,8 @@ import {
   changeAccountPassword,
   deleteAccount,
   fetchAccountProfile,
+  sendAccountPasswordResetEmail,
+  setAccountPasswordFromRecovery,
   updateAccountUsername,
 } from "@/lib/account-profile";
 import type { CommunityNotificationPayload } from "@/lib/account-sets";
@@ -16,33 +18,45 @@ import { authRedirectUrl, isSupabaseConfigured, supabase } from "@/lib/supabase"
 type AccountModalProps = {
   visible: boolean;
   user: SupabaseUser | null;
+  passwordRecoveryMode?: boolean;
   onClose: () => void;
   onAuthSuccess: () => void;
+  onPasswordRecoveryComplete?: () => void;
   onProfileChange?: (profile: AccountProfile) => void;
   notifications?: CommunityNotificationPayload[];
   notificationsLoading?: boolean;
   notificationsError?: string | null;
   onRefreshNotifications?: () => void;
   onMarkNotificationsRead?: (notificationIds: string[]) => void;
+  showCreatorTools: boolean;
+  onChangeShowCreatorTools: (visible: boolean) => void;
 };
 
 export function AccountModal({
   visible,
   user,
+  passwordRecoveryMode = false,
   onClose,
   onAuthSuccess,
+  onPasswordRecoveryComplete,
   onProfileChange,
   notifications = [],
   notificationsLoading = false,
   notificationsError = null,
   onRefreshNotifications,
   onMarkNotificationsRead,
+  showCreatorTools,
+  onChangeShowCreatorTools,
 }: AccountModalProps) {
   const { width, height } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [recoveryPasswordConfirm, setRecoveryPasswordConfirm] = useState("");
+  const [passwordPanelOpen, setPasswordPanelOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const accountLabel = useMemo(() => user?.email ?? "Not signed in", [user?.email]);
@@ -57,7 +71,11 @@ export function AccountModal({
 
     if (!visible || !user) {
       setUsername("");
+      setCurrentPassword("");
       setNewPassword("");
+      setRecoveryPassword("");
+      setRecoveryPasswordConfirm("");
+      setPasswordPanelOpen(false);
       return () => {
         active = false;
       };
@@ -80,6 +98,15 @@ export function AccountModal({
     };
   }, [user, visible]);
 
+  useEffect(() => {
+    if (visible && passwordRecoveryMode) {
+      setPasswordPanelOpen(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setMessage("Enter a new password for your account.");
+    }
+  }, [passwordRecoveryMode, visible]);
+
   if (!visible) {
     return null;
   }
@@ -95,16 +122,36 @@ export function AccountModal({
       }
 
       const trimmedEmail = email.trim();
-      const { error } =
-        action === "sign-in"
-          ? await supabase.auth.signInWithPassword({ email: trimmedEmail, password })
-          : await supabase.auth.signUp({
-              email: trimmedEmail,
-              password,
-              options: {
-                emailRedirectTo: authRedirectUrl,
-              },
-            });
+      let error: Error | null = null;
+
+      if (action === "sign-in") {
+        const result = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
+        error = result.error;
+      } else {
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+        if (sessionError) {
+          setMessage(sessionError.message);
+          return;
+        }
+
+        if (sessionData.session?.user && "is_anonymous" in sessionData.session.user && sessionData.session.user.is_anonymous) {
+          const result = await supabase.auth.updateUser(
+            { email: trimmedEmail, password },
+            { emailRedirectTo: authRedirectUrl },
+          );
+          error = result.error;
+        } else {
+          const result = await supabase.auth.signUp({
+            email: trimmedEmail,
+            password,
+            options: {
+              emailRedirectTo: authRedirectUrl,
+            },
+          });
+          error = result.error;
+        }
+      }
 
       if (error) {
         setMessage(error.message);
@@ -162,11 +209,54 @@ export function AccountModal({
     setMessage(null);
 
     try {
-      await changeAccountPassword(newPassword);
+      await changeAccountPassword(user?.email ?? "", currentPassword, newPassword);
+      setCurrentPassword("");
       setNewPassword("");
+      setPasswordPanelOpen(false);
       setMessage("Password updated.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update password.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveRecoveryPassword = async () => {
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      if (recoveryPassword.length < 6) {
+        setMessage("Password must be at least 6 characters.");
+        return;
+      }
+
+      if (recoveryPassword !== recoveryPasswordConfirm) {
+        setMessage("Passwords do not match.");
+        return;
+      }
+
+      await setAccountPasswordFromRecovery(recoveryPassword);
+      setRecoveryPassword("");
+      setRecoveryPasswordConfirm("");
+      setMessage("Password updated.");
+      onPasswordRecoveryComplete?.();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update password.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendPasswordResetEmail = async () => {
+    setBusy(true);
+    setMessage(null);
+
+    try {
+      await sendAccountPasswordResetEmail(user?.email ?? email);
+      setMessage("Password reset email sent.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to send password reset email.");
     } finally {
       setBusy(false);
     }
@@ -277,60 +367,190 @@ export function AccountModal({
 
             {user ? (
               <>
-                <AccountNotice text="Purchases, credit balances, saved sets, and community profile data are stored in Supabase." />
-                <AccountNotificationsSection
-                  notifications={notifications}
-                  loading={notificationsLoading}
-                  error={notificationsError}
-                  unreadNotificationIds={unreadNotificationIds}
-                  onRefresh={onRefreshNotifications}
-                  onMarkRead={onMarkNotificationsRead}
-                />
-                <View style={{ gap: 8 }}>
-                  <TextInput
-                    accessibilityLabel="Username"
-                    value={username}
-                    onChangeText={(value) =>
-                      setUsername(
-                        value
-                          .normalize("NFKD")
-                          .replace(/[\u0300-\u036f]/g, "")
-                          .replace(/[^A-Za-z0-9_]/g, "")
-                          .slice(0, 24),
-                      )
-                    }
-                    autoComplete="username"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    importantForAutofill="no"
-                    placeholder="Username"
-                    placeholderTextColor="#9aa1ad"
-                    textContentType="nickname"
-                    style={inputStyle}
-                  />
-                  <PrimaryButton label="Save username" disabled={busy || username.trim().length < 3} onPress={() => void saveUsername()} />
-                </View>
-                <View style={{ gap: 8 }}>
-                  <TextInput
-                    accessibilityLabel="New password"
-                    value={newPassword}
-                    onChangeText={setNewPassword}
-                    autoComplete="new-password"
-                    secureTextEntry
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    importantForAutofill="yes"
-                    placeholder="New password"
-                    placeholderTextColor="#9aa1ad"
-                    textContentType="newPassword"
-                    style={inputStyle}
-                  />
-                  <PrimaryButton label="Change password" disabled={busy || newPassword.length < 6} onPress={() => void savePassword()} />
-                </View>
-                <View style={{ flexDirection: width < 380 ? "column" : "row", gap: 9 }}>
-                  <SecondaryButton label="Sign out" disabled={busy} onPress={signOut} />
-                  <DangerButton label="Delete account" disabled={busy} onPress={confirmDeleteAccount} />
-                </View>
+                {passwordRecoveryMode ? (
+                  <View
+                    style={{
+                      borderRadius: 12,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: "#b8d7df",
+                      backgroundColor: "#ffffff",
+                      padding: 10,
+                      gap: 8,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <KeyRound size={18} color="#0b7180" strokeWidth={2.6} />
+                      <Text selectable={false} style={{ color: "#151820", fontSize: 14, fontWeight: "900" }}>
+                        Reset password
+                      </Text>
+                    </View>
+                    <TextInput
+                      accessibilityLabel="New password"
+                      value={recoveryPassword}
+                      onChangeText={setRecoveryPassword}
+                      autoComplete="new-password"
+                      secureTextEntry
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      importantForAutofill="yes"
+                      placeholder="New password"
+                      placeholderTextColor="#9aa1ad"
+                      textContentType="newPassword"
+                      style={inputStyle}
+                    />
+                    <TextInput
+                      accessibilityLabel="Confirm new password"
+                      value={recoveryPasswordConfirm}
+                      onChangeText={setRecoveryPasswordConfirm}
+                      autoComplete="new-password"
+                      secureTextEntry
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      importantForAutofill="yes"
+                      placeholder="Confirm new password"
+                      placeholderTextColor="#9aa1ad"
+                      textContentType="newPassword"
+                      style={inputStyle}
+                    />
+                    <PrimaryButton
+                      label="Update password"
+                      disabled={busy || recoveryPassword.length < 6 || recoveryPasswordConfirm.length < 6}
+                      onPress={() => void saveRecoveryPassword()}
+                    />
+                  </View>
+                ) : (
+                  <>
+                    <AccountNotificationsSection
+                      notifications={notifications}
+                      loading={notificationsLoading}
+                      error={notificationsError}
+                      unreadNotificationIds={unreadNotificationIds}
+                      onRefresh={onRefreshNotifications}
+                      onMarkRead={onMarkNotificationsRead}
+                    />
+                    <ToggleRow
+                      title="Creator tools"
+                      detail="AI generation, credit balance, and XP surfaces"
+                      value={showCreatorTools}
+                      onChange={onChangeShowCreatorTools}
+                    />
+                    <View style={{ gap: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <TextInput
+                          accessibilityLabel="Username"
+                          value={username}
+                          onChangeText={(value) =>
+                            setUsername(
+                              value
+                                .normalize("NFKD")
+                                .replace(/[\u0300-\u036f]/g, "")
+                                .replace(/[^A-Za-z0-9_]/g, "")
+                                .slice(0, 24),
+                            )
+                          }
+                          autoComplete="username"
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          importantForAutofill="no"
+                          placeholder="Username"
+                          placeholderTextColor="#9aa1ad"
+                          textContentType="nickname"
+                          style={{ ...inputStyle, flex: 1 }}
+                        />
+                        <IconButton
+                          accessibilityLabel="Save username"
+                          disabled={busy || username.trim().length < 3}
+                          onPress={() => void saveUsername()}
+                          icon={<Save size={18} color={busy || username.trim().length < 3 ? "#9aa1ad" : "#ffffff"} strokeWidth={2.7} />}
+                        />
+                      </View>
+                    </View>
+                    <View
+                      style={{
+                        borderRadius: 12,
+                        borderCurve: "continuous",
+                        borderWidth: 1,
+                        borderColor: "#d8dbe2",
+                        backgroundColor: "#ffffff",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={passwordPanelOpen ? "Collapse password change" : "Change password"}
+                        accessibilityState={{ expanded: passwordPanelOpen }}
+                        onPress={() => setPasswordPanelOpen((current) => !current)}
+                        style={{
+                          minHeight: 48,
+                          paddingHorizontal: 12,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 9,
+                        }}
+                      >
+                        <KeyRound size={18} color="#151820" strokeWidth={2.6} />
+                        <Text selectable={false} style={{ flex: 1, color: "#151820", fontSize: 13, fontWeight: "900" }}>
+                          Change password
+                        </Text>
+                        <ChevronDown
+                          size={18}
+                          color="#68707d"
+                          strokeWidth={2.6}
+                          style={{ transform: [{ rotate: passwordPanelOpen ? "180deg" : "0deg" }] }}
+                        />
+                      </Pressable>
+                      {passwordPanelOpen ? (
+                        <View style={{ borderTopWidth: 1, borderTopColor: "#eceef2", padding: 10, gap: 8 }}>
+                          <TextInput
+                            accessibilityLabel="Current password"
+                            value={currentPassword}
+                            onChangeText={setCurrentPassword}
+                            autoComplete="current-password"
+                            secureTextEntry
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            importantForAutofill="yes"
+                            placeholder="Current password"
+                            placeholderTextColor="#9aa1ad"
+                            textContentType="password"
+                            style={inputStyle}
+                          />
+                          <TextInput
+                            accessibilityLabel="New password"
+                            value={newPassword}
+                            onChangeText={setNewPassword}
+                            autoComplete="new-password"
+                            secureTextEntry
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            importantForAutofill="yes"
+                            placeholder="New password"
+                            placeholderTextColor="#9aa1ad"
+                            textContentType="newPassword"
+                            style={inputStyle}
+                          />
+                          <View style={{ flexDirection: width < 380 ? "column" : "row", gap: 8 }}>
+                            <PrimaryButton
+                              label="Update"
+                              disabled={busy || currentPassword.length === 0 || newPassword.length < 6}
+                              onPress={() => void savePassword()}
+                            />
+                            <SecondaryButton
+                              label="Email reset"
+                              disabled={busy}
+                              onPress={() => void sendPasswordResetEmail()}
+                            />
+                          </View>
+                        </View>
+                      ) : null}
+                    </View>
+                    <View style={{ flexDirection: width < 380 ? "column" : "row", gap: 9 }}>
+                      <SecondaryButton label="Sign out" disabled={busy} onPress={signOut} />
+                      <DangerButton label="Delete account" disabled={busy} onPress={confirmDeleteAccount} />
+                    </View>
+                  </>
+                )}
               </>
             ) : (
               <>
@@ -377,6 +597,11 @@ export function AccountModal({
                     onPress={() => void runAuthAction("sign-up")}
                   />
                 </View>
+                <SecondaryButton
+                  label="Email password reset"
+                  disabled={busy || !isSupabaseConfigured}
+                  onPress={() => void sendPasswordResetEmail()}
+                />
               </>
             )}
 
@@ -482,15 +707,11 @@ function AccountNotificationsSection({
             {error}
           </Text>
         ) : null}
-        {notifications.length === 0 && !loading ? (
-          <Text selectable={false} style={{ color: "#68707d", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>
-            Follow community sets to get card-addition notifications. Set owners will also see viewer follows and collaborator invite acceptances here.
-          </Text>
-        ) : (
+        {notifications.length > 0 ? (
           notifications.map((notification) => (
             <AccountNotificationRow key={notification.id} notification={notification} />
           ))
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -588,6 +809,113 @@ function AccountNotice({ text }: { text: string }) {
     <View style={{ borderRadius: 12, borderCurve: "continuous", backgroundColor: "#eef8fb", padding: 12 }}>
       <Text style={{ color: "#33515b", fontSize: 12, lineHeight: 17, fontWeight: "800" }}>{text}</Text>
     </View>
+  );
+}
+
+function ToggleRow({
+  title,
+  detail,
+  value,
+  onChange,
+}: {
+  title: string;
+  detail: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={title}
+      accessibilityHint={detail}
+      accessibilityState={{ checked: value }}
+      onPress={() => onChange(!value)}
+      style={{
+        minHeight: 58,
+        borderRadius: 12,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: value ? "#b8d7df" : "#d8dbe2",
+        backgroundColor: value ? "#eef8fb" : "#ffffff",
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+      }}
+    >
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 17,
+          backgroundColor: value ? "#0b7180" : "#eef1f5",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Sparkles size={16} color={value ? "#ffffff" : "#68707d"} strokeWidth={2.7} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text selectable={false} numberOfLines={1} style={{ color: "#151820", fontSize: 13, fontWeight: "900" }}>
+          {title}
+        </Text>
+        <Text selectable={false} numberOfLines={2} style={{ color: "#68707d", fontSize: 11, lineHeight: 15, fontWeight: "800" }}>
+          {detail}
+        </Text>
+      </View>
+      <View
+        style={{
+          width: 44,
+          height: 26,
+          borderRadius: 13,
+          backgroundColor: value ? "#0b7180" : "#d8dbe2",
+          padding: 3,
+          alignItems: value ? "flex-end" : "flex-start",
+        }}
+      >
+        <View
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 10,
+            backgroundColor: "#ffffff",
+          }}
+        />
+      </View>
+    </Pressable>
+  );
+}
+
+function IconButton({
+  accessibilityLabel,
+  disabled,
+  onPress,
+  icon,
+}: {
+  accessibilityLabel: string;
+  disabled?: boolean;
+  onPress: () => void;
+  icon: ReactNode;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      disabled={disabled}
+      onPress={onPress}
+      style={{
+        width: 46,
+        height: 46,
+        borderRadius: 23,
+        borderCurve: "continuous",
+        backgroundColor: disabled ? "#eef0f4" : "#111820",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {icon}
+    </Pressable>
   );
 }
 

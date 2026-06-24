@@ -103,7 +103,7 @@ export function CardBackPicker({
       </ScrollView>
 
       {onGenerateCardBack || onPickCustomCardBack ? (
-        <View style={{ flexDirection: "row", gap: 8 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {onGenerateCardBack ? (
             <CardBackActionButton
               label="Generate back"
@@ -297,16 +297,15 @@ function CardBackActionButton({
       accessibilityLabel={accessibilityLabel}
       onPress={onPress}
       style={{
-        flex: 1,
-        minHeight: 42,
+        minHeight: 36,
         borderRadius: 8,
         borderCurve: "continuous",
         backgroundColor,
         alignItems: "center",
         justifyContent: "center",
         flexDirection: "row",
-        gap: 8,
-        paddingHorizontal: 12,
+        gap: 7,
+        paddingHorizontal: 11,
       }}
     >
       {children}
@@ -315,7 +314,7 @@ function CardBackActionButton({
         numberOfLines={1}
         style={{
           color: "#ffffff",
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: "900",
         }}
       >

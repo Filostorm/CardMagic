@@ -3,7 +3,7 @@ import { Platform } from "react-native";
 
 export function useMobileWebInputZoomGuard() {
   useEffect(() => {
-    if (Platform.OS !== "web" || typeof document === "undefined") {
+    if (Platform.OS !== "web" || typeof document === "undefined" || typeof window === "undefined") {
       return;
     }
 
@@ -17,12 +17,36 @@ export function useMobileWebInputZoomGuard() {
       document.head.appendChild(viewportMeta);
     }
 
+    const getViewportContent = () => {
+      const viewportWidth = Math.round(window.visualViewport?.width ?? window.innerWidth ?? 0);
+      const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+      const isCompactMobileViewport =
+        viewportWidth > 0 &&
+        viewportWidth <= 700 &&
+        /\b(iPhone|iPod|Android|Mobile)\b/i.test(userAgent);
+
+      return isCompactMobileViewport
+        ? "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+        : "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5, user-scalable=yes";
+    };
+
+    const updateViewportContent = () => {
+      viewportMeta.setAttribute("content", getViewportContent());
+    };
+
     viewportMeta.setAttribute(
       "content",
-      "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no",
+      getViewportContent(),
     );
+    window.visualViewport?.addEventListener("resize", updateViewportContent);
+    window.addEventListener("resize", updateViewportContent);
+    window.addEventListener("orientationchange", updateViewportContent);
 
     return () => {
+      window.visualViewport?.removeEventListener("resize", updateViewportContent);
+      window.removeEventListener("resize", updateViewportContent);
+      window.removeEventListener("orientationchange", updateViewportContent);
+
       if (createdViewportMeta) {
         viewportMeta.remove();
         return;

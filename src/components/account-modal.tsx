@@ -1,6 +1,7 @@
 import { Bell, BookOpen, Check, ChevronDown, KeyRound, RefreshCw, Save, Sparkles, User, UserPlus, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
+import type { TextInputProps } from "react-native";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
 import {
@@ -32,6 +33,33 @@ type AccountModalProps = {
   onChangeShowCreatorTools: (visible: boolean) => void;
 };
 
+type AuthMode = "sign-in" | "sign-up";
+
+type BrowserCredentialInputProps = Partial<TextInputProps> & {
+  id?: string;
+  name?: string;
+};
+
+function getBrowserCredentialInputProps({
+  id,
+  name,
+  autoComplete,
+}: {
+  id: string;
+  name: string;
+  autoComplete: NonNullable<TextInputProps["autoComplete"]>;
+}): BrowserCredentialInputProps {
+  if (Platform.OS !== "web") {
+    return {};
+  }
+
+  return {
+    id,
+    name,
+    autoComplete,
+  };
+}
+
 export function AccountModal({
   visible,
   user,
@@ -51,6 +79,7 @@ export function AccountModal({
   const { width, height } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
   const [username, setUsername] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -65,6 +94,10 @@ export function AccountModal({
     [notifications],
   );
   const panelMaxHeight = Math.max(360, Math.min(720, height - 28));
+  const isSignUpMode = authMode === "sign-up";
+  const authEmailAutocomplete = isSignUpMode ? "email" : "username";
+  const authPasswordAutocomplete = isSignUpMode ? "new-password" : "current-password";
+  const authPasswordTextContentType = isSignUpMode ? "newPassword" : "password";
 
   useEffect(() => {
     let active = true;
@@ -76,6 +109,9 @@ export function AccountModal({
       setRecoveryPassword("");
       setRecoveryPasswordConfirm("");
       setPasswordPanelOpen(false);
+      if (!visible) {
+        setAuthMode("sign-in");
+      }
       return () => {
         active = false;
       };
@@ -559,7 +595,7 @@ export function AccountModal({
                   accessibilityLabel="Email"
                   value={email}
                   onChangeText={setEmail}
-                  autoComplete="username"
+                  autoComplete={authEmailAutocomplete}
                   autoCapitalize="none"
                   autoCorrect={false}
                   importantForAutofill="yes"
@@ -567,41 +603,56 @@ export function AccountModal({
                   keyboardType="email-address"
                   placeholder="email@example.com"
                   placeholderTextColor="#9aa1ad"
-                  textContentType="username"
+                  textContentType={isSignUpMode ? "emailAddress" : "username"}
                   style={inputStyle}
+                  {...getBrowserCredentialInputProps({
+                    id: "cardmagic-login-username",
+                    name: isSignUpMode ? "email" : "username",
+                    autoComplete: authEmailAutocomplete,
+                  })}
                 />
                 <TextInput
                   nativeID="cardmagic-login-password"
                   accessibilityLabel="Password"
                   value={password}
                   onChangeText={setPassword}
-                  autoComplete="current-password"
+                  autoComplete={authPasswordAutocomplete}
                   secureTextEntry
                   autoCapitalize="none"
                   autoCorrect={false}
                   importantForAutofill="yes"
-                  placeholder="Password"
+                  placeholder={isSignUpMode ? "Create password" : "Password"}
                   placeholderTextColor="#9aa1ad"
-                  textContentType="password"
+                  textContentType={authPasswordTextContentType}
                   style={inputStyle}
+                  {...getBrowserCredentialInputProps({
+                    id: "cardmagic-login-password",
+                    name: "password",
+                    autoComplete: authPasswordAutocomplete,
+                  })}
                 />
                 <View style={{ flexDirection: width < 380 ? "column" : "row", gap: 9 }}>
                   <PrimaryButton
-                    label="Sign in"
+                    label={isSignUpMode ? "Create account" : "Sign in"}
                     disabled={busy || !isSupabaseConfigured}
-                    onPress={() => void runAuthAction("sign-in")}
+                    onPress={() => void runAuthAction(authMode)}
                   />
                   <SecondaryButton
-                    label="Create account"
+                    label={isSignUpMode ? "Back to sign in" : "Create account"}
                     disabled={busy || !isSupabaseConfigured}
-                    onPress={() => void runAuthAction("sign-up")}
+                    onPress={() => {
+                      setMessage(null);
+                      setAuthMode(isSignUpMode ? "sign-in" : "sign-up");
+                    }}
                   />
                 </View>
-                <SecondaryButton
-                  label="Email password reset"
-                  disabled={busy || !isSupabaseConfigured}
-                  onPress={() => void sendPasswordResetEmail()}
-                />
+                {!isSignUpMode ? (
+                  <SecondaryButton
+                    label="Email password reset"
+                    disabled={busy || !isSupabaseConfigured}
+                    onPress={() => void sendPasswordResetEmail()}
+                  />
+                ) : null}
               </>
             )}
 

@@ -184,6 +184,7 @@ type CardPreviewProps = {
   // capture them faithfully. Web-only; the editor uses its live mask paths.
   exportFlattenMasks?: boolean;
   artGenerating?: boolean;
+  onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   initialArtImageAspectRatio?: number | null;
   onSectionPress: SectionPressHandler;
@@ -745,6 +746,8 @@ const SAGA_CHAPTER_PREFIX_PATTERN =
 const SAGA_CHAPTER_TOKEN_PATTERN = /\b(?:VI|IV|III|II|V|I)\b/g;
 const POWER_TOUGHNESS_TEXT_OFFSET_Y = -4;
 const DFC_COLOR_INDICATOR_RECT: CoordinateRect = { x: 31, y: 301, width: 17, height: 17 };
+const TYPE_LINE_COLOR_INDICATOR_SIZE = 14.5;
+const TYPE_LINE_COLOR_INDICATOR_TEXT_GAP = 4;
 const cardPreviewShadowStyle = {
   boxShadow: "0 16px 32px rgba(0, 0, 0, 0.26)",
 };
@@ -1324,6 +1327,57 @@ function getFrameIdentityForManaColor(color: ManaColor): FrameIdentity {
   }
 }
 
+function getTypeLineColorIndicatorSource({
+  faceCard,
+  typeFrame,
+  frameIdentity,
+  manualFrameColors,
+  manaColors,
+  colorBlend,
+  showDfcColorIndicator,
+}: {
+  faceCard: CardDraft;
+  typeFrame: TypeFrame;
+  frameIdentity: FrameIdentity;
+  manualFrameColors: ManaColor[];
+  manaColors: ManaColor[];
+  colorBlend: MseM15ColorBlend | null;
+  showDfcColorIndicator: boolean;
+}): ImageSourcePropType | null {
+  if (typeFrame === "token" || showDfcColorIndicator || manaColors.length > 0) {
+    return null;
+  }
+
+  if (manualFrameColors.length > 0) {
+    return getMseM15ColorIndicatorSource(frameIdentity, colorBlend);
+  }
+
+  const selectedFrameIdentity = getColoredFrameIdentityForSelection(faceCard.frameSelection);
+
+  return selectedFrameIdentity ? getMseM15ColorIndicatorSource(selectedFrameIdentity) : null;
+}
+
+function getColoredFrameIdentityForSelection(frameSelection: CardDraft["frameSelection"]): FrameIdentity | null {
+  switch (frameSelection) {
+    case "white":
+    case "blue":
+    case "black":
+    case "red":
+    case "green":
+      return frameSelection;
+    default:
+      return null;
+  }
+}
+
+function getTypeLineColorIndicatorReserve(hasColorIndicator: boolean): number {
+  if (!hasColorIndicator) {
+    return 0;
+  }
+
+  return TYPE_LINE_COLOR_INDICATOR_SIZE + TYPE_LINE_COLOR_INDICATOR_TEXT_GAP;
+}
+
 function getCardMagicFooterCopyrightLine(card: CardDraft, footerOwnerName?: string) {
   const ownerName = footerOwnerName?.trim();
 
@@ -1740,6 +1794,7 @@ function CardPreviewComponent({
   exportSetSymbolMode = false,
   exportFlattenMasks = false,
   artGenerating = false,
+  onArtImageSettled,
   footerOwnerName,
   initialArtImageAspectRatio,
   onSectionPress,
@@ -1760,6 +1815,7 @@ function CardPreviewComponent({
     typeFrameSpec,
     showManaCost,
     manaSymbols,
+    manaColors,
     frameColors,
     manualFrameColors,
     resolvedMseColorBlend,
@@ -2301,11 +2357,22 @@ function CardPreviewComponent({
     futurePinlineColors && futureUsesHybridBlend ? futurePinlineColors : null;
   const futureTextureBlendColors = futureHybridBlendColors;
   const typeLineRightInset = getTypeLineSetSymbolInset(typeLineRect, setSymbolRect);
+  const typeLineColorIndicatorSource = getTypeLineColorIndicatorSource({
+    faceCard,
+    typeFrame,
+    frameIdentity,
+    manualFrameColors,
+    manaColors,
+    colorBlend: mseAccentColorBlend,
+    showDfcColorIndicator,
+  });
+  const typeLineColorIndicatorReserve = getTypeLineColorIndicatorReserve(Boolean(typeLineColorIndicatorSource));
   const typeLineBaseFontSize = isRetroTreatment ? 17 : typeFrame === "saga" ? 14.2 : 14;
   const typeLineFontSize = getTypeLineFontSize(
     faceCard.typeLine,
     typeLineRect.width -
       typeLineRightInset -
+      typeLineColorIndicatorReserve -
       getTypeLineEditorReserve(activeSection === "typeLine", scale),
     frameTreatment === "etchedFoil" ? 13 : typeLineBaseFontSize,
   );
@@ -2441,6 +2508,7 @@ function CardPreviewComponent({
         artPanHandlers={artPanResponder.panHandlers}
         artTransform={artTransform}
         artGenerating={showArtGenerating}
+        onArtImageSettled={onArtImageSettled}
         footerOwnerName={footerOwnerName}
         zone={zone}
       />
@@ -2470,6 +2538,7 @@ function CardPreviewComponent({
         artPanHandlers={artPanResponder.panHandlers}
         artTransform={artTransform}
         artGenerating={showArtGenerating}
+        onArtImageSettled={onArtImageSettled}
         footerOwnerName={footerOwnerName}
         zone={zone}
       />
@@ -2485,6 +2554,7 @@ function CardPreviewComponent({
         scale={width / SPLIT_CARD_COORDINATES.width}
         exportMode={exportMode}
         artGenerating={showArtGenerating}
+        onArtImageSettled={onArtImageSettled}
         footerOwnerName={footerOwnerName}
         onSectionPress={onSectionPress}
         zone={zone}
@@ -2538,7 +2608,7 @@ function CardPreviewComponent({
             ...zone("art", 18),
           }}
         >
-          {showArtGenerating ? (
+          {!faceCard.artUri && showArtGenerating ? (
             <GeneratingArtAnimation scale={battleScale} colors={frameColors} />
           ) : faceCard.artUri ? (
             <TransformableArtImage
@@ -2547,6 +2617,10 @@ function CardPreviewComponent({
               renderScale={battleScale}
               artTransform={artTransform}
               imageAspectRatio={imageAspectRatio}
+              showGeneratingTrail={showArtGenerating}
+              generatingTrailColors={frameColors}
+              onLoad={onArtImageSettled}
+              onError={onArtImageSettled}
             />
           ) : (
             <LinearGradient
@@ -2675,7 +2749,7 @@ function CardPreviewComponent({
             backgroundColor: "#242823",
           }}
         >
-          {showArtGenerating ? (
+          {!faceCard.artUri && showArtGenerating ? (
             <GeneratingArtAnimation scale={scale} colors={frameColors} />
           ) : faceCard.artUri ? (
             <TransformableArtImage
@@ -2684,6 +2758,10 @@ function CardPreviewComponent({
               renderScale={scale}
               artTransform={artTransform}
               imageAspectRatio={imageAspectRatio}
+              showGeneratingTrail={showArtGenerating}
+              generatingTrailColors={frameColors}
+              onLoad={onArtImageSettled}
+              onError={onArtImageSettled}
             />
           ) : (
             <LinearGradient
@@ -2725,7 +2803,7 @@ function CardPreviewComponent({
             ...zone("art", 2),
           }}
         >
-          {showArtGenerating ? (
+          {!faceCard.artUri && showArtGenerating ? (
             shouldRenderArtBehindTreatmentFrame ? (
               <View pointerEvents="none" style={{ flex: 1 }} />
             ) : (
@@ -2740,6 +2818,10 @@ function CardPreviewComponent({
               renderScale={scale}
               artTransform={artTransform}
               imageAspectRatio={imageAspectRatio}
+              showGeneratingTrail={showArtGenerating}
+              generatingTrailColors={frameColors}
+              onLoad={onArtImageSettled}
+              onError={onArtImageSettled}
             />
           ) : (
             <LinearGradient
@@ -2915,6 +2997,10 @@ function CardPreviewComponent({
             artTransform={artTransform}
             imageAspectRatio={imageAspectRatio}
             fitRect={subjectMaskFitBounds}
+            showGeneratingTrail={showArtGenerating}
+            generatingTrailColors={frameColors}
+            onLoad={onArtImageSettled}
+            onError={onArtImageSettled}
           />
         </View>
       ) : null}
@@ -2952,6 +3038,7 @@ function CardPreviewComponent({
             imageAspectRatio={imageAspectRatio}
             active={activeSection === "art"}
             generating={showArtGenerating}
+            onArtImageSettled={onArtImageSettled}
             zone={zone}
             onSectionPress={onSectionPress}
             panHandlers={artPanResponder.panHandlers}
@@ -3339,6 +3426,26 @@ function CardPreviewComponent({
               ink={typeLineInk}
               onPress={() => onSectionPress("typeLine", { openSheet: true })}
             />
+          ) : null}
+          {typeLineColorIndicatorSource ? (
+            <View
+              pointerEvents="none"
+              style={{
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: TYPE_LINE_COLOR_INDICATOR_TEXT_GAP * scale,
+              }}
+            >
+              <Image
+                accessibilityIgnoresInvertColors
+                source={typeLineColorIndicatorSource}
+                resizeMode="contain"
+                style={{
+                  width: TYPE_LINE_COLOR_INDICATOR_SIZE * scale,
+                  height: TYPE_LINE_COLOR_INDICATOR_SIZE * scale,
+                }}
+              />
+            </View>
           ) : null}
           {exportMode ? (
             <Text
@@ -4070,6 +4177,7 @@ function SplitCardPreview({
   scale,
   exportMode,
   artGenerating,
+  onArtImageSettled,
   footerOwnerName,
   onSectionPress,
   zone,
@@ -4080,6 +4188,7 @@ function SplitCardPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
@@ -4122,6 +4231,7 @@ function SplitCardPreview({
           scale={scale}
           exportMode={exportMode}
           artGenerating={artGenerating}
+          onArtImageSettled={onArtImageSettled}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -4133,6 +4243,7 @@ function SplitCardPreview({
           scale={scale}
           exportMode={exportMode}
           artGenerating={artGenerating}
+          onArtImageSettled={onArtImageSettled}
           footerOwnerName={footerOwnerName}
           onSectionPress={onSectionPress}
           zone={zone}
@@ -4149,6 +4260,7 @@ function ClassicSplitPreview({
   scale,
   exportMode,
   artGenerating,
+  onArtImageSettled,
   footerOwnerName,
   onSectionPress,
   zone,
@@ -4159,6 +4271,7 @@ function ClassicSplitPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
@@ -4178,6 +4291,7 @@ function ClassicSplitPreview({
         scale={scale}
         exportMode={exportMode}
         artGenerating={artGenerating}
+        onArtImageSettled={onArtImageSettled}
         onSectionPress={onSectionPress}
         zone={zone}
       />
@@ -4190,6 +4304,7 @@ function ClassicSplitPreview({
         scale={scale}
         exportMode={exportMode}
         artGenerating={artGenerating}
+        onArtImageSettled={onArtImageSettled}
         onSectionPress={onSectionPress}
         zone={zone}
       />
@@ -4232,6 +4347,7 @@ function ClassicSplitHalfSlot({
   scale,
   exportMode,
   artGenerating,
+  onArtImageSettled,
   onSectionPress,
   zone,
 }: {
@@ -4243,6 +4359,7 @@ function ClassicSplitHalfSlot({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4283,6 +4400,7 @@ function ClassicSplitHalfSlot({
           frameIdentity={frameIdentity}
           scale={scale}
           artGenerating={artGenerating}
+          onArtImageSettled={onArtImageSettled}
           onSectionPress={onSectionPress}
           zone={zone}
         />
@@ -4447,6 +4565,7 @@ function ClassicSplitArtSlot({
   frameIdentity,
   scale,
   artGenerating,
+  onArtImageSettled,
   onSectionPress,
   zone,
 }: {
@@ -4455,6 +4574,7 @@ function ClassicSplitArtSlot({
   frameIdentity: FrameIdentity;
   scale: number;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4472,23 +4592,36 @@ function ClassicSplitArtSlot({
         ...zone("art", 2),
       }}
     >
-      {artGenerating ? (
+      {!card.artUri && artGenerating ? (
         <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} />
       ) : card.artUri ? (
-        <Image
-          accessibilityIgnoresInvertColors
-          source={{ uri: card.artUri }}
-          resizeMode="cover"
-          style={{
-            width: "100%",
-            height: "100%",
-            transform: [
-              { translateX: (card.artTransform?.offsetX ?? 0) * scale },
-              { translateY: (card.artTransform?.offsetY ?? 0) * scale },
-              { scale: card.artTransform?.scale ?? 1 },
-            ],
-          }}
-        />
+        <>
+          <Image
+            accessibilityIgnoresInvertColors
+            source={{ uri: card.artUri }}
+            resizeMode="cover"
+            onLoad={() => card.artUri && onArtImageSettled?.(card.artUri)}
+            onError={() => card.artUri && onArtImageSettled?.(card.artUri)}
+            style={{
+              width: "100%",
+              height: "100%",
+              transform: [
+                { translateX: (card.artTransform?.offsetX ?? 0) * scale },
+                { translateY: (card.artTransform?.offsetY ?? 0) * scale },
+                { scale: card.artTransform?.scale ?? 1 },
+              ],
+            }}
+          />
+          {artGenerating ? (
+            <View pointerEvents="none" style={{ position: "absolute", inset: 0 }}>
+              <GeneratingArtAnimation
+                scale={scale}
+                colors={getFrameColors(card)}
+                label="Loading art"
+              />
+            </View>
+          ) : null}
+        </>
       ) : (
         <SplitHalfArtPlaceholder frameIdentity={frameIdentity} />
       )}
@@ -4740,6 +4873,7 @@ function AftermathSplitPreview({
   scale,
   exportMode,
   artGenerating,
+  onArtImageSettled,
   onSectionPress,
   zone,
 }: {
@@ -4749,6 +4883,7 @@ function AftermathSplitPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -4786,6 +4921,7 @@ function AftermathSplitPreview({
         card={card}
         scale={scale}
         artGenerating={artGenerating}
+        onArtImageSettled={onArtImageSettled}
         zone={zone}
         label={card.artUri ? "Change aftermath upright half art" : "Select aftermath upright half art"}
         onPress={() => onSectionPress("art", { openSheet: true })}
@@ -4921,6 +5057,7 @@ function AftermathSplitPreview({
         card={card}
         scale={scale}
         artGenerating={artGenerating}
+        onArtImageSettled={onArtImageSettled}
         zone={zone}
         label={card.artUri ? "Change aftermath lower half art" : "Select aftermath lower half art"}
         onPress={() => onSectionPress("art", { openSheet: true })}
@@ -5028,6 +5165,7 @@ function AftermathArtSlot({
   card,
   scale,
   artGenerating,
+  onArtImageSettled,
   zone,
   label,
   onPress,
@@ -5037,6 +5175,7 @@ function AftermathArtSlot({
   card: CardDraft;
   scale: number;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
   label: string;
   onPress: () => void;
@@ -5053,23 +5192,36 @@ function AftermathArtSlot({
         ...zone("art", 2),
       }}
     >
-      {artGenerating ? (
+      {!card.artUri && artGenerating ? (
         <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} />
       ) : card.artUri ? (
-        <Image
-          accessibilityIgnoresInvertColors
-          source={{ uri: card.artUri }}
-          resizeMode="cover"
-          style={{
-            width: "100%",
-            height: "100%",
-            transform: [
-              { translateX: (card.artTransform?.offsetX ?? 0) * scale },
-              { translateY: (card.artTransform?.offsetY ?? 0) * scale },
-              { scale: card.artTransform?.scale ?? 1 },
-            ],
-          }}
-        />
+        <>
+          <Image
+            accessibilityIgnoresInvertColors
+            source={{ uri: card.artUri }}
+            resizeMode="cover"
+            onLoad={() => card.artUri && onArtImageSettled?.(card.artUri)}
+            onError={() => card.artUri && onArtImageSettled?.(card.artUri)}
+            style={{
+              width: "100%",
+              height: "100%",
+              transform: [
+                { translateX: (card.artTransform?.offsetX ?? 0) * scale },
+                { translateY: (card.artTransform?.offsetY ?? 0) * scale },
+                { scale: card.artTransform?.scale ?? 1 },
+              ],
+            }}
+          />
+          {artGenerating ? (
+            <View pointerEvents="none" style={{ position: "absolute", inset: 0 }}>
+              <GeneratingArtAnimation
+                scale={scale}
+                colors={getFrameColors(card)}
+                label="Loading art"
+              />
+            </View>
+          ) : null}
+        </>
       ) : (
         <LinearGradient
           colors={getSplitArtGradient(frameIdentity)}
@@ -5578,6 +5730,7 @@ function PlaneswalkerPreview({
   artPanHandlers,
   artTransform,
   artGenerating,
+  onArtImageSettled,
   footerOwnerName,
   zone,
 }: {
@@ -5601,6 +5754,7 @@ function PlaneswalkerPreview({
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
   artTransform: ArtTransform;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -5673,7 +5827,7 @@ function PlaneswalkerPreview({
           ...zone("art", 7),
         }}
       >
-        {artGenerating ? (
+        {!faceCard.artUri && artGenerating ? (
           <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} />
         ) : faceCard.artUri ? (
           <TransformableArtImage
@@ -5682,6 +5836,10 @@ function PlaneswalkerPreview({
             renderScale={scale}
             artTransform={artTransform}
             imageAspectRatio={imageAspectRatio}
+            showGeneratingTrail={artGenerating}
+            generatingTrailColors={getFrameColors(faceCard)}
+            onLoad={onArtImageSettled}
+            onError={onArtImageSettled}
           />
         ) : (
           <LinearGradient
@@ -6268,6 +6426,7 @@ function BattleFrontPreview({
   artPanHandlers,
   artTransform,
   artGenerating,
+  onArtImageSettled,
   footerOwnerName,
   zone,
 }: {
@@ -6289,6 +6448,7 @@ function BattleFrontPreview({
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
   artTransform: ArtTransform;
   artGenerating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
 }) {
@@ -6363,7 +6523,7 @@ function BattleFrontPreview({
           ...zone("art", 6),
         }}
       >
-        {artGenerating ? (
+        {!faceCard.artUri && artGenerating ? (
           <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} />
         ) : faceCard.artUri ? (
           <TransformableArtImage
@@ -6372,6 +6532,10 @@ function BattleFrontPreview({
             renderScale={scale}
             artTransform={artTransform}
             imageAspectRatio={imageAspectRatio}
+            showGeneratingTrail={artGenerating}
+            generatingTrailColors={getFrameColors(faceCard)}
+            onLoad={onArtImageSettled}
+            onError={onArtImageSettled}
           />
         ) : (
           <LinearGradient
@@ -6867,6 +7031,7 @@ function SagaArtSlot({
   imageAspectRatio,
   active,
   generating,
+  onArtImageSettled,
   zone,
   onSectionPress,
   panHandlers,
@@ -6878,6 +7043,7 @@ function SagaArtSlot({
   imageAspectRatio?: number | null;
   active: boolean;
   generating: boolean;
+  onArtImageSettled?: (uri: string) => void;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
   onSectionPress: SectionPressHandler;
   panHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
@@ -6895,7 +7061,7 @@ function SagaArtSlot({
         ...(active ? zone("art", 1) : {}),
       }}
     >
-      {generating ? (
+      {!faceCard.artUri && generating ? (
         <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} />
       ) : faceCard.artUri ? (
         <TransformableArtImage
@@ -6904,6 +7070,10 @@ function SagaArtSlot({
           renderScale={scale}
           artTransform={artTransform}
           imageAspectRatio={imageAspectRatio}
+          showGeneratingTrail={generating}
+          generatingTrailColors={getFrameColors(faceCard)}
+          onLoad={onArtImageSettled}
+          onError={onArtImageSettled}
         />
       ) : (
         <LinearGradient
@@ -11439,6 +11609,10 @@ function TransformableArtImage({
   artTransform,
   imageAspectRatio,
   fitRect,
+  showGeneratingTrail = false,
+  generatingTrailColors = [],
+  onLoad,
+  onError,
 }: {
   uri: string;
   artRect: CoordinateRect;
@@ -11446,6 +11620,10 @@ function TransformableArtImage({
   artTransform: ArtTransform;
   imageAspectRatio?: number | null;
   fitRect?: CoordinateRect;
+  showGeneratingTrail?: boolean;
+  generatingTrailColors?: ManaColor[];
+  onLoad?: (uri: string) => void;
+  onError?: (uri: string) => void;
 }) {
   const resolvedUri = useSvgCompatibleArtUri(uri) ?? uri;
   const resolvedFitRect = fitRect ?? artRect;
@@ -11474,17 +11652,41 @@ function TransformableArtImage({
       <Image
         accessibilityIgnoresInvertColors
         source={{ uri: resolvedUri }}
+        onLoad={() => onLoad?.(uri)}
+        onError={() => onError?.(uri)}
         resizeMode={fittedLayout.resizeMode}
         style={{
           width: "100%",
           height: "100%",
         }}
       />
+      {showGeneratingTrail ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+          }}
+        >
+          <GeneratingArtAnimation scale={renderScale} colors={generatingTrailColors} label="Loading art" />
+        </View>
+      ) : null}
     </View>
   );
 }
 
-function GeneratingArtAnimation({ scale, colors }: { scale: number; colors: ManaColor[] }) {
+function GeneratingArtAnimation({
+  scale,
+  colors,
+  label = "Generating art, please wait",
+}: {
+  scale: number;
+  colors: ManaColor[];
+  label?: string;
+}) {
   const drift = useRef(new Animated.Value(0)).current;
   const flicker = useRef(new Animated.Value(0)).current;
   const colorKey = colors.join("");
@@ -11683,7 +11885,7 @@ function GeneratingArtAnimation({ scale, colors }: { scale: number; colors: Mana
           letterSpacing: 0,
         }}
       >
-        Generating art, please wait
+        {label}
       </Text>
     </View>
   );

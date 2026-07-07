@@ -11,6 +11,8 @@ export type AiImageGenerationOptions = {
 export type AiImageResult = {
   b64Json?: string;
   url?: string;
+  providerModel?: string;
+  fallbackAttempts?: { model: string; error: string }[];
 };
 
 export type AiCreditSpendReceipt = {
@@ -81,6 +83,17 @@ const EDGE_IMAGE_FETCH_TIMEOUT_MS = 20000;
 const MAX_EDGE_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 const BASE64_CHUNK_SIZE = 0x8000;
 
+function logImageProviderFallback(actionLabel: string, data: AiImageResult) {
+  if (!data.fallbackAttempts?.length) {
+    return;
+  }
+
+  console.warn(`${actionLabel} used a fallback model.`, {
+    providerModel: data.providerModel,
+    fallbackAttempts: data.fallbackAttempts,
+  });
+}
+
 export class SubjectMatteProviderError extends Error {
   readonly diagnostics?: SubjectMatteDiagnostics;
 
@@ -112,6 +125,7 @@ export async function generateAiImageViaEdge({
   });
 
   if (data?.b64Json || data?.url) {
+    logImageProviderFallback("OpenAI image generation", data);
     return data;
   }
 
@@ -142,6 +156,7 @@ export async function generateAiImageEditViaEdge({
   });
 
   if (data?.b64Json || data?.url) {
+    logImageProviderFallback("OpenAI image edit", data);
     return data;
   }
 

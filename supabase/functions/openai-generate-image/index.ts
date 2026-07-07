@@ -12,7 +12,13 @@ type ImageGenerationOptions = {
   quality?: "medium" | "high";
 };
 
-const OPENAI_IMAGE_MODELS = ["gpt-image-2", "gpt-image-1.5", "gpt-image-1"] as const;
+const PREFERRED_OPENAI_IMAGE_MODEL = "gpt-image-2";
+const OPENAI_IMAGE_MODELS = [
+  PREFERRED_OPENAI_IMAGE_MODEL,
+  "chatgpt-image-latest",
+  "gpt-image-1.5",
+] as const;
+const LEGACY_OPENAI_IMAGE_MODELS = ["gpt-image-1"] as const;
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_PROMPT_LENGTH = 4000;
 const IMAGE_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);
@@ -202,8 +208,10 @@ function resolveImageSpendCategory(
 
 async function generateImage(prompt: string, options: Required<ImageGenerationOptions>) {
   let lastError: Error | null = null;
+  const fallbackAttempts: { model: string; error: string }[] = [];
+  const models = getOpenAiImageModelChain();
 
-  for (const model of OPENAI_IMAGE_MODELS) {
+  for (const model of models) {
     try {
       const response = await fetch("https://api.openai.com/v1/images/generations", {
         method: "POST",
@@ -226,13 +234,25 @@ async function generateImage(prompt: string, options: Required<ImageGenerationOp
       }
 
       const image = payload?.data?.[0];
+      const providerMetadata = {
+        providerModel: model,
+        fallbackAttempts,
+      };
+
+      console.info("OpenAI image generation succeeded.", {
+        model,
+        preferredModel: PREFERRED_OPENAI_IMAGE_MODEL,
+        fallbackCount: fallbackAttempts.length,
+        size: options.size,
+        quality: options.quality,
+      });
 
       if (image?.b64_json) {
-        return { b64Json: image.b64_json };
+        return { b64Json: image.b64_json, ...providerMetadata };
       }
 
       if (image?.url) {
-        return { url: image.url };
+        return { url: image.url, ...providerMetadata };
       }
 
       throw new Error("OpenAI did not return image data.");
@@ -243,10 +263,29 @@ async function generateImage(prompt: string, options: Required<ImageGenerationOp
       if (!shouldTryNextOpenAiModel(generationError)) {
         throw generationError;
       }
+
+      fallbackAttempts.push({ model, error: generationError.message });
+      console.warn("OpenAI image generation model fallback.", {
+        failedModel: model,
+        nextModel: models[fallbackAttempts.length],
+        error: generationError.message,
+      });
     }
   }
 
   throw lastError ?? new Error("OpenAI image generation failed.");
+}
+
+function getOpenAiImageModelChain() {
+  if (Deno.env.get("CARDMAGIC_ALLOW_LEGACY_GPT_IMAGE_1") === "true") {
+    console.warn("Legacy GPT Image 1 fallback is enabled for OpenAI image generation.", {
+      preferredModel: PREFERRED_OPENAI_IMAGE_MODEL,
+      legacyModels: LEGACY_OPENAI_IMAGE_MODELS,
+    });
+    return [...OPENAI_IMAGE_MODELS, ...LEGACY_OPENAI_IMAGE_MODELS] as const;
+  }
+
+  return OPENAI_IMAGE_MODELS;
 }
 
 function shouldTryNextOpenAiModel(error: Error) {

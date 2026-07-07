@@ -7,6 +7,7 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
+        "npm:@expo/cli@^54.0.25",
         "npm:@expo/metro-runtime@~6.1.2",
         "npm:@react-native-async-storage/async-storage@2.2.0",
         "npm:@supabase/supabase-js@^2.106.2",
@@ -25,6 +26,7 @@
         "npm:expo-status-bar@~3.0.9",
         "npm:expo@~54.0.35",
         "npm:html2canvas@^1.4.1",
+        "npm:json5@^2.2.3",
         "npm:jszip@^3.10.1",
         "npm:lucide-react-native@^1.14.0",
         "npm:pdf-lib@^1.17.1",
@@ -35,9 +37,11 @@
         "npm:react-native-url-polyfill@3",
         "npm:react-native-view-shot@4.0.3",
         "npm:react-native-web@0.21",
+        "npm:react-native-worklets@~0.8.3",
         "npm:react-native@0.81.5",
         "npm:react@19.1.0",
-        "npm:typescript@~5.9.2"
+        "npm:typescript@~5.9.2",
+        "npm:vitest@^4.1.8"
       ]
     }
   }

@@ -1,6 +1,6 @@
 {
   "name": "cardmagic",
-  "version": "3.37.4",
+  "version": "3.38.6",
   "main": "index.ts",
   "scripts": {
     "test": "vitest run",

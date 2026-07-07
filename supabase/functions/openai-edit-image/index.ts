@@ -9,7 +9,13 @@ import {
 
 type ImageEditSize = "1024x1024" | "1536x1024" | "1024x1536";
 
-const OPENAI_IMAGE_MODELS = ["gpt-image-2", "gpt-image-1.5", "gpt-image-1"] as const;
+const PREFERRED_OPENAI_IMAGE_MODEL = "gpt-image-2";
+const OPENAI_IMAGE_MODELS = [
+  PREFERRED_OPENAI_IMAGE_MODEL,
+  "chatgpt-image-latest",
+  "gpt-image-1.5",
+] as const;
+const LEGACY_OPENAI_IMAGE_MODELS = ["gpt-image-1"] as const;
 const MAX_JSON_BODY_BYTES = 12 * 1024 * 1024;
 const MAX_IMAGE_DATA_URL_CHARS = 10 * 1024 * 1024;
 const MAX_PROMPT_LENGTH = 4000;
@@ -182,8 +188,10 @@ async function editImage({
   size: ImageEditSize;
 }) {
   let lastError: Error | null = null;
+  const fallbackAttempts: { model: string; error: string }[] = [];
+  const models = getOpenAiImageModelChain();
 
-  for (const model of OPENAI_IMAGE_MODELS) {
+  for (const model of models) {
     try {
       const formData = new FormData();
 
@@ -208,13 +216,24 @@ async function editImage({
       }
 
       const image = payload?.data?.[0];
+      const providerMetadata = {
+        providerModel: model,
+        fallbackAttempts,
+      };
+
+      console.info("OpenAI image edit succeeded.", {
+        model,
+        preferredModel: PREFERRED_OPENAI_IMAGE_MODEL,
+        fallbackCount: fallbackAttempts.length,
+        size,
+      });
 
       if (image?.b64_json) {
-        return { b64Json: image.b64_json };
+        return { b64Json: image.b64_json, ...providerMetadata };
       }
 
       if (image?.url) {
-        return { url: image.url };
+        return { url: image.url, ...providerMetadata };
       }
 
       throw new Error("OpenAI did not return image data.");
@@ -225,10 +244,29 @@ async function editImage({
       if (!shouldTryNextOpenAiModel(editError)) {
         throw editError;
       }
+
+      fallbackAttempts.push({ model, error: editError.message });
+      console.warn("OpenAI image edit model fallback.", {
+        failedModel: model,
+        nextModel: models[fallbackAttempts.length],
+        error: editError.message,
+      });
     }
   }
 
   throw lastError ?? new Error("OpenAI image edit failed.");
+}
+
+function getOpenAiImageModelChain() {
+  if (Deno.env.get("CARDMAGIC_ALLOW_LEGACY_GPT_IMAGE_1") === "true") {
+    console.warn("Legacy GPT Image 1 fallback is enabled for OpenAI image editing.", {
+      preferredModel: PREFERRED_OPENAI_IMAGE_MODEL,
+      legacyModels: LEGACY_OPENAI_IMAGE_MODELS,
+    });
+    return [...OPENAI_IMAGE_MODELS, ...LEGACY_OPENAI_IMAGE_MODELS] as const;
+  }
+
+  return OPENAI_IMAGE_MODELS;
 }
 
 function dataUrlToFile(dataUrl: string, filename: string) {

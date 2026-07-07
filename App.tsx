@@ -842,6 +842,14 @@ const FRAME_STYLE_MENU_CONTENT_WIDTH =
 const FRAME_STYLE_MENU_BASE_WIDTH =
   FRAME_STYLE_MENU_HORIZONTAL_PADDING * 2 +
   FRAME_STYLE_MENU_CONTENT_WIDTH;
+const EDITOR_CARD_MIN_WIDTH = 272;
+const EDITOR_CARD_COMPACT_MAX_WIDTH = 374;
+const EDITOR_CARD_TABLET_MAX_WIDTH = 430;
+const EDITOR_CARD_DESKTOP_MAX_WIDTH = 480;
+const EDITOR_CARD_WIDE_DESKTOP_MAX_WIDTH = 520;
+const EDITOR_TABLET_BREAKPOINT = 700;
+const EDITOR_DESKTOP_BREAKPOINT = 900;
+const EDITOR_WIDE_DESKTOP_BREAKPOINT = 1180;
 const PREVIEW_FLOATING_TOOLBAR_CARD_GAP_RESERVE = 18;
 const PREVIEW_FLOATING_TOOLBAR_Z_INDEX = 12;
 const PREVIEW_FLOATING_TOOLBAR_MENU_Z_INDEX = 24;
@@ -7015,6 +7023,7 @@ export default function App() {
   const [artGeneratorStyle, setArtGeneratorStyle] = useState<ArtGeneratorStyleId>("random");
   const [artGeneratorVariationSeed, setArtGeneratorVariationSeed] = useState(0);
   const [artGeneratorBusy, setArtGeneratorBusy] = useState(false);
+  const [artImageLoadingUri, setArtImageLoadingUri] = useState<string | null>(null);
   const [artGeneratorError, setArtGeneratorError] = useState<string | null>(null);
   const [subjectMaskBusy, setSubjectMaskBusy] = useState(false);
   const [subjectMaskStatus, setSubjectMaskStatus] = useState<string | null>(null);
@@ -7184,7 +7193,19 @@ export default function App() {
       ),
     [activeSetCardId, card, previewContextSet],
   );
-  const cardWidth = Math.min(374, Math.max(272, width - 32));
+  const editorCardMaxWidth =
+    width >= EDITOR_WIDE_DESKTOP_BREAKPOINT
+      ? EDITOR_CARD_WIDE_DESKTOP_MAX_WIDTH
+      : width >= EDITOR_DESKTOP_BREAKPOINT
+        ? EDITOR_CARD_DESKTOP_MAX_WIDTH
+        : width >= EDITOR_TABLET_BREAKPOINT
+          ? EDITOR_CARD_TABLET_MAX_WIDTH
+          : EDITOR_CARD_COMPACT_MAX_WIDTH;
+  const editorHorizontalInset = width >= EDITOR_DESKTOP_BREAKPOINT ? 48 : 32;
+  const cardWidth = Math.min(
+    editorCardMaxWidth,
+    Math.max(EDITOR_CARD_MIN_WIDTH, width - editorHorizontalInset),
+  );
   const previewTypeFrame = getPreviewTypeFrame(card);
   const hasBackFace = isTransformingTypeFrame(card);
   const showingPhysicalBack = !hasBackFace && physicalBackVisible;
@@ -9742,6 +9763,7 @@ export default function App() {
       });
       const artUri = generatedArt.uri;
 
+      setArtImageLoadingUri(artUri);
       applyArtUri(artUri, { artist: "OpenAI" });
       addArtLibraryEntry("generated", artUri);
       setActiveSection("art");
@@ -12992,7 +13014,10 @@ export default function App() {
                                 width={previewRenderWidth}
                                 exportCaptureMode={visibleCardExportActive}
                                 exportSetSymbolMode={visibleCardExportActive}
-                                artGenerating={artGeneratorBusy}
+                                artGenerating={artGeneratorBusy || artImageLoadingUri === faceCard.artUri}
+                                onArtImageSettled={(uri) =>
+                                  setArtImageLoadingUri((currentUri) => (currentUri === uri ? null : currentUri))
+                                }
                                 onSectionPress={handlePreviewSectionPress}
                                 onChange={updateCard}
                               />

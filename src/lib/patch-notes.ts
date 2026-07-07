@@ -20,6 +20,76 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.38.6",
+    date: "2026-07-07",
+    title: "Better image model fallback",
+    branches: ["beta", "main"],
+    bullets: [
+      "AI art generation and edits now try GPT Image 2 first, then a higher-quality compatibility image model before the older GPT Image 1.5 fallback.",
+      "Deprecated GPT Image 1 is no longer used automatically; it requires an explicit Edge Function opt-in and logs when that legacy fallback is enabled.",
+    ],
+  },
+  {
+    version: "3.38.5",
+    date: "2026-07-07",
+    title: "Generated art loading trail",
+    branches: ["beta", "main"],
+    bullets: [
+      "The generated-art trail now keeps moving after the provider request finishes and stays visible until the rendered art image loads or errors.",
+      "Card previews render the new art underneath the loading trail so the transition no longer drops to a static or blank art slot while the browser decodes the image.",
+    ],
+  },
+  {
+    version: "3.38.4",
+    date: "2026-07-07",
+    title: "Login autofill fix",
+    branches: ["beta", "main"],
+    bullets: [
+      "The Account sign-in form now exposes separate browser credential semantics for signing in and creating an account.",
+      "Password managers can associate the email field with a current-password login field instead of sharing one password field with account creation.",
+    ],
+  },
+  {
+    version: "3.38.3",
+    date: "2026-06-26",
+    title: "DFC-style color indicators",
+    branches: ["beta", "main"],
+    bullets: [
+      "Non-token cards with a manually colored frame and no colored mana cost now use the same type-line color indicator dot as DFC back faces.",
+      "Multicolor manual frames use the matching blended color-indicator artwork instead of showing separate mana symbols.",
+    ],
+  },
+  {
+    version: "3.38.2",
+    date: "2026-06-26",
+    title: "Type-line color indicators",
+    branches: ["beta", "main"],
+    bullets: [
+      "Non-token cards with a manually colored frame and no colored mana cost now show matching color symbols before the type line.",
+      "The type-line layout reserves space for those symbols so long card types still avoid the set symbol.",
+    ],
+  },
+  {
+    version: "3.38.1",
+    date: "2026-06-26",
+    title: "Image model diagnostics",
+    branches: ["beta", "main"],
+    bullets: [
+      "OpenAI image generation and editing now report the model that actually served the request.",
+      "If GPT Image 2 is unavailable and the provider falls back to an older GPT Image model, the app now logs the failed model and fallback chain instead of hiding it.",
+    ],
+  },
+  {
+    version: "3.38.0",
+    date: "2026-06-26",
+    title: "Large-screen scaling",
+    branches: ["beta", "main"],
+    bullets: [
+      "The editor card and primary edit UI now scale up on tablet and desktop-sized screens instead of staying capped at the compact phone width.",
+      "Browser zoom is re-enabled on larger web viewports while compact mobile browsers keep the input-focus zoom guard.",
+    ],
+  },
+  {
     version: "3.37.4",
     date: "2026-06-24",
     title: "Editor resume reliability",

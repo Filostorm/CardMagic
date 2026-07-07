@@ -209,6 +209,7 @@ import type {ArtImageQuality} from "@/lib/art-image-quality";
 import type {ArtLibraryEntry, ArtLibrarySource, CardBackGeneratorMode, SubjectMaskTraceEntry} from "@/types/art";
 import {isReleaseVersionNewer} from "@/lib/semver";
 import {createUuid} from "@/lib/uuid";
+import {useCardMagicScreenUsage} from "@/lib/usage-metrics";
 import {getPreviewTypeFrame} from "@/lib/preview-type-frame";
 import type {
   CardSet,
@@ -850,6 +851,7 @@ const EDITOR_CARD_WIDE_DESKTOP_MAX_WIDTH = 520;
 const EDITOR_TABLET_BREAKPOINT = 700;
 const EDITOR_DESKTOP_BREAKPOINT = 900;
 const EDITOR_WIDE_DESKTOP_BREAKPOINT = 1180;
+const ART_IMAGE_LOAD_SETTLE_DELAY_MS = 750;
 const PREVIEW_FLOATING_TOOLBAR_CARD_GAP_RESERVE = 18;
 const PREVIEW_FLOATING_TOOLBAR_Z_INDEX = 12;
 const PREVIEW_FLOATING_TOOLBAR_MENU_Z_INDEX = 24;
@@ -2534,6 +2536,7 @@ function saveCardDraftIntoSet(
   const resolvedCard = withResolvedSetDefaults(card, selectedSet);
   const snapshot = createSetCardSnapshot(resolvedCard);
   let savedSnapshot = snapshot;
+  let updatedExistingSnapshot = false;
 
   const nextSets = normalizeCardSets(
     sets.map((set) => {
@@ -2549,6 +2552,7 @@ function saveCardDraftIntoSet(
             : activeSetCardId;
       const updatesExistingSnapshot =
         overwriteSnapshotId !== null && set.cards.some((setCard) => setCard.id === overwriteSnapshotId);
+      updatedExistingSnapshot = updatesExistingSnapshot;
       const savedSnapshotId = updatesExistingSnapshot ? overwriteSnapshotId : snapshot.id;
       const nextCards = updatesExistingSnapshot
         ? set.cards.map((setCard) =>
@@ -2569,6 +2573,7 @@ function saveCardDraftIntoSet(
     setId: selectedSet.id,
     setName: selectedSet.name,
     snapshot: savedSnapshot,
+    updatedExistingSnapshot,
   };
 }
 
@@ -7024,6 +7029,8 @@ export default function App() {
   const [artGeneratorVariationSeed, setArtGeneratorVariationSeed] = useState(0);
   const [artGeneratorBusy, setArtGeneratorBusy] = useState(false);
   const [artImageLoadingUri, setArtImageLoadingUri] = useState<string | null>(null);
+  const [artGenerationTrailSeed, setArtGenerationTrailSeed] = useState(() => `initial-${Date.now()}`);
+  const artImageLoadSettleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [artGeneratorError, setArtGeneratorError] = useState<string | null>(null);
   const [subjectMaskBusy, setSubjectMaskBusy] = useState(false);
   const [subjectMaskStatus, setSubjectMaskStatus] = useState<string | null>(null);
@@ -7031,6 +7038,35 @@ export default function App() {
   const [, setSubjectMaskTrace] = useState<SubjectMaskTraceEntry[]>([]);
   // Per-subject cutouts from the last prompted segmentation, each toggleable on/off.
   const [subjectMaskComponents, setSubjectMaskComponents] = useState<SubjectMaskComponent[]>([]);
+
+  useEffect(() => {
+    return () => {
+      if (artImageLoadSettleTimeoutRef.current) {
+        clearTimeout(artImageLoadSettleTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const startArtGenerationTrail = useCallback(() => {
+    if (artImageLoadSettleTimeoutRef.current) {
+      clearTimeout(artImageLoadSettleTimeoutRef.current);
+      artImageLoadSettleTimeoutRef.current = null;
+    }
+
+    setArtImageLoadingUri(null);
+    setArtGenerationTrailSeed(`art-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  }, []);
+
+  const settleArtImageLoading = useCallback((uri: string) => {
+    if (artImageLoadSettleTimeoutRef.current) {
+      clearTimeout(artImageLoadSettleTimeoutRef.current);
+    }
+
+    artImageLoadSettleTimeoutRef.current = setTimeout(() => {
+      setArtImageLoadingUri((currentUri) => (currentUri === uri ? null : currentUri));
+      artImageLoadSettleTimeoutRef.current = null;
+    }, ART_IMAGE_LOAD_SETTLE_DELAY_MS);
+  }, []);
   const subjectMaskSourceUriRef = useRef<string | null>(null);
   const [subjectMaskToggleBusy, setSubjectMaskToggleBusy] = useState(false);
   const [rulesTextFixerBusy, setRulesTextFixerBusy] = useState(false);
@@ -7073,6 +7109,45 @@ export default function App() {
   const mobileBrowserBottomInset = useMobileBrowserBottomInset(width);
   const [cardFontsLoaded, cardFontLoadError] = useFonts(FULL_MAGIC_PACK.fonts);
   const cardFontsReady = cardFontsLoaded || Boolean(cardFontLoadError);
+
+  const usageSurface = useMemo(() => {
+    if (accountOpen) return { name: "Account", group: "modal" };
+    if (creditStoreOpen) return { name: "Credit Store", group: "modal" };
+    if (artGeneratorOpen) return { name: "Art Generator", group: "modal" };
+    if (artSourceOpen) return { name: "Art Source", group: "modal" };
+    if (artAdjustOpen) return { name: "Art Adjust", group: "modal" };
+    if (cardBackGeneratorOpen) return { name: "Card Back Generator", group: "modal" };
+    if (setSymbolGeneratorOpen) return { name: "Set Symbol Generator", group: "modal" };
+    if (patchNotesOpen) return { name: "Patch Notes", group: "modal" };
+    if (achievementsOpen) return { name: "Achievements", group: "modal" };
+    if (singleExportTarget || webPhotoExport || batchExportCard || batchExportProgress) {
+      return { name: "Export", group: "modal" };
+    }
+    if (inspectorTab === "community") return { name: "Community", group: "tab" };
+    if (inspectorTab === "sets") return { name: "Sets", group: "tab" };
+    if (inspectorTab === "keywords") return { name: "Keywords", group: "tab" };
+    return { name: "Editor", group: "tab" };
+  }, [
+    accountOpen,
+    achievementsOpen,
+    artAdjustOpen,
+    artGeneratorOpen,
+    artSourceOpen,
+    batchExportCard,
+    batchExportProgress,
+    cardBackGeneratorOpen,
+    creditStoreOpen,
+    inspectorTab,
+    patchNotesOpen,
+    setSymbolGeneratorOpen,
+    singleExportTarget,
+    webPhotoExport,
+  ]);
+
+  useCardMagicScreenUsage(usageSurface.name, usageSurface.group, {
+    signedIn: Boolean(accountUser),
+    inspectorTab,
+  });
 
   const faceCard = useMemo(() => getEditableCardFace(card), [card]);
 
@@ -8884,7 +8959,13 @@ export default function App() {
     return syncedSnapshot;
   }
 
-  function persistSharedSetCardSnapshot(setId: string, snapshot: SetCardSnapshot) {
+  function persistSharedSetCardSnapshot(
+    setId: string,
+    snapshot: SetCardSnapshot,
+    options?: {
+      forcePreviewRefresh?: boolean;
+    },
+  ) {
     if (!accountUser) {
       return;
     }
@@ -8923,6 +9004,7 @@ export default function App() {
           remoteImageOwnerUserId: accountUser.id,
           canPersistRemoteImage: true,
           allowBackgroundRender: true,
+          forceRefresh: options?.forcePreviewRefresh === true,
         });
       })
       .catch((error) => {
@@ -9744,6 +9826,7 @@ export default function App() {
       return;
     }
 
+    startArtGenerationTrail();
     setArtGeneratorBusy(true);
     setArtGeneratorError(null);
     setArtGeneratorOpen(false);
@@ -9778,6 +9861,7 @@ export default function App() {
       }
     } catch (error) {
       console.warn("Unable to generate card art.", error);
+      setArtImageLoadingUri(null);
       setArtGeneratorError(error instanceof Error ? error.message : "CardMagic could not generate art.");
       setArtGeneratorOpen(true);
     } finally {
@@ -10533,10 +10617,13 @@ export default function App() {
     );
 
     if (savedToSharedSet) {
-      persistSharedSetCardSnapshot(result.setId, result.snapshot);
+      persistSharedSetCardSnapshot(result.setId, result.snapshot, {
+        forcePreviewRefresh: result.updatedExistingSnapshot,
+      });
     } else {
       queueSavedSetCardImageRender(result.setId, result.snapshot, accountUser, {
         remoteThumbnailsReady: !accountUser || accountSetsHydrated,
+        forceRefresh: result.updatedExistingSnapshot,
       });
     }
 
@@ -13015,9 +13102,8 @@ export default function App() {
                                 exportCaptureMode={visibleCardExportActive}
                                 exportSetSymbolMode={visibleCardExportActive}
                                 artGenerating={artGeneratorBusy || artImageLoadingUri === faceCard.artUri}
-                                onArtImageSettled={(uri) =>
-                                  setArtImageLoadingUri((currentUri) => (currentUri === uri ? null : currentUri))
-                                }
+                                artGenerationTrailSeed={artGenerationTrailSeed}
+                                onArtImageSettled={settleArtImageLoading}
                                 onSectionPress={handlePreviewSectionPress}
                                 onChange={updateCard}
                               />
@@ -14151,6 +14237,16 @@ function ArtAdjustmentModal({
     }));
   };
 
+  const toggleSubjectMaskEnabled = () => {
+    if (!hasSubjectMaskPreview || subjectMaskBusy) {
+      return;
+    }
+
+    onChange(toDfcFacePatch(card, {
+      artSubjectMaskDisabled: subjectMaskEnabled,
+    }));
+  };
+
   const updateMaskZoomScale = (nextScale: number) => {
     const normalizedTransform = normalizeArtTransformForVisibleRect(
       {
@@ -15003,6 +15099,52 @@ function ArtAdjustmentModal({
                     )}
                     <Text selectable={false} style={{ color: "#e6f7fb", fontSize: 12, fontWeight: "900" }}>
                       {subjectMaskBusy ? "Cropping" : "Crop"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{
+                      selected: subjectMaskEnabled && hasSubjectMaskPreview,
+                      disabled: !hasSubjectMaskPreview || subjectMaskBusy,
+                    }}
+                    accessibilityLabel={subjectMaskEnabled ? "Disable subject mask compositing" : "Enable subject mask compositing"}
+                    disabled={!hasSubjectMaskPreview || subjectMaskBusy}
+                    onPress={toggleSubjectMaskEnabled}
+                    style={({ pressed }) => ({
+                      minHeight: 36,
+                      borderRadius: 999,
+                      borderCurve: "continuous",
+                      borderWidth: 1,
+                      borderColor: subjectMaskEnabled && hasSubjectMaskPreview
+                        ? "rgba(85, 223, 245, 0.84)"
+                        : "rgba(255, 255, 255, 0.24)",
+                      backgroundColor: subjectMaskEnabled && hasSubjectMaskPreview
+                        ? pressed
+                          ? "rgba(85, 223, 245, 0.28)"
+                          : "rgba(85, 223, 245, 0.18)"
+                        : pressed
+                          ? "rgba(255, 255, 255, 0.14)"
+                          : "rgba(255, 255, 255, 0.06)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexDirection: "row",
+                      gap: 6,
+                      paddingHorizontal: 12,
+                      opacity: !hasSubjectMaskPreview || subjectMaskBusy ? 0.5 : 1,
+                    })}
+                  >
+                    {subjectMaskEnabled && hasSubjectMaskPreview ? (
+                      <Check size={13} color="#b7f6ff" strokeWidth={3} />
+                    ) : null}
+                    <Text
+                      selectable={false}
+                      style={{
+                        color: subjectMaskEnabled && hasSubjectMaskPreview ? "#e6f7fb" : "rgba(255, 255, 255, 0.7)",
+                        fontSize: 12,
+                        fontWeight: "900",
+                      }}
+                    >
+                      Mask
                     </Text>
                   </Pressable>
                   <Pressable

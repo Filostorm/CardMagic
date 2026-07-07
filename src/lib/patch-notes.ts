@@ -20,6 +20,79 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.38.14",
+    date: "2026-07-07",
+    title: "Saved preview refresh",
+    branches: ["beta", "main"],
+    bullets: [
+      "Saving edits over an existing set card now forces a fresh saved-card preview render.",
+      "Edited cards no longer reuse the previous Supabase thumbnail while the replacement preview is being captured.",
+    ],
+  },
+  {
+    version: "3.38.13",
+    date: "2026-07-07",
+    title: "Mask toggle placement",
+    bullets: [
+      "Moved the master Mask compositing toggle into the same action row as the Crop button.",
+      "The Mask Areas panel now focuses on the individual title, type-line, text, and frame aperture controls.",
+    ],
+  },
+  {
+    version: "3.38.12",
+    date: "2026-07-07",
+    title: "Title mask aperture",
+    bullets: [
+      "Reverted the hard-alpha underlay experiment for framed masks.",
+      "Expanded the Title mask approval aperture so subject art covers the full title frame, including the top and side ornament edges.",
+    ],
+  },
+  {
+    version: "3.38.11",
+    date: "2026-07-07",
+    title: "Mask edge cleanup",
+    bullets: [
+      "Subject-mask overlays now use a hard-alpha underlay in approved frame regions so soft matte edges do not reveal title-border slivers.",
+      "The normal soft subject matte still renders above that underlay, preserving smoother foreground edges while hiding frame artifacts.",
+    ],
+  },
+  {
+    version: "3.38.10",
+    date: "2026-07-07",
+    title: "Title mask layering",
+    bullets: [
+      "Subject-mask foreground art now renders above the title-frame furniture when the Title mask area is enabled.",
+      "Card name, mana symbols, and type-line text still render after the mask so foreground typography remains legible.",
+    ],
+  },
+  {
+    version: "3.38.9",
+    date: "2026-07-07",
+    title: "Mask compositing toggle",
+    bullets: [
+      "The Mask panel now has a master compositing toggle above the mask-area controls.",
+      "Turning masking off preserves the generated matte and per-subject selections so it can be re-enabled without regenerating.",
+    ],
+  },
+  {
+    version: "3.38.8",
+    date: "2026-07-07",
+    title: "Masked title readability",
+    bullets: [
+      "Subject-mask title-bar approval now covers the full title plate so the foreground subject can sit over the title frame chrome.",
+      "Title, mana-cost editor, and type-line text switch to light ink with a subtle shadow when their masked sections render over artwork.",
+    ],
+  },
+  {
+    version: "3.38.7",
+    date: "2026-07-07",
+    title: "Generation trail motion",
+    bullets: [
+      "Generated-art trails now use a fresh per-request animation seed so repeated generations do not reuse the same smoke path.",
+      "The loading overlay now waits briefly after image load before clearing so the trail keeps moving through the browser paint handoff.",
+    ],
+  },
+  {
     version: "3.38.6",
     date: "2026-07-07",
     title: "Better image model fallback",

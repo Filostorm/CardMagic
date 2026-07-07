@@ -184,6 +184,7 @@ type CardPreviewProps = {
   // capture them faithfully. Web-only; the editor uses its live mask paths.
   exportFlattenMasks?: boolean;
   artGenerating?: boolean;
+  artGenerationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   initialArtImageAspectRatio?: number | null;
@@ -757,11 +758,11 @@ const MSE_M15_FUTURE_TEXTBOX_TEXTURE_SIZE = { width: 335, height: 152 };
 const FUTURESHIFTED_TEXTBOX_LAYER_RECT: CoordinateRect = { x: 23, y: 320, width: 335, height: 152 };
 const FUTURESHIFTED_TITLE_TERMINAL_DOT_RECT: CoordinateRect = { x: 348, y: 73, width: 7, height: 7 };
 const SUBJECT_MASK_TITLE_PLATE_OUTSETS = {
-  left: 15,
-  top: 7,
-  right: 12,
-  bottom: 7,
-  radius: 10,
+  left: 28,
+  top: 24,
+  right: 24,
+  bottom: 12,
+  radius: 4,
 } as const;
 const SUBJECT_MASK_TYPE_PLATE_OUTSETS = {
   left: 11,
@@ -802,6 +803,17 @@ function getRetroTextShadow(scale: number) {
     textShadowColor: "rgba(0, 0, 0, 0.95)",
     textShadowOffset: { width: 1 * scale, height: 1 * scale },
     textShadowRadius: 0,
+  } as const;
+}
+
+const SUBJECT_MASK_TEXT_INK = "#f8f2df";
+const SUBJECT_MASK_TEXT_MUTED_INK = "rgba(248, 242, 223, 0.68)";
+
+function getSubjectMaskTextShadow(scale: number) {
+  return {
+    textShadowColor: "rgba(0, 0, 0, 0.82)",
+    textShadowOffset: { width: 0, height: 1 * scale },
+    textShadowRadius: 1.6 * scale,
   } as const;
 }
 
@@ -1794,6 +1806,7 @@ function CardPreviewComponent({
   exportSetSymbolMode = false,
   exportFlattenMasks = false,
   artGenerating = false,
+  artGenerationTrailSeed,
   onArtImageSettled,
   footerOwnerName,
   initialArtImageAspectRatio,
@@ -2313,6 +2326,24 @@ function CardPreviewComponent({
     : isDfcBack
       ? "rgba(248, 242, 223, 0.62)"
       : regularFrameStyle.mutedInk;
+  const subjectMaskTitleTextOverArt =
+    shouldUseSubjectMaskAsPrimaryArt && activeSubjectMaskSections.has("title");
+  const subjectMaskTypeLineTextOverArt =
+    shouldUseSubjectMaskAsPrimaryArt && activeSubjectMaskSections.has("typeLine");
+  const titleForegroundInk = subjectMaskTitleTextOverArt ? SUBJECT_MASK_TEXT_INK : titleInk;
+  const titleForegroundMutedInk = subjectMaskTitleTextOverArt ? SUBJECT_MASK_TEXT_MUTED_INK : titleMutedInk;
+  const typeLineForegroundInk = subjectMaskTypeLineTextOverArt ? SUBJECT_MASK_TEXT_INK : typeLineInk;
+  const typeLineForegroundMutedInk = subjectMaskTypeLineTextOverArt ? SUBJECT_MASK_TEXT_MUTED_INK : typeLineMutedInk;
+  const titleForegroundTextShadow = subjectMaskTitleTextOverArt
+    ? getSubjectMaskTextShadow(scale)
+    : isRetroTreatment
+      ? getRetroTextShadow(scale)
+      : {};
+  const typeLineForegroundTextShadow = subjectMaskTypeLineTextOverArt
+    ? getSubjectMaskTextShadow(scale)
+    : isRetroTreatment
+      ? getRetroTextShadow(scale)
+      : {};
   const statInk =
     isFutureshiftedShowcase
       ? "#f8f2df"
@@ -2508,6 +2539,7 @@ function CardPreviewComponent({
         artPanHandlers={artPanResponder.panHandlers}
         artTransform={artTransform}
         artGenerating={showArtGenerating}
+        artGenerationTrailSeed={artGenerationTrailSeed}
         onArtImageSettled={onArtImageSettled}
         footerOwnerName={footerOwnerName}
         zone={zone}
@@ -2538,6 +2570,7 @@ function CardPreviewComponent({
         artPanHandlers={artPanResponder.panHandlers}
         artTransform={artTransform}
         artGenerating={showArtGenerating}
+        artGenerationTrailSeed={artGenerationTrailSeed}
         onArtImageSettled={onArtImageSettled}
         footerOwnerName={footerOwnerName}
         zone={zone}
@@ -2554,6 +2587,7 @@ function CardPreviewComponent({
         scale={width / SPLIT_CARD_COORDINATES.width}
         exportMode={exportMode}
         artGenerating={showArtGenerating}
+        artGenerationTrailSeed={artGenerationTrailSeed}
         onArtImageSettled={onArtImageSettled}
         footerOwnerName={footerOwnerName}
         onSectionPress={onSectionPress}
@@ -2609,7 +2643,7 @@ function CardPreviewComponent({
           }}
         >
           {!faceCard.artUri && showArtGenerating ? (
-            <GeneratingArtAnimation scale={battleScale} colors={frameColors} />
+            <GeneratingArtAnimation scale={battleScale} colors={frameColors} seed={artGenerationTrailSeed} />
           ) : faceCard.artUri ? (
             <TransformableArtImage
               uri={faceCard.artUri}
@@ -2619,6 +2653,7 @@ function CardPreviewComponent({
               imageAspectRatio={imageAspectRatio}
               showGeneratingTrail={showArtGenerating}
               generatingTrailColors={frameColors}
+              generatingTrailSeed={artGenerationTrailSeed}
               onLoad={onArtImageSettled}
               onError={onArtImageSettled}
             />
@@ -2750,7 +2785,7 @@ function CardPreviewComponent({
           }}
         >
           {!faceCard.artUri && showArtGenerating ? (
-            <GeneratingArtAnimation scale={scale} colors={frameColors} />
+            <GeneratingArtAnimation scale={scale} colors={frameColors} seed={artGenerationTrailSeed} />
           ) : faceCard.artUri ? (
             <TransformableArtImage
               uri={faceCard.artUri}
@@ -2760,6 +2795,7 @@ function CardPreviewComponent({
               imageAspectRatio={imageAspectRatio}
               showGeneratingTrail={showArtGenerating}
               generatingTrailColors={frameColors}
+              generatingTrailSeed={artGenerationTrailSeed}
               onLoad={onArtImageSettled}
               onError={onArtImageSettled}
             />
@@ -2807,7 +2843,7 @@ function CardPreviewComponent({
             shouldRenderArtBehindTreatmentFrame ? (
               <View pointerEvents="none" style={{ flex: 1 }} />
             ) : (
-              <GeneratingArtAnimation scale={scale} colors={frameColors} />
+              <GeneratingArtAnimation scale={scale} colors={frameColors} seed={artGenerationTrailSeed} />
             )
           ) : hasShowcaseArtTreatment || shouldRenderArtBehindTreatmentFrame ? (
             <View pointerEvents="none" style={{ flex: 1 }} />
@@ -2820,6 +2856,7 @@ function CardPreviewComponent({
               imageAspectRatio={imageAspectRatio}
               showGeneratingTrail={showArtGenerating}
               generatingTrailColors={frameColors}
+              generatingTrailSeed={artGenerationTrailSeed}
               onLoad={onArtImageSettled}
               onError={onArtImageSettled}
             />
@@ -2999,27 +3036,11 @@ function CardPreviewComponent({
             fitRect={subjectMaskFitBounds}
             showGeneratingTrail={showArtGenerating}
             generatingTrailColors={frameColors}
+            generatingTrailSeed={artGenerationTrailSeed}
             onLoad={onArtImageSettled}
             onError={onArtImageSettled}
           />
         </View>
-      ) : null}
-
-      {shouldUseSubjectMaskAsPrimaryArt && !showArtGenerating ? (
-        <>
-          <SubjectMaskArtOverlay
-            faceCard={faceCard}
-            artRect={artRect}
-            artBounds={subjectMaskFitBounds}
-            artTransform={artTransform}
-            imageAspectRatio={imageAspectRatio}
-            overlayBottomY={subjectMaskOverlayBottomY}
-            approvalRects={subjectMaskFrameApprovalRects}
-            hardApprovalEdges={!isBorderlessTreatment}
-            occludeSoftMaskEdges={isBorderlessTreatment}
-            cacheKey={`foreground-subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
-          />
-        </>
       ) : null}
 
       {typeFrame === "saga" ? (
@@ -3038,6 +3059,7 @@ function CardPreviewComponent({
             imageAspectRatio={imageAspectRatio}
             active={activeSection === "art"}
             generating={showArtGenerating}
+            generationTrailSeed={artGenerationTrailSeed}
             onArtImageSettled={onArtImageSettled}
             zone={zone}
             onSectionPress={onSectionPress}
@@ -3182,6 +3204,21 @@ function CardPreviewComponent({
         />
       ) : null}
 
+      {shouldUseSubjectMaskAsPrimaryArt && !showArtGenerating ? (
+        <SubjectMaskArtOverlay
+          faceCard={faceCard}
+          artRect={artRect}
+          artBounds={subjectMaskFitBounds}
+          artTransform={artTransform}
+          imageAspectRatio={imageAspectRatio}
+          overlayBottomY={subjectMaskOverlayBottomY}
+          approvalRects={subjectMaskFrameApprovalRects}
+          hardApprovalEdges={!isBorderlessTreatment}
+          occludeSoftMaskEdges={isBorderlessTreatment}
+          cacheKey={`foreground-subject-mask-${frameTreatment}-${faceCard.artSubjectMaskUri ?? "none"}`}
+        />
+      ) : null}
+
       <Pressable
         accessibilityRole="button"
         onPress={() => onSectionPress("identity")}
@@ -3199,7 +3236,7 @@ function CardPreviewComponent({
             numberOfLines={1}
             selectable={false}
             style={{
-              color: titleInk,
+              color: titleForegroundInk,
               fontFamily: isRetroTreatment
                 ? FULL_MAGIC_PACK.fontFamilies.retroTitle
                 : FULL_MAGIC_PACK.fontFamilies.title,
@@ -3210,7 +3247,7 @@ function CardPreviewComponent({
               minWidth: 0,
               textAlign: typeFrame === "token" ? "center" : "left",
               ...EXPORT_TITLE_KERNING_FIX,
-              ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
+              ...titleForegroundTextShadow,
               includeFontPadding: false,
             }}
           >
@@ -3224,10 +3261,10 @@ function CardPreviewComponent({
             autoCapitalize="words"
             onFocus={() => onSectionPress("identity")}
             placeholder="Untitled"
-            placeholderTextColor={titleMutedInk}
+            placeholderTextColor={titleForegroundMutedInk}
             numberOfLines={1}
             style={{
-              color: titleInk,
+              color: titleForegroundInk,
               fontFamily: isRetroTreatment
                 ? FULL_MAGIC_PACK.fontFamilies.retroTitle
               : FULL_MAGIC_PACK.fontFamilies.title,
@@ -3242,7 +3279,7 @@ function CardPreviewComponent({
               height: titleLayout.lineHeight * scale,
               textAlign: typeFrame === "token" ? "center" : "left",
               ...TITLE_KERNING_FIX,
-              ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
+              ...titleForegroundTextShadow,
               includeFontPadding: false,
               padding: 0,
               backgroundColor: "transparent",
@@ -3254,7 +3291,7 @@ function CardPreviewComponent({
             numberOfLines={1}
             selectable={false}
             style={{
-              color: titleInk,
+              color: titleForegroundInk,
               opacity: 0.86,
               fontFamily: isRetroTreatment
                 ? FULL_MAGIC_PACK.fontFamilies.retroTitle
@@ -3266,7 +3303,7 @@ function CardPreviewComponent({
               minWidth: 0,
               textAlign: typeFrame === "token" ? "center" : "left",
               ...TITLE_KERNING_FIX,
-              ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
+              ...titleForegroundTextShadow,
               includeFontPadding: false,
             }}
           >
@@ -3348,12 +3385,12 @@ function CardPreviewComponent({
               updateFace({ manaCost: normalizeManaInput(faceCard.manaCost) });
             }}
             placeholder="{G}"
-            placeholderTextColor={frameStyle.mutedInk}
+            placeholderTextColor={titleForegroundMutedInk}
             numberOfLines={1}
             autoCapitalize="characters"
             style={{
               width: "100%",
-              color: titleInk,
+              color: titleForegroundInk,
               fontFamily: FULL_MAGIC_PACK.fontFamilies.title,
               ...getWebSafeEditableTextMetrics(
                 getManaCostEditorFontSize(faceCard.manaCost, defaultManaRect.width) * scale,
@@ -3362,6 +3399,7 @@ function CardPreviewComponent({
               padding: 0,
               textAlign: "right",
               backgroundColor: "transparent",
+              ...titleForegroundTextShadow,
             }}
           />
         ) : showManaCost && isFutureshiftedShowcase ? (
@@ -3423,7 +3461,7 @@ function CardPreviewComponent({
           {activeSection === "typeLine" ? (
             <TypeLineEditorButton
               scale={scale}
-              ink={typeLineInk}
+              ink={typeLineForegroundInk}
               onPress={() => onSectionPress("typeLine", { openSheet: true })}
             />
           ) : null}
@@ -3453,7 +3491,7 @@ function CardPreviewComponent({
               numberOfLines={1}
               selectable={false}
               style={{
-                color: typeLineInk,
+                color: typeLineForegroundInk,
                 flex: 1,
                 flexShrink: 1,
                 fontFamily: isRetroTreatment
@@ -3464,7 +3502,7 @@ function CardPreviewComponent({
                 includeFontPadding: false,
                 minWidth: 0,
                 ...optionalTransformStyle(typeLineTextYOffset ? [{ translateY: typeLineTextYOffset }] : null),
-                ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
+                ...typeLineForegroundTextShadow,
               }}
             >
               {faceCard.typeLine || "Card Type"}
@@ -3480,10 +3518,10 @@ function CardPreviewComponent({
               onPressIn={() => onSectionPress("typeLine")}
               onSelectionChange={updateTypeLineCursor}
               placeholder="Card Type"
-              placeholderTextColor={typeLineMutedInk}
+              placeholderTextColor={typeLineForegroundMutedInk}
               numberOfLines={1}
               style={{
-                color: typeLineInk,
+                color: typeLineForegroundInk,
                 flex: 1,
                 flexShrink: 1,
                 fontFamily: isRetroTreatment
@@ -3500,7 +3538,7 @@ function CardPreviewComponent({
                 backgroundColor: "transparent",
                 textAlignVertical: "center",
                 ...optionalTransformStyle(typeLineTextYOffset ? [{ translateY: typeLineTextYOffset }] : null),
-                ...(isRetroTreatment ? getRetroTextShadow(scale) : {}),
+                ...typeLineForegroundTextShadow,
               }}
             />
           )}
@@ -4177,6 +4215,7 @@ function SplitCardPreview({
   scale,
   exportMode,
   artGenerating,
+  artGenerationTrailSeed,
   onArtImageSettled,
   footerOwnerName,
   onSectionPress,
@@ -4188,6 +4227,7 @@ function SplitCardPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  artGenerationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
@@ -4231,6 +4271,7 @@ function SplitCardPreview({
           scale={scale}
           exportMode={exportMode}
           artGenerating={artGenerating}
+          generationTrailSeed={artGenerationTrailSeed}
           onArtImageSettled={onArtImageSettled}
           onSectionPress={onSectionPress}
           zone={zone}
@@ -4243,6 +4284,7 @@ function SplitCardPreview({
           scale={scale}
           exportMode={exportMode}
           artGenerating={artGenerating}
+          generationTrailSeed={artGenerationTrailSeed}
           onArtImageSettled={onArtImageSettled}
           footerOwnerName={footerOwnerName}
           onSectionPress={onSectionPress}
@@ -4260,6 +4302,7 @@ function ClassicSplitPreview({
   scale,
   exportMode,
   artGenerating,
+  generationTrailSeed,
   onArtImageSettled,
   footerOwnerName,
   onSectionPress,
@@ -4271,6 +4314,7 @@ function ClassicSplitPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  generationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   onSectionPress: SectionPressHandler;
@@ -4291,6 +4335,7 @@ function ClassicSplitPreview({
         scale={scale}
         exportMode={exportMode}
         artGenerating={artGenerating}
+        generationTrailSeed={generationTrailSeed}
         onArtImageSettled={onArtImageSettled}
         onSectionPress={onSectionPress}
         zone={zone}
@@ -4304,6 +4349,7 @@ function ClassicSplitPreview({
         scale={scale}
         exportMode={exportMode}
         artGenerating={artGenerating}
+        generationTrailSeed={generationTrailSeed}
         onArtImageSettled={onArtImageSettled}
         onSectionPress={onSectionPress}
         zone={zone}
@@ -4347,6 +4393,7 @@ function ClassicSplitHalfSlot({
   scale,
   exportMode,
   artGenerating,
+  generationTrailSeed,
   onArtImageSettled,
   onSectionPress,
   zone,
@@ -4359,6 +4406,7 @@ function ClassicSplitHalfSlot({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  generationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
@@ -4400,6 +4448,7 @@ function ClassicSplitHalfSlot({
           frameIdentity={frameIdentity}
           scale={scale}
           artGenerating={artGenerating}
+          generationTrailSeed={generationTrailSeed}
           onArtImageSettled={onArtImageSettled}
           onSectionPress={onSectionPress}
           zone={zone}
@@ -4565,6 +4614,7 @@ function ClassicSplitArtSlot({
   frameIdentity,
   scale,
   artGenerating,
+  generationTrailSeed,
   onArtImageSettled,
   onSectionPress,
   zone,
@@ -4574,6 +4624,7 @@ function ClassicSplitArtSlot({
   frameIdentity: FrameIdentity;
   scale: number;
   artGenerating: boolean;
+  generationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
@@ -4593,7 +4644,7 @@ function ClassicSplitArtSlot({
       }}
     >
       {!card.artUri && artGenerating ? (
-        <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} />
+        <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} seed={generationTrailSeed} />
       ) : card.artUri ? (
         <>
           <Image
@@ -4617,6 +4668,7 @@ function ClassicSplitArtSlot({
               <GeneratingArtAnimation
                 scale={scale}
                 colors={getFrameColors(card)}
+                seed={generationTrailSeed}
                 label="Loading art"
               />
             </View>
@@ -4873,6 +4925,7 @@ function AftermathSplitPreview({
   scale,
   exportMode,
   artGenerating,
+  generationTrailSeed,
   onArtImageSettled,
   onSectionPress,
   zone,
@@ -4883,6 +4936,7 @@ function AftermathSplitPreview({
   scale: number;
   exportMode: boolean;
   artGenerating: boolean;
+  generationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   onSectionPress: SectionPressHandler;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
@@ -4921,6 +4975,7 @@ function AftermathSplitPreview({
         card={card}
         scale={scale}
         artGenerating={artGenerating}
+        generationTrailSeed={generationTrailSeed}
         onArtImageSettled={onArtImageSettled}
         zone={zone}
         label={card.artUri ? "Change aftermath upright half art" : "Select aftermath upright half art"}
@@ -5057,6 +5112,7 @@ function AftermathSplitPreview({
         card={card}
         scale={scale}
         artGenerating={artGenerating}
+        generationTrailSeed={generationTrailSeed}
         onArtImageSettled={onArtImageSettled}
         zone={zone}
         label={card.artUri ? "Change aftermath lower half art" : "Select aftermath lower half art"}
@@ -5165,6 +5221,7 @@ function AftermathArtSlot({
   card,
   scale,
   artGenerating,
+  generationTrailSeed,
   onArtImageSettled,
   zone,
   label,
@@ -5175,6 +5232,7 @@ function AftermathArtSlot({
   card: CardDraft;
   scale: number;
   artGenerating: boolean;
+  generationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
   label: string;
@@ -5193,7 +5251,7 @@ function AftermathArtSlot({
       }}
     >
       {!card.artUri && artGenerating ? (
-        <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} />
+        <GeneratingArtAnimation scale={scale} colors={getFrameColors(card)} seed={generationTrailSeed} />
       ) : card.artUri ? (
         <>
           <Image
@@ -5217,6 +5275,7 @@ function AftermathArtSlot({
               <GeneratingArtAnimation
                 scale={scale}
                 colors={getFrameColors(card)}
+                seed={generationTrailSeed}
                 label="Loading art"
               />
             </View>
@@ -5730,6 +5789,7 @@ function PlaneswalkerPreview({
   artPanHandlers,
   artTransform,
   artGenerating,
+  artGenerationTrailSeed,
   onArtImageSettled,
   footerOwnerName,
   zone,
@@ -5754,6 +5814,7 @@ function PlaneswalkerPreview({
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
   artTransform: ArtTransform;
   artGenerating: boolean;
+  artGenerationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
@@ -5828,7 +5889,7 @@ function PlaneswalkerPreview({
         }}
       >
         {!faceCard.artUri && artGenerating ? (
-          <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} />
+          <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} seed={artGenerationTrailSeed} />
         ) : faceCard.artUri ? (
           <TransformableArtImage
             uri={faceCard.artUri}
@@ -5838,6 +5899,7 @@ function PlaneswalkerPreview({
             imageAspectRatio={imageAspectRatio}
             showGeneratingTrail={artGenerating}
             generatingTrailColors={getFrameColors(faceCard)}
+            generatingTrailSeed={artGenerationTrailSeed}
             onLoad={onArtImageSettled}
             onError={onArtImageSettled}
           />
@@ -6426,6 +6488,7 @@ function BattleFrontPreview({
   artPanHandlers,
   artTransform,
   artGenerating,
+  artGenerationTrailSeed,
   onArtImageSettled,
   footerOwnerName,
   zone,
@@ -6448,6 +6511,7 @@ function BattleFrontPreview({
   artPanHandlers: ReturnType<typeof PanResponder.create>["panHandlers"];
   artTransform: ArtTransform;
   artGenerating: boolean;
+  artGenerationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   footerOwnerName?: string;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
@@ -6524,7 +6588,7 @@ function BattleFrontPreview({
         }}
       >
         {!faceCard.artUri && artGenerating ? (
-          <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} />
+          <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} seed={artGenerationTrailSeed} />
         ) : faceCard.artUri ? (
           <TransformableArtImage
             uri={faceCard.artUri}
@@ -6534,6 +6598,7 @@ function BattleFrontPreview({
             imageAspectRatio={imageAspectRatio}
             showGeneratingTrail={artGenerating}
             generatingTrailColors={getFrameColors(faceCard)}
+            generatingTrailSeed={artGenerationTrailSeed}
             onLoad={onArtImageSettled}
             onError={onArtImageSettled}
           />
@@ -7031,6 +7096,7 @@ function SagaArtSlot({
   imageAspectRatio,
   active,
   generating,
+  generationTrailSeed,
   onArtImageSettled,
   zone,
   onSectionPress,
@@ -7043,6 +7109,7 @@ function SagaArtSlot({
   imageAspectRatio?: number | null;
   active: boolean;
   generating: boolean;
+  generationTrailSeed?: string;
   onArtImageSettled?: (uri: string) => void;
   zone: (section: CardSection, radius?: number) => Record<string, unknown>;
   onSectionPress: SectionPressHandler;
@@ -7062,7 +7129,7 @@ function SagaArtSlot({
       }}
     >
       {!faceCard.artUri && generating ? (
-        <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} />
+        <GeneratingArtAnimation scale={scale} colors={getFrameColors(faceCard)} seed={generationTrailSeed} />
       ) : faceCard.artUri ? (
         <TransformableArtImage
           uri={faceCard.artUri}
@@ -7072,6 +7139,7 @@ function SagaArtSlot({
           imageAspectRatio={imageAspectRatio}
           showGeneratingTrail={generating}
           generatingTrailColors={getFrameColors(faceCard)}
+          generatingTrailSeed={generationTrailSeed}
           onLoad={onArtImageSettled}
           onError={onArtImageSettled}
         />
@@ -11611,6 +11679,7 @@ function TransformableArtImage({
   fitRect,
   showGeneratingTrail = false,
   generatingTrailColors = [],
+  generatingTrailSeed,
   onLoad,
   onError,
 }: {
@@ -11622,6 +11691,7 @@ function TransformableArtImage({
   fitRect?: CoordinateRect;
   showGeneratingTrail?: boolean;
   generatingTrailColors?: ManaColor[];
+  generatingTrailSeed?: string;
   onLoad?: (uri: string) => void;
   onError?: (uri: string) => void;
 }) {
@@ -11671,7 +11741,12 @@ function TransformableArtImage({
             left: 0,
           }}
         >
-          <GeneratingArtAnimation scale={renderScale} colors={generatingTrailColors} label="Loading art" />
+          <GeneratingArtAnimation
+            scale={renderScale}
+            colors={generatingTrailColors}
+            seed={generatingTrailSeed}
+            label="Loading art"
+          />
         </View>
       ) : null}
     </View>
@@ -11681,27 +11756,34 @@ function TransformableArtImage({
 function GeneratingArtAnimation({
   scale,
   colors,
+  seed,
   label = "Generating art, please wait",
 }: {
   scale: number;
   colors: ManaColor[];
+  seed?: string;
   label?: string;
 }) {
   const drift = useRef(new Animated.Value(0)).current;
   const flicker = useRef(new Animated.Value(0)).current;
+  const fallbackSeedRef = useRef(`trail-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const colorKey = colors.join("");
+  const trailSeed = `${seed ?? fallbackSeedRef.current}-${colorKey || "C"}`;
   const { palette, pixels, originPath } = useMemo(() => {
     const smokePalette = getGeneratingSmokePalette(colors);
-    const smokeOriginPath = createGeneratingSmokeOriginPath(`${colorKey || "C"}-origin`);
+    const smokeOriginPath = createGeneratingSmokeOriginPath(`${trailSeed}-origin`);
 
     return {
       palette: smokePalette,
-      pixels: createGeneratingPixelSmokeTrail(colorKey || "C", smokePalette, smokeOriginPath),
+      pixels: createGeneratingPixelSmokeTrail(trailSeed, smokePalette, smokeOriginPath),
       originPath: smokeOriginPath,
     };
-  }, [colorKey]);
+  }, [colorKey, trailSeed]);
 
   useEffect(() => {
+    drift.setValue(0);
+    flicker.setValue(0);
+
     const driftLoop = Animated.loop(
       Animated.timing(drift, {
         toValue: 1,
@@ -11709,6 +11791,7 @@ function GeneratingArtAnimation({
         easing: Easing.linear,
         useNativeDriver: true,
       }),
+      { iterations: -1, resetBeforeIteration: true },
     );
     const flickerLoop = Animated.loop(
       Animated.sequence([
@@ -11725,6 +11808,7 @@ function GeneratingArtAnimation({
           useNativeDriver: true,
         }),
       ]),
+      { iterations: -1, resetBeforeIteration: true },
     );
 
     driftLoop.start();
@@ -11734,7 +11818,7 @@ function GeneratingArtAnimation({
       driftLoop.stop();
       flickerLoop.stop();
     };
-  }, [drift, flicker]);
+  }, [drift, flicker, trailSeed]);
 
   return (
     <View pointerEvents="none" style={{ flex: 1, overflow: "hidden", backgroundColor: "#050608" }}>

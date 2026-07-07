@@ -5,6 +5,8 @@ site_url = "https://cardmagic.craftsmannsoftware.com"
 additional_redirect_urls = [
   "https://cardmagic.craftsmannsoftware.com",
   "https://cardmagic.craftsmannsoftware.com/**",
+  "https://craftsmannsoftware.com/internal/metrics",
+  "https://craftsmannsoftware.com/internal/metrics/**",
   "http://localhost:8082/**",
   "http://localhost:3000/**"
 ]

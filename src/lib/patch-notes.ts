@@ -20,6 +20,16 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.38.15",
+    date: "2026-07-07",
+    title: "Production asset routing",
+    branches: ["beta", "main"],
+    bullets: [
+      "Production builds now rewrite bundled frame, symbol, font, and dynamic chunk URLs for the /cardmagic mount.",
+      "This fixes the production page loading the app shell without the card-frame image assets.",
+    ],
+  },
+  {
     version: "3.38.14",
     date: "2026-07-07",
     title: "Saved preview refresh",

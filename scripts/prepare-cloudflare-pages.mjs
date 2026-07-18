@@ -1,9 +1,7 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const outputDirectory = process.env.CARDMAGIC_CLOUDFLARE_OUTPUT_DIR || "dist";
-const releaseBranch = process.env.EXPO_PUBLIC_CARDMAGIC_RELEASE_BRANCH === "main" ? "main" : "beta";
-const productionMountPath = "/cardmagic";
 
 await mkdir(outputDirectory, { recursive: true });
 
@@ -36,10 +34,6 @@ await writeFile(
     "",
   ].join("\n"),
 );
-
-if (releaseBranch === "main") {
-  await rewriteProductionMountedAssetUrls(outputDirectory);
-}
 
 await writeLegalPage({
   slug: "terms",
@@ -117,52 +111,4 @@ function escapeHtml(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
-}
-
-async function rewriteProductionMountedAssetUrls(directory) {
-  const files = await listFiles(directory);
-  const rewriteableFiles = files.filter((file) => /\.(?:html|js|css)$/i.test(file));
-  let rewriteCount = 0;
-
-  for (const file of rewriteableFiles) {
-    const source = await readFile(file, "utf8");
-    const nextSource = source
-      .replaceAll('"/assets/assets/', `"${productionMountPath}/assets/assets/`)
-      .replaceAll("'/assets/assets/", `'${productionMountPath}/assets/assets/`)
-      .replaceAll("(/assets/assets/", `(${productionMountPath}/assets/assets/`)
-      .replaceAll('"/_expo/static/', `"${productionMountPath}/_expo/static/`)
-      .replaceAll("'/_expo/static/", `'${productionMountPath}/_expo/static/`)
-      .replaceAll("(/_expo/static/", `(${productionMountPath}/_expo/static/`);
-
-    if (nextSource === source) {
-      continue;
-    }
-
-    rewriteCount += 1;
-    await writeFile(file, nextSource);
-  }
-
-  if (rewriteCount === 0) {
-    console.warn("Production asset mount rewrite did not update any exported files.");
-    return;
-  }
-
-  console.log(`Production asset mount rewrite updated ${rewriteCount} exported file(s).`);
-}
-
-async function listFiles(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files = [];
-
-  for (const entry of entries) {
-    const entryPath = join(directory, entry.name);
-
-    if (entry.isDirectory()) {
-      files.push(...await listFiles(entryPath));
-    } else if (entry.isFile()) {
-      files.push(entryPath);
-    }
-  }
-
-  return files;
 }

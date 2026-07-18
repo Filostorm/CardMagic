@@ -20,6 +20,16 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.38.16",
+    date: "2026-07-18",
+    title: "Production page recovery",
+    branches: ["beta", "main"],
+    bullets: [
+      "Production exports now keep application bundles and static assets at the Cloudflare Pages domain root.",
+      "This fixes the blank page caused by the browser receiving the HTML app shell instead of the JavaScript bundle.",
+    ],
+  },
+  {
     version: "3.38.15",
     date: "2026-07-07",
     title: "Production asset routing",

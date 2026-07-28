@@ -20,6 +20,16 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.39.0",
+    date: "2026-07-28",
+    title: "First-party product analytics",
+    branches: ["beta", "main"],
+    bullets: [
+      "CardMagic web activity now reports privacy-bounded active time, screen dwell, and quantized click/tap density to the unified Craftsmann Signal dashboard.",
+      "The previous web-only Supabase dwell logger has been replaced while native iOS and Android telemetry remains unchanged.",
+    ],
+  },
+  {
     version: "3.38.16",
     date: "2026-07-18",
     title: "Production page recovery",

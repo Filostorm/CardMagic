@@ -15,8 +15,8 @@ for (const script of scripts) {
   gzipBytes += gzipSync(readFileSync(path)).length;
 }
 // 2026-09-05: same-source baseline 5,386,199 bytes / 1,025,904 gzip.
-// Tree-shaken baseline 3,402,598 bytes / 793,200 gzip. Leave a narrow margin.
+// Used-icons baseline 3,619,354 bytes / 858,740 gzip. Leave a narrow margin.
 console.log(JSON.stringify({check: 'initial-web-bundle', bytes, gzipBytes}));
-if (bytes === 0 || bytes > 3_600_000 || gzipBytes > 850_000) {
+if (bytes === 0 || bytes > 3_800_000 || gzipBytes > 900_000) {
   throw new Error('Initial web bundle exceeded its budget. Measure and explain growth before changing the limit.');
 }

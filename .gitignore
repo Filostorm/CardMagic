@@ -50,3 +50,6 @@ texture-contact-sheet.html
 # generated native folders
 /ios
 /android
+
+.generated/
+node_modules

@@ -12,6 +12,20 @@ function escapedPathPattern(relativePath) {
 
 const config = getDefaultConfig(projectRoot);
 
+const originalResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (platform === "web" && moduleName === "lucide-react-native") {
+    const filePath = path.join(projectRoot, ".generated", "lucide-icons.cjs");
+    if (!require("node:fs").existsSync(filePath)) {
+      throw new Error("Run npm run build:web-icons before building or starting CardMagic web.");
+    }
+    return {type: "sourceFile", filePath};
+  }
+  return originalResolveRequest
+    ? originalResolveRequest(context, moduleName, platform)
+    : context.resolveRequest(context, moduleName, platform);
+};
+
 config.resolver.useWatchman = false;
 
 const generatedDirectoryBlockList = [

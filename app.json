@@ -2,7 +2,7 @@
   "expo": {
     "name": "CardMagic",
     "slug": "CardMagic",
-    "version": "3.39.1",
+    "version": "3.39.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

@@ -20,11 +20,11 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
-    version: "3.39.1",
+    version: "3.39.2",
     date: "2026-09-05",
     title: "Smaller web downloads",
     branches: ["beta", "main"],
-    bullets: ["Web builds remove unused library code, reducing the initial download while keeping the editor and export tools available."],
+    bullets: ["Web downloads include only the icons used by CardMagic, with the editor and export tools unchanged."],
   },
   {
     version: "3.39.0",

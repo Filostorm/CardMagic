@@ -1,6 +1,6 @@
 {
   "name": "cardmagic",
-  "version": "3.39.1",
+  "version": "3.39.2",
   "main": "index.ts",
   "scripts": {
     "test": "vitest run",
@@ -8,9 +8,9 @@
     "start": "expo start --port 8082",
     "android": "expo run:android",
     "ios": "expo run:ios --port 8082",
-    "web": "expo start --web --port 8082",
+    "web": "npm run build:web-icons && expo start --web --port 8082",
     "clean:duplicates": "node scripts/clean-duplicate-artifacts.mjs",
-    "export:web": "EXPO_UNSTABLE_TREE_SHAKING=1 EXPO_UNSTABLE_METRO_OPTIMIZE_GRAPH=1 EXPO_USE_FAST_RESOLVER=1 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear --output-dir \"${CARDMAGIC_CLOUDFLARE_OUTPUT_DIR:-dist}\"",
+    "export:web": "npm run build:web-icons && EXPO_USE_FAST_RESOLVER=1 WATCHMAN_DISABLE=1 expo export --platform web --max-workers 1 --clear --output-dir \"${CARDMAGIC_CLOUDFLARE_OUTPUT_DIR:-dist}\"",
     "export:cloudflare": "npm run clean:duplicates && node scripts/clean-cloudflare-output.mjs && npm run export:web && npm run clean:duplicates && node scripts/prepare-cloudflare-pages.mjs && node scripts/check-web-bundle.mjs",
     "release:verify": "node scripts/verify-release-notes.mjs",
     "release:metadata": "node scripts/update-release-metadata.mjs",
@@ -18,7 +18,8 @@
     "deploy:cloudflare": "npm run deploy:cloudflare:beta",
     "deploy:cloudflare:beta": "node scripts/deploy-cloudflare-pages.mjs beta",
     "deploy:cloudflare:production": "node scripts/deploy-cloudflare-pages.mjs production",
-    "update:cards": "node scripts/update-card-database.mjs"
+    "update:cards": "node scripts/update-card-database.mjs",
+    "build:web-icons": "node scripts/build-web-icons.mjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
@@ -57,7 +58,8 @@
     "babel-preset-expo": "~54.0.10",
     "json5": "^2.2.3",
     "typescript": "~5.9.2",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "rolldown": "1.0.3"
   },
   "private": true
 }

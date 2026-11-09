@@ -20,6 +20,15 @@ export type PatchNoteBullet =
 
 export const CARDMAGIC_PATCH_NOTES: PatchNoteEntry[] = [
   {
+    version: "3.39.3",
+    date: "2026-11-09",
+    title: "Saved sets restored",
+    branches: ["beta", "main"],
+    bullets: [
+      "Sign in with your existing account to continue editing your saved sets.",
+    ],
+  },
+  {
     version: "3.39.2",
     date: "2026-09-05",
     title: "Smaller web downloads",

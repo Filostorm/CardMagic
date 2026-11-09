@@ -5,8 +5,8 @@ import { Platform } from "react-native";
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-const DEFAULT_SUPABASE_URL = "https://lfalybddbubnkrbhaafj.supabase.co";
-const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_JPv8IbFC0vT7FORtyiiFsw_Tmm-Zilu";
+const DEFAULT_SUPABASE_URL = "https://hspnzjvqozjphuhkknam.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_w6H4ajxE43X4aBu9GjVaUA_CoMB_HuG";
 const DEFAULT_SITE_URL = "https://cardmagic.craftsmannsoftware.com";
 
 export const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? DEFAULT_SUPABASE_URL;
